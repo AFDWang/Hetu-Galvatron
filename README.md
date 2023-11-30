@@ -63,10 +63,12 @@ GALVATRON_FLASH_ATTN_INSTALL=TRUE pip install hetu-galvatron
 ### Profiling with Galvatron
 The first step to use Galvatron is to profile the hardware environment and the model computation time. Galvatron will automatically save the profiled results into config files.
 
-(1) Firstly, to profile the hardward environment, ```cd galvatron/profile_hardware```,  write the host address into ```hostfile```, customize ```NUM_NODES, NUM_GPUS_PER_NODE, MPI_PATH``` in ```scripts/profile_hardware.sh``` and run:
+(1) Firstly, to profile the hardward environment, ```cd galvatron/profile_hardware```,  write the host address into ```hostfile```, set ```NUM_NODES, NUM_GPUS_PER_NODE, MPI_PATH``` in ```scripts/profile_hardware.sh``` and run:
 ``` shell
 sh scripts/profile_hardware.sh
 ```
+
+Galvatron will call [nccl-tests](https://github.com/NVIDIA/nccl-tests) to profile the communication bandwidth.
 
 (2) Secondly, to profile the model computation time, ```cd galvatron/models/model_name``` and run:
 ``` shell
@@ -82,14 +84,14 @@ To conduct parallelim optimization, ```cd galvatron/models/model_name```, custom
 sh scripts/search_dist.sh
 ```
 
-See more usage details of the customized parallelism optimization in [Galvatron Model Usage](galvatron/models).
+See more usage details of the customized parallelism optimization in [Galvatron Model Usage](galvatron/models/README.md#parallelism-optimizing-with-galvatron).
 
 ### Training with Galvatron
 Galvatron provides a simple way to train Transformer models in fined-grained hybrid parallelism fashion. Users can either train Transformer models with the searched optimal parallel strategy by specifying argument ```galvatron_config_path``` to obtain the optimal throughput, or use any parallel strategies as they like. Galvatron support two hybrid parallel config modes, including JSON config mode and GLOBAL config mode. Users can specify parallel strategies by modifying only a few arguments. 
 
-To train the model with Galvatron, ```cd galvatron/models/model_name```, customize ```NUM_NODES, NUM_GPUS_PER_NODE, MASTER_ADDR, MASTER_PORT, NODE_RANK```,  and run:
+To train the model with Galvatron, ```cd galvatron/models/model_name```, set ```NUM_NODES, NUM_GPUS_PER_NODE, MASTER_ADDR, MASTER_PORT, NODE_RANK```,  and run:
 ``` shell
 sh scripts/train_dist.sh
 ```
 
-See detailed guidance and more customized training options in [Galvatron Model Usage](galvatron/models).
+See detailed guidance and more customized training options in [Galvatron Model Usage](galvatron/models/README.md#training-with-galvatron).

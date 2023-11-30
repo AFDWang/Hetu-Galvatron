@@ -1,6 +1,6 @@
-# Galvatron-2.0
+# Galvatron-2
 
-Galvatron is an automatic distributed training system designed for Transformer models, including Large Language Models (LLMs). It leverages advanced automatic parallelism techniques to deliver exceptional training efficiency. This repository houses the official implementation of Galvatron-2.0, our latest version enriched with several new features.
+Galvatron is an automatic distributed training system designed for Transformer models, including Large Language Models (LLMs). It leverages advanced automatic parallelism techniques to deliver exceptional training efficiency. This repository houses the official implementation of Galvatron-2, our latest version enriched with several new features.
 
 ## Key Features
 ### (1) Enhanced Efficiency via Automatic Parallelism
@@ -20,11 +20,11 @@ Suitable for a wide range of Transformer architectures, including language model
 ### (3) User-Friendly Interface
 Easy to use, even for those new to distributed training.
 
-## What's New in Galvatron-2.0
+## What's New in Galvatron-2
 - Support CKPT (Activation Checkpointing)
 - Support Mixed Precision (FP16, BF16)
 - Support more pipeline schedules (GPipe and pipedream-flush / 1F1B-flush)
-- Support PyTorch-2.0 (currently suppport 2.0.1)
+- Support PyTorch-2 (currently suppport 2.0.1)
 - Support FlashAttention-2 for more efficient attention kernel
 - Provide new Galvatron Profiler that profiles the model consumptions conveniently
 - Provide new Galvatron Search Engine with enhanced efficiency of parallelism optimization
@@ -47,12 +47,12 @@ pip install hetu-galvatron
 ```
 Alternatively, you can install Galvatron from source with ```pip install .```
 
-To use FlashAttention-2 features in Galvatron-2.0, you can either:
+To use FlashAttention-2 features in Galvatron-2, you can either:
 - Install the [FlashAttention-2](https://github.com/Dao-AILab/flash-attention) manually and then ```pip install hetu-galvatron```.
-- Alternatively, you can install Galvatron-2.0 with FlashAttention-2 as follows:
+- Alternatively, you can install Galvatron-2 with FlashAttention-2 as follows:
 
 1. Make sure that PyTorch, `packaging` (`pip install packaging`), `ninja` is installed.
-2. Install Galvatron-2.0 with FlashAttention-2:
+2. Install Galvatron-2 with FlashAttention-2:
 ```sh
 GALVATRON_FLASH_ATTN_INSTALL=TRUE pip install hetu-galvatron
 ```
@@ -85,7 +85,6 @@ sh scripts/search_dist.sh
 See more usage details of the customized parallelism optimization in [Galvatron Model Usage](galvatron/models).
 
 ### Training with Galvatron
-
 Galvatron provides a simple way to train Transformer models in fined-grained hybrid parallelism fashion. Users can either train Transformer models with the searched optimal parallel strategy by specifying argument ```galvatron_config_path``` to obtain the optimal throughput, or use any parallel strategies as they like. Galvatron support two hybrid parallel config modes, including JSON config mode and GLOBAL config mode. Users can specify parallel strategies by modifying only a few arguments. 
 
 To train the model with Galvatron, ```cd galvatron/models/model_name```, customize ```NUM_NODES, NUM_GPUS_PER_NODE, MASTER_ADDR, MASTER_PORT, NODE_RANK```,  and run:

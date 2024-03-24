@@ -540,7 +540,7 @@ class PipelineParallel(nn.Module):
         
         if self.info:
             print('rank %d'%self.global_rank, 'start backward')
-
+        model = self.model_cur_stage
         # Run backward passes.
         for i in range(self.num_microbatches):
             # if self.group_size > 1 and self.async_grad_reduce and i == self.num_microbatches - 1:

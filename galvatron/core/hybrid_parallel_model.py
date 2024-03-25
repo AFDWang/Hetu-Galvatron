@@ -21,13 +21,16 @@ class GalvatronModel(nn.Module):
             loss_func = self.fake_loss_func
             assert isinstance(batch, (tuple, list))
             batch = [batch, [self.fake_tensor(batch[0])]]
-        if args.pipeline_type == "gpipe":
-            loss = model.gpipe_forward(batch, loss_func)
-            if profiler is not None:
-                profiler.profile_memory(self.iter, "After Forward")
-            model.gpipe_backward()
-        elif args.pipeline_type == "pipedream_flush":
-            loss = model.pipedream_flush_forward_backward(batch, loss_func)
+        if args.pp_deg > 1:
+            if args.pipeline_type == "gpipe":
+                loss = model.gpipe_forward(batch, loss_func)
+                if profiler is not None:
+                    profiler.profile_memory(self.iter, "After Forward")
+                model.gpipe_backward()
+            elif args.pipeline_type == "pipedream_flush":
+                loss = model.pipedream_flush_forward_backward(batch, loss_func)
+        else:
+            loss = model.no_pipeline_forward_backward(batch, loss_func)
         self.iter += 1
         return self.loss_to_cpu(loss)
     

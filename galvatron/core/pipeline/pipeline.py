@@ -175,7 +175,7 @@ class PipelineParallel(nn.Module):
         num_microbatches = self.real_chunks
         losses_reduced = []
         
-        for i in range(num_microbatches - 1):
+        for i in range(num_microbatches):
             
             cur_microbatch = [microbatches[0][i], microbatches[1][i]]
             output_tensor = self.forward_step(

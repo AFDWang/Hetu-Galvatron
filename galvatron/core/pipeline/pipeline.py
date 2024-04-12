@@ -156,9 +156,7 @@ class PipelineParallel(nn.Module):
         Returns dictionary with losses.
         """
         model = self.model_cur_stage
-        if self.group_size > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)
-            
+        
         forward_step_func = forward_step_function(loss_func)
         # Chunk input batch into microbatches
         if batch[0][0].shape[0] % self.chunks != 0:
@@ -173,6 +171,9 @@ class PipelineParallel(nn.Module):
                 self.chunk_warning = False
                 
         num_microbatches = self.real_chunks
+        if num_microbatches > 1 and self.async_grad_reduce:
+            enter_no_sync_context(model)
+        
         losses_reduced = []
         
         for i in range(num_microbatches):
@@ -192,7 +193,7 @@ class PipelineParallel(nn.Module):
                     None,
                 )
             
-        if self.group_size > 1 and self.async_grad_reduce:
+        if num_microbatches > 1 and self.async_grad_reduce:
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
 
@@ -204,14 +205,14 @@ class PipelineParallel(nn.Module):
         loss_func, 
         forward_only=False,
         ):
+        self.info=True
         """Run non-interleaved 1F1B schedule, with communication between pipeline
         stages.
 
         Returns dictionary with losses if the last stage, empty dict otherwise."""
-
+        assert(self.group_size > 1)
         model = self.model_cur_stage
-        if self.group_size > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)
+        
         forward_step_func = forward_step_function(loss_func)
 
         # Chunk input batch into microbatches
@@ -225,6 +226,8 @@ class PipelineParallel(nn.Module):
 
         # Compute number of warmup microbatches.
         num_microbatches = self.real_chunks
+        if num_microbatches > 1 and self.async_grad_reduce:
+            enter_no_sync_context(model)
         num_warmup_microbatches = self.group_size - self.group_rank - 1
         num_warmup_microbatches = min(num_warmup_microbatches, num_microbatches)
         num_microbatches_remaining = num_microbatches - num_warmup_microbatches
@@ -436,7 +439,7 @@ class PipelineParallel(nn.Module):
         if self.info:
             print('rank %d'%self.global_rank, 'finish cooldown')
             
-        if self.group_size > 1 and self.async_grad_reduce:
+        if num_microbatches > 1 and self.async_grad_reduce:
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
 
@@ -463,10 +466,9 @@ class PipelineParallel(nn.Module):
         loss_func, 
         forward_only=False,
         ):
-
+        assert(self.group_size > 1)
         model = self.model_cur_stage
-        if self.group_size > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)
+        
         forward_step_func = forward_step_function(loss_func)
 
         # Chunk input batch into microbatches
@@ -478,6 +480,9 @@ class PipelineParallel(nn.Module):
                 print()
             self.chunk_warning = False
         self.num_microbatches = self.real_chunks
+        
+        if self.num_microbatches > 1 and self.async_grad_reduce:
+            enter_no_sync_context(model)
 
         # Compute tensor shapes for all microbatches, note that the last microbatch may have different microbatch_size, thus different shape!
         batch_size = batch[0][0].shape[0] * self.dp_size_input
@@ -535,11 +540,13 @@ class PipelineParallel(nn.Module):
         return losses_reduced
 
     def gpipe_backward(self):
+        assert(self.group_size > 1)
         if get_args().profile_forward:
             return
         
         if self.info:
             print('rank %d'%self.global_rank, 'start backward')
+
         model = self.model_cur_stage
         # Run backward passes.
         for i in range(self.num_microbatches):
@@ -582,7 +589,7 @@ class PipelineParallel(nn.Module):
         if self.info:
             print('rank %d'%self.global_rank, 'finish backward')
         
-        if self.group_size > 1 and self.async_grad_reduce:    
+        if self.num_microbatches > 1 and self.async_grad_reduce: 
             model = self.model_cur_stage
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)

@@ -240,6 +240,9 @@ def galvatron_search_args(parser):
         "--settle_bsz", type=int, default=-1, help="If > 1, only search bsz=settle_bsz."
     )
     group.add_argument(
+        "--settle_chunk", type=int, default=-1, help="If > 1, only search chunk=settle_chunk."
+    )
+    group.add_argument(
         "--bsz_scale", type=int, default=8, help="Bsz scale for searching.",
     )
     group.add_argument(

@@ -20,7 +20,9 @@ class MemoryCostModel:
             mixed_precision=False,
             pipeline_type='gpipe',
             stage_idx=0,
+            mbsz=-1,
             chunks=None):
+        assert mbsz > -1
         self.strategy = strategy
         self.pp_size = self.strategy[0]
         self.tp_size = self.strategy[1]
@@ -30,12 +32,12 @@ class MemoryCostModel:
 
         self.bsz = global_batch_size/self.dp_size
         if chunks is None:
-            chunks = optimal_chunk_func(global_batch_size//self.dp_size, strategy) # if microbatch else 1
+            chunks = optimal_chunk_func(global_batch_size//self.dp_size, strategy, mbsz) # if microbatch else 1
         max_chunks = global_batch_size // (self.tp_size*self.dp_size)
         max_chunks = 1 if max_chunks == 0 else max_chunks
         chunks = max_chunks if chunks > max_chunks else chunks
         chunks = int(chunks)
-        if pipeline_type == 'pipedream_flush' and self.pp_size > 1:
+        if (pipeline_type == 'pipedream_flush' and self.pp_size > 1) or self.pp_size==1:
             microbatches = [t.shape[0] for t in torch.arange(int(global_batch_size/self.dp_size/self.tp_size)).chunk(chunks)]
             chunks = len(microbatches)
             end = self.pp_size-stage_idx if self.pp_size-stage_idx <= chunks else chunks
@@ -74,7 +76,7 @@ class MemoryCostModel:
         model_type = 'gpt' if model_type not in ['bert', 't5', 'vit', 'swin', 'gpt'] else model_type
         
         if self.pp_size == 1:
-            self.other_memcosts[0] += other_memory_pp_off['model_states'] * other_ms_zero2_ratio + other_memory_pp_off['activation'] * other_layers_bsz
+            self.other_memcosts[0] += other_memory_pp_off['model_states'] * other_ms_zero2_ratio + other_memory_pp_off['activation'] * other_layers_bsz * act_1f1b_ratio
         else:
             if pipeline_type == 'pipedream_flush':
                 other_layers_bsz_first = other_layers_bsz * act_1f1b_ratio_first
@@ -248,30 +250,30 @@ class TimeCostModel:
         return result
 
     def gen_result(self):
-        if self.pp_size == 1:
-            if self.tp_size == 1 and self.dp_size > 1: # pure dp
-                overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
-                # print(self.bct, self.dp_message_size * self.dc_overlap)
-                result = self.fct + overlap_part + rest_part + self.eo
-            elif self.dp_size == 1 and self.tp_size > 1: # pure tp
-                result = self.fct + self.bct + self.tp_message_size*self.tc
-            else: # dp+tp
-                if self.tp_size < self.tp_size * self.dp_size // 2: 
-                    if self.layer_type == 'enc':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
-                        result = self.fct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
-                        # print(self.fct, self.bct, self.dp_message_size, self.dp_message_size*self.dc, self.tp_message_size, self.tp_message_size*self.tc)
-                    elif self.layer_type == 'dec':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-                        result = self.fct + 1/3*self.bct + overlap_part + rest_part +self.tp_message_size*self.tc+self.eo
-                else:
-                    if self.layer_type == 'enc':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*1/2)
-                        result = self.fct + 1/2*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
-                    elif self.layer_type == 'dec':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-                        result = self.fct + 1/3*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
-        elif self.pp_size > 1:
+        # if self.pp_size == 1:
+        #     if self.tp_size == 1 and self.dp_size > 1: # pure dp
+        #         overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
+        #         # print(self.bct, self.dp_message_size * self.dc_overlap)
+        #         result = self.fct + overlap_part + rest_part + self.eo
+        #     elif self.dp_size == 1 and self.tp_size > 1: # pure tp
+        #         result = self.fct + self.bct + self.tp_message_size*self.tc
+        #     else: # dp+tp
+        #         if self.tp_size < self.tp_size * self.dp_size // 2: 
+        #             if self.layer_type == 'enc':
+        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
+        #                 result = self.fct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
+        #                 # print(self.fct, self.bct, self.dp_message_size, self.dp_message_size*self.dc, self.tp_message_size, self.tp_message_size*self.tc)
+        #             elif self.layer_type == 'dec':
+        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
+        #                 result = self.fct + 1/3*self.bct + overlap_part + rest_part +self.tp_message_size*self.tc+self.eo
+        #         else:
+        #             if self.layer_type == 'enc':
+        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*1/2)
+        #                 result = self.fct + 1/2*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
+        #             elif self.layer_type == 'dec':
+        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
+        #                 result = self.fct + 1/3*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
+        if self.pp_size >= 1:
             if self.tp_size == 1 and self.dp_size > 1: # pp+dp
                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
                 overall_overhead = self.fct + overlap_part + rest_part + self.eo
@@ -386,6 +388,7 @@ def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, s
         bsz_chunked = [bsz / chunks] * len(layer_num_list)
         # print(bsz, bsz/chunks, chunks)
         max_chunk = chunks
+    # print(bsz_chunked)
     pp_deg = len(partition)
     layer_num = len(strategies)
     from galvatron.utils import form_strategy, strategy_str2list
@@ -415,6 +418,8 @@ def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, s
         stage_costs_reduce[i] -= np.sum(stage_costs_compute[:i+1])
     reduce_time = np.max(stage_costs_reduce)
     reduce_time = reduce_time if reduce_time > 0 else 0
+    
+    # print(result,reduce_time)
     result += reduce_time
     
     if return_stage_cost:

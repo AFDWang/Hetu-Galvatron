@@ -13,10 +13,11 @@ from megatron.model.module import MegatronModule
 class VitClassificationModel(MegatronModule):
     """Vision Transformer Model."""
 
-    def __init__(self, num_classes, finetune=False,
+    def __init__(self, config, num_classes, finetune=False,
                  pre_process=True, post_process=True):
         super(VitClassificationModel, self).__init__()
         args = get_args()
+        self.config = config
 
         self.hidden_size = args.hidden_size
         self.num_classes = num_classes
@@ -24,14 +25,15 @@ class VitClassificationModel(MegatronModule):
         self.pre_process = pre_process
         self.post_process = post_process
         self.backbone = VitBackbone(
+            config=config,
             pre_process=self.pre_process,
             post_process=self.post_process,
             single_token_output=True
         )
-        
+
         if self.post_process:
             if not self.finetune:
-                self.head = VitMlpHead(self.hidden_size, self.num_classes)
+                self.head = VitMlpHead(config, self.hidden_size, self.num_classes)
             else:
                 self.head = get_linear_layer(
                     self.hidden_size,

@@ -205,7 +205,6 @@ class PipelineParallel(nn.Module):
         loss_func, 
         forward_only=False,
         ):
-        self.info=True
         """Run non-interleaved 1F1B schedule, with communication between pipeline
         stages.
 

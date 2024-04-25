@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 
 """BERT model."""
 
@@ -9,7 +9,7 @@ from megatron.core import tensor_parallel
 from megatron.model.enums import AttnMaskType
 from megatron.model.language_model import parallel_lm_logits
 from megatron.model.language_model import get_language_model
-from megatron.model import LayerNorm
+from megatron.model.utils import get_norm
 from megatron.model.utils import openai_gelu, erf_gelu
 from megatron.model.utils import get_linear_layer
 from megatron.model.utils import init_method_normal
@@ -47,31 +47,24 @@ class BertLMHead(MegatronModule):
     """Masked LM head for Bert
 
     Arguments:
+        config: TransformerConfig object
         mpu_vocab_size: model parallel size of vocabulary.
-        hidden_size: hidden size
-        init_method: init method for weight initialization
-        layernorm_epsilon: tolerance for layer norm divisions
         parallel_output: whether output logits being distributed or not.
     """
 
-    def __init__(self, mpu_vocab_size, hidden_size, init_method,
-                 layernorm_epsilon, parallel_output):
-
-        super(BertLMHead, self).__init__()
+    def __init__(self, mpu_vocab_size, config, parallel_output):
+        super().__init__(config=config)
 
         args = get_args()
-
         self.bias = torch.nn.Parameter(torch.zeros(mpu_vocab_size))
         tensor_parallel.set_tensor_model_parallel_attributes(self.bias, True, 0, 1)
         self.parallel_output = parallel_output
 
-        self.dense = get_linear_layer(hidden_size, hidden_size, init_method)
-        setattr(self.dense.weight, 'sequence_parallel', args.sequence_parallel)
-        setattr(self.dense.bias, 'sequence_parallel', args.sequence_parallel)
+        self.dense = get_linear_layer(config.hidden_size, config.hidden_size, config.init_method)
+        setattr(self.dense.weight, 'sequence_parallel', config.sequence_parallel)
+        setattr(self.dense.bias, 'sequence_parallel', config.sequence_parallel)
 
-        self.layernorm = LayerNorm(hidden_size,
-                                   eps=layernorm_epsilon,
-                                   sequence_parallel=args.sequence_parallel)
+        self.norm = get_norm(config)
         self.gelu = torch.nn.functional.gelu
         if args.openai_gelu:
             self.gelu = openai_gelu
@@ -81,12 +74,23 @@ class BertLMHead(MegatronModule):
     def forward(self, hidden_states, word_embeddings_weight):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.gelu(hidden_states)
-        hidden_states = self.layernorm(hidden_states)
+        hidden_states = self.norm(hidden_states)
         output = parallel_lm_logits(hidden_states,
                                     word_embeddings_weight,
                                     self.parallel_output,
                                     bias=self.bias)
         return output
+
+    def load_state_dict(self, state_dict, strict=True):
+        """Customize load."""
+
+        # Handle renaming layernorm -> norm in component names
+        state_dict_ = {}
+        for key in state_dict.keys():
+            newkey = key.replace("layernorm", "norm")
+            state_dict_[newkey] = state_dict[key]
+
+        super().load_state_dict(state_dict_, strict)
 
 
 def post_language_model_processing(lm_output, pooled_output,
@@ -124,12 +128,13 @@ class BertModel(MegatronModule):
     """Bert Language model."""
 
     def __init__(self,
+                 config,
                  num_tokentypes=2,
                  add_binary_head=True,
                  parallel_output=True,
                  pre_process=True,
                  post_process=True):
-        super(BertModel, self).__init__()
+        super().__init__(config=config)
         args = get_args()
 
         # TODO this option is not yet implemented in BERT
@@ -145,29 +150,22 @@ class BertModel(MegatronModule):
         if self.return_embeddings:
             assert self.post_process and self.add_binary_head
 
-        init_method = init_method_normal(args.init_method_std)
-        scaled_init_method = scaled_init_method_normal(args.init_method_std,
-                                                       args.num_layers)
-
         self.language_model, self._language_model_key = get_language_model(
+            config=config,
             num_tokentypes=num_tokentypes,
             add_pooler=self.add_binary_head,
             encoder_attn_mask_type=AttnMaskType.padding,
-            init_method=init_method,
-            scaled_init_method=scaled_init_method,
             pre_process=self.pre_process,
             post_process=self.post_process)
 
-        self.initialize_word_embeddings(init_method_normal)
+        self.initialize_word_embeddings()
         if self.post_process:
-            self.lm_head = BertLMHead(
-                self.word_embeddings_weight().size(0),
-                args.hidden_size, init_method, args.layernorm_epsilon, parallel_output)
+            self.lm_head = BertLMHead(self.shared_embedding_or_output_weight().size(0), config, parallel_output)
             self._lm_head_key = 'lm_head'
             self.binary_head = None
             if self.add_binary_head:
-                self.binary_head = get_linear_layer(args.hidden_size, 2,
-                                                    init_method)
+                self.binary_head = get_linear_layer(config.hidden_size, 2,
+                                                    config.init_method)
                 self._binary_head_key = 'binary_head'
 
     def set_input_tensor(self, input_tensor):
@@ -215,7 +213,7 @@ class BertModel(MegatronModule):
             return post_language_model_processing(lm_output, pooled_output,
                                                   self.lm_head, self.binary_head,
                                                   lm_labels,
-                                                  self.word_embeddings_weight(),
+                                                  self.shared_embedding_or_output_weight(),
                                                   self.fp16_lm_cross_entropy)
         else:
             return lm_output

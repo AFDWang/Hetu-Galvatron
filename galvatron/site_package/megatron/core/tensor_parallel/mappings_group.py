@@ -292,4 +292,3 @@ def get_tensor_model_parallel_world_size_group(group):
 def get_tensor_model_parallel_rank_group(group):
     """Return my rank for the tensor model parallel group."""
     return torch.distributed.get_rank(group=group)
-

@@ -30,7 +30,7 @@ class GalvatronModel(nn.Module):
             elif args.pipeline_type == "pipedream_flush":
                 loss = model.pipedream_flush_forward_backward(batch, loss_func)
         else:
-            loss = model.no_pipeline_forward_backward(batch, loss_func)
+            loss = model.no_pipeline_forward_backward(batch, loss_func, profiler = profiler, iter = self.iter)
         self.iter += 1
         return self.loss_to_cpu(loss)
     
@@ -126,7 +126,8 @@ def construct_hybrid_parallel_model_api(
         model_ranks=hp_configs_whole['pp_ranks_whole'], 
         layer_output_tensor_shapes=shapes_whole, 
         layer_output_tensor_dtypes=dtypes_whole,
-        layer_dp_sizes=hp_configs_whole['dp_sizes_whole'], 
+        layer_dp_sizes=hp_configs_whole['dp_sizes_whole'],
+        layer_tp_sizes=hp_configs_whole['tp_sizes_whole'],
         chunks=get_chunks(args), 
         process_group=pp_group.ranks, 
         nproc_per_node=8,

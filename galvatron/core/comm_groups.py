@@ -12,10 +12,10 @@ class CommGroup(object):
             self.intra_group_id = self.ranks.index(rank)
             return True
         return False
-    def allgather(self, input):
-        return gather_from_group(input, self.group)
-    def split(self, input):
-        return split_to_group(input, self.group)
+    def allgather(self, input, is_input):
+        return gather_from_group(input, self.group, is_input)
+    def split(self, input, is_input):
+        return split_to_group(input, self.group, is_input)
     
     def print(self):
         print(self.ranks, end = ' ')

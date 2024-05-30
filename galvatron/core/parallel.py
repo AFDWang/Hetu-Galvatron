@@ -135,11 +135,11 @@ def wrap_model_checkpoint(model, wrap_block_names=[]):
     apply_ckpt(model_, checkpoint_wrapper, wrap_block_names)
     return model
 
-def relocate_activations(input, allgather_group, split_group):
+def relocate_activations(input, allgather_group, split_group, is_input):
     if split_group is not None:
-        input = split_group.split(input)
+        input = split_group.split(input, is_input)
     if allgather_group is not None:
-        input = allgather_group.allgather(input.contiguous())
+        input = allgather_group.allgather(input.contiguous(), is_input)
     return input
 
 class Module_with_relocation(nn.Module):
@@ -148,15 +148,16 @@ class Module_with_relocation(nn.Module):
         self.module = module
         self.allgather_group = allgather_group
         self.split_group = split_group
-        self.relocate_activations = lambda x: relocate_activations(x, self.allgather_group, self.split_group)
+        self.relocate_activations = lambda x,y: relocate_activations(x, self.allgather_group, self.split_group, y)
         if hasattr(module, 'get_extended_attention_mask'):
             self.get_extended_attention_mask = module.get_extended_attention_mask
 
     def forward(self, *inputs):
         if isinstance(inputs, (Tuple, List)):
             inputs_relocated = []
-            for input in inputs:
-                inputs_relocated.append(self.relocate_activations(input))
+            inputs_relocated.append(self.relocate_activations(inputs[0], True))
+            for input in inputs[1:]:
+                inputs_relocated.append(self.relocate_activations(input, False))
             inputs_relocated = tuple(inputs_relocated)
             return self.module(*inputs_relocated)
         else:

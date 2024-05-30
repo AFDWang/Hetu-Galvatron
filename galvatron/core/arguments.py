@@ -122,6 +122,9 @@ def galvatron_training_args(parser, use_megatron=True):
     group.add_argument(
         "--exit_after_profiling", type=int, default=1, help="Whether to exit after profiling time and memory.", choices=[0, 1],
     )
+    group.add_argument(
+        "--shape_order", type=str, default='SBH', help="Model shape order.", choices=['SBH', 'BSH'],
+    )
     if not use_megatron:
         group.add_argument("--lr", type=float, default=1e-4, help="Learning rate of adam")
         group.add_argument("--gpu_id", type=int, default=0, help="Id of GPU to run.")

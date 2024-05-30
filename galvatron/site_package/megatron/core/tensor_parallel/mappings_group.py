@@ -203,7 +203,7 @@ class _ScatterToSequenceParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return _gather_along_first_dim(grad_output, ctx.group)
+        return _gather_along_first_dim(grad_output, ctx.group), None
 
 
 class _GatherFromSequenceParallelRegion(torch.autograd.Function):
@@ -228,9 +228,9 @@ class _GatherFromSequenceParallelRegion(torch.autograd.Function):
         # scattered and whereas if the computation is duplicated, 
         # output gradients need to be scattered.
         if tensor_parallel_output_grad:
-            return _reduce_scatter_along_first_dim(grad_output, ctx.group), None
+            return _reduce_scatter_along_first_dim(grad_output, ctx.group), None, None
         else:
-            return _split_along_first_dim(grad_output, ctx.group), None
+            return _split_along_first_dim(grad_output, ctx.group), None, None
 
 
 class _ReduceScatterToSequenceParallelRegion(torch.autograd.Function):
@@ -247,7 +247,7 @@ class _ReduceScatterToSequenceParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return _gather_along_first_dim(grad_output, ctx.group)
+        return _gather_along_first_dim(grad_output, ctx.group), None
 
 
 # -----------------

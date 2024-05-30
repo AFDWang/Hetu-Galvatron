@@ -340,8 +340,9 @@ def validate_args(args, defaults={}):
     # disable sequence parallelism when tp=1
     # to avoid change in numerics when
     # sequence_parallelism is enabled.
-    if args.tensor_model_parallel_size == 1:
-        args.sequence_parallel = False
+    # --------- lxy add ----------
+    # if args.tensor_model_parallel_size == 1:
+    #     args.sequence_parallel = False
 
     # disable async_tensor_model_parallel_allreduce when
     # model parallel memory optimization is enabled
@@ -476,6 +477,8 @@ def core_transformer_config_from_args(args):
     if retro_args:
         kw_args['retro_preprocess'] = retro_args
         return RetroConfig(**kw_args)
+    
+    kw_args['sequence_parallel'] = args.sequence_parallel
 
     # Return Transformer config.
     return TransformerConfig(**kw_args)

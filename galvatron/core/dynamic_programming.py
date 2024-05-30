@@ -196,7 +196,7 @@ class DpOnModel:
                     return False
         return True
 
-    def _build_dp_and_run(self, pp_deg, bs, mbsz):
+    def _build_dp_and_run(self, pp_deg, bsz, mbsz):
         # Look for results in search history
         key = (bsz, mbsz, pp_deg)
         from_history = False

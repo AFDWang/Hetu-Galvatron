@@ -6,10 +6,10 @@ from tqdm import tqdm
 import os
 from galvatron.utils import set_seed, distributed_dataloader, print_loss
 from galvatron.core import initialize_galvatron, GalvatronProfiler
-from galvatron.models.gpt.GPTModel_hybrid_parallel import get_hybrid_parallel_configs, construct_hybrid_parallel_model
-from galvatron.models.gpt.dataloader import DataLoaderForGPT
-from galvatron.models.gpt.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
-from galvatron.models.gpt.arguments import model_args
+from galvatron.models.gpt_fa.GPTModel_hybrid_parallel import get_hybrid_parallel_configs, construct_hybrid_parallel_model
+from galvatron.models.gpt_fa.dataloader import DataLoaderForGPT
+from galvatron.models.gpt_fa.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
+from galvatron.models.gpt_fa.arguments import model_args
 
 def train(args):
     local_rank = args.local_rank
@@ -35,7 +35,7 @@ def train(args):
         hybrid_parallel_configs=hybrid_parallel_configs
     )
     
-    # from galvatron.models.gpt import gpt_model_hp
+    # from galvatron.models.gpt_fa import gpt_model_hp
     # model = gpt_model_hp(config, args)
     
     if local_rank == 0:

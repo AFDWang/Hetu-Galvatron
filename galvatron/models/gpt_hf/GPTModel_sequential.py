@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch
 from galvatron.core.pipeline import PipeSequential
 from galvatron.core import mixed_precision_dtype, ModelInfo
-
+from galvatron.core import get_args
 
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
@@ -20,23 +20,32 @@ def get_ltor_masks_and_position_ids(data):
     return attention_mask# , position_ids
 
 
-class LlamaEmbeddings_(nn.Module):
+class GPTEmbeddings_(nn.Module):
     def __init__(self, model):
         super().__init__()
-        model = model.model
-        self.embed_tokens = model.embed_tokens
+        model = model.transformer
+        self.wte = model.wte
+        self.wps = model.wpe
+        self.drop = model.drop
+        # self.sequence_parallel = get_args().sequence_parallel
+        
     def forward(self, input_ids):
-        hidden_states = self.embed_tokens(input_ids)
+        position_ids = torch.arange(0, input_ids.size(-1), dtype=torch.long, device=input_ids.device)
+        position_ids = position_ids.unsqueeze(0)
+        inputs_embeds = self.wte(input_ids)
+        position_embeds = self.wps(position_ids)
+        hidden_states = inputs_embeds + position_embeds
+        hidden_states = self.drop(hidden_states)
         # [b, s, h] -> [s, b, h]
         hidden_states = hidden_states.permute(1, 0, 2).contiguous()
         input_ids = input_ids.clone()
         return hidden_states, input_ids
 
-class LlamaLayers_(nn.Module):
+class GPTLayers_(nn.Module):
     def __init__(self, model, layer_idx_start, layer_idx_end):
         super().__init__()
-        model = model.model
-        self.layers = model.layers[layer_idx_start:layer_idx_end]
+        model = model.transformer
+        self.layers = model.h[layer_idx_start:layer_idx_end]
 
     def forward(self, hidden_states, input_ids):
         attention_mask = get_ltor_masks_and_position_ids(input_ids)
@@ -45,25 +54,24 @@ class LlamaLayers_(nn.Module):
         input_ids = input_ids.clone()
         return hidden_states, input_ids
 
-class LlamaPreNorm_(nn.Module):
+class GPTPreNorm_(nn.Module):
     def __init__(self, model):
         super().__init__()
-        model = model.model
-        self.norm = model.norm
+        model = model.transformer
+        self.ln_f = model.ln_f
 
     def forward(self, hidden_states, input_ids):
-        hidden_states = self.norm(hidden_states)
+        hidden_states = self.ln_f(hidden_states)
         input_ids = input_ids.clone()
         return hidden_states, input_ids
 
-class LlamaCls_(nn.Module):
+class GPTCls_(nn.Module):
     def __init__(self, model):
         super().__init__()
         self.lm_head = model.lm_head
-        self.vocab_size = model.vocab_size
 
     def forward(self, hidden_states, input_ids):
-        # [b, s, h] -> [s, b, h]
+        # [s, b, h] -> [b, s, h]
         hidden_states = hidden_states.permute(1, 0, 2).contiguous()
         logits = self.lm_head(hidden_states)
         logits = logits.float()
@@ -74,26 +82,28 @@ class LlamaCls_(nn.Module):
         # Flatten the tokens
         from torch.nn import CrossEntropyLoss
         loss_fct = CrossEntropyLoss()
-        shift_logits = shift_logits.view(-1, self.vocab_size)
+        shift_logits = shift_logits.view(-1, shift_logits.size(-1))
         shift_labels = shift_labels.view(-1)
         # Enable model parallelism
         shift_labels = shift_labels.to(shift_logits.device)
+        
+        # print(shift_logits.shape, shift_labels.shape)
         loss = loss_fct(shift_logits, shift_labels)
         return loss
 
 def construct_sequential_model(model, config):
     model_ = PipeSequential()
-    model_.add_module('embeddings', LlamaEmbeddings_(model))
+    model_.add_module('embeddings', GPTEmbeddings_(model))
     for i in range(config.num_hidden_layers):
-        enc = LlamaLayers_(model, i, i + 1)
+        enc = GPTLayers_(model, i, i + 1)
         model_.add_module('layer_%d'%i, enc)
-    model_.add_module('prenorm', LlamaPreNorm_(model))
-    model_.add_module('cls', LlamaCls_(model))
+    model_.add_module('prenorm', GPTPreNorm_(model))
+    model_.add_module('cls', GPTCls_(model))
     return model_
 
-class LlamaModelInfo(ModelInfo):
+class GPTModelInfo(ModelInfo):
     def __init__(self, config, args):
-        super(LlamaModelInfo, self).__init__()
+        super(GPTModelInfo, self).__init__()
         layernum_list = [config.num_hidden_layers]
         seq_len, hidden_size = config.max_position_embeddings, config.hidden_size
         mixed_precision = mixed_precision_dtype(args.mixed_precision)

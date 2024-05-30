@@ -1,6 +1,6 @@
 from galvatron.core import initialize_galvatron, GalvatronSearchEngine
-from galvatron.models.gpt.arguments import model_args
-from galvatron.models.gpt.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
+from galvatron.models.gpt_fa.arguments import model_args
+from galvatron.models.gpt_fa.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
 import os
 
 if __name__ == '__main__':

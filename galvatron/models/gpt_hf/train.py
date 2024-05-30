@@ -1,19 +1,19 @@
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import Adam
-from flash_attn.models.gpt import GPTLMHeadModel
+from transformers import GPT2Config, GPT2LMHeadModel
 from dataloader import DataLoaderForGPT
 from tqdm import tqdm
 from galvatron.utils import set_seed, print_loss
 from galvatron.core import initialize_galvatron, GalvatronProfiler
-from galvatron.models.gpt.meta_configs import config_from_meta, set_model_config
-from galvatron.models.gpt.arguments import model_args
+from galvatron.models.gpt_hf.meta_configs import config_from_meta, set_model_config
+from galvatron.models.gpt_hf.arguments import model_args
 
 def model_forward(model, input_ids):
     lm_logits = model(input_ids=input_ids).logits
     shift_logits = lm_logits[..., :-1, :].contiguous()
     shift_labels = input_ids[..., 1:].contiguous()
-    from flash_attn.losses.cross_entropy import CrossEntropyLoss
+    from torch.nn import CrossEntropyLoss
     loss_fn = CrossEntropyLoss()
     loss = loss_fn(shift_logits.view(-1, model.config.vocab_size), shift_labels.view(-1).long())
     return loss
@@ -26,7 +26,7 @@ def train(args):
     config = set_model_config(config, args, False)
 
     print("Creating Model...")
-    model = GPTLMHeadModel(config)
+    model = GPT2LMHeadModel(config)
     model.to(device)
     
     print("Creating Dataloader...")

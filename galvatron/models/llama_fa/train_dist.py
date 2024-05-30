@@ -6,10 +6,10 @@ from tqdm import tqdm
 import os
 from galvatron.utils import set_seed, distributed_dataloader, print_loss
 from galvatron.core import initialize_galvatron, GalvatronProfiler
-from galvatron.models.llama.LlamaModel_hybrid_parallel import get_hybrid_parallel_configs, construct_hybrid_parallel_model
-from galvatron.models.llama.dataloader import DataLoaderForLlama
-from galvatron.models.llama.meta_configs import config_from_meta, llama_config_to_gpt2_config, set_model_config, model_name, model_layer_configs
-from galvatron.models.llama.arguments import model_args
+from galvatron.models.llama_fa.LlamaModel_hybrid_parallel import get_hybrid_parallel_configs, construct_hybrid_parallel_model
+from galvatron.models.llama_fa.dataloader import DataLoaderForLlama
+from galvatron.models.llama_fa.meta_configs import config_from_meta, llama_config_to_gpt2_config, set_model_config, model_name, model_layer_configs
+from galvatron.models.llama_fa.arguments import model_args
 
 
 def train(args):
@@ -36,7 +36,7 @@ def train(args):
         hybrid_parallel_configs=hybrid_parallel_configs
     )
     
-    # from galvatron.models.llama import llama_model_hp
+    # from galvatron.models.llama_fa import llama_model_hp
     # model = llama_model_hp(config, args)
     
     if local_rank == 0:

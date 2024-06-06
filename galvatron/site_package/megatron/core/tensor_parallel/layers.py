@@ -192,7 +192,7 @@ class VocabParallelEmbedding(torch.nn.Module):
             self.vocab_start_index,
             self.vocab_end_index,
         ) = VocabUtility.vocab_range_from_global_vocab_size(
-            self.num_embeddings, get_tensor_model_parallel_rank(), self.tensor_model_parallel_size
+            self.num_embeddings, rank, self.tensor_model_parallel_size
         )
         self.num_embeddings_per_partition = self.vocab_end_index - self.vocab_start_index
 
@@ -244,7 +244,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         if self.tensor_model_parallel_size > 1:
             output_parallel[input_mask, :] = 0.0
         # Reduce across all the model parallel GPUs.
-        if self.tp_group:
+        if self.tp_group is None:
             output = reduce_from_tensor_model_parallel_region(output_parallel)
         else:
             output = reduce_from_tensor_model_parallel_region_group(output_parallel, self.tp_group)

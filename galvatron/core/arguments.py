@@ -125,6 +125,9 @@ def galvatron_training_args(parser, use_megatron=True):
     group.add_argument(
         "--shape_order", type=str, default='SBH', help="Model shape order.", choices=['SBH', 'BSH'],
     )
+    group.add_argument(
+        "--vocab_tp", type=int, default=1, help="Tensor parallel degree of vocab.", choices=[1,2,4,8],
+    )
     if not use_megatron:
         group.add_argument("--lr", type=float, default=1e-4, help="Learning rate of adam")
         group.add_argument("--gpu_id", type=int, default=0, help="Id of GPU to run.")

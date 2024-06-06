@@ -28,9 +28,9 @@ def set_model_config(config, args, overwrite_args=True):
         config.num_hidden_layers = args.num_hidden_layers
         config.num_attention_heads = args.num_attention_heads
         config.max_position_embeddings = args.seq_length
-        config.resid_pdrop = args.dropout_prob
-        config.embd_pdrop = args.dropout_prob
-        config.attn_pdrop = args.dropout_prob
+        config.resid_pdrop = args.hidden_dropout
+        config.embd_pdrop = args.hidden_dropout
+        config.attn_pdrop = args.attention_dropout
     # Overwrite layer number only
     elif args.set_layernum_manually:
         config.num_hidden_layers = args.num_hidden_layers
@@ -60,6 +60,12 @@ def overwrite_model_args(config, args):
     args.vocab_size = config.vocab_size
     args.num_attention_heads = config.num_attention_heads
     args.kv_channels = args.hidden_size // args.num_attention_heads
+    assert abs(config.resid_pdrop - config.embd_pdrop) <= 1e-3, "resid_pdrop should be equal to embd_pdrop"
+    args.hidden_dropout = config.resid_pdrop
+    args.attention_dropout = config.attn_pdrop
+    if getattr(args, "padded_vocab_size", None) is None:
+        args.padded_vocab_size = (config.vocab_size + args.make_vocab_size_divisible_by - 1) // args.make_vocab_size_divisible_by * args.make_vocab_size_divisible_by
+
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):

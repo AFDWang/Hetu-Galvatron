@@ -7,12 +7,12 @@ class DataLoaderForGPT(Dataset):
         self.vocab_size = args.vocab_size
         self.sentence_length = args.seq_length
         self.dataset_size = 2560 * 16
-        self.data_length = np.random.randint(1,self.sentence_length+1,(self.dataset_size,))
+        self.data_length = np.random.randint(1,self.sentence_length + 2,(self.dataset_size,))
         self.device = device
 
         self.input_ids = []
         for i in range(self.dataset_size):
-            sentence = np.random.randint(0,self.vocab_size,(self.sentence_length,))
+            sentence = np.random.randint(0,self.vocab_size,(self.sentence_length + 1,))
             sentence[self.data_length[i]:] = 0
             mask = np.ones((self.sentence_length,))
             mask[self.data_length[i]:] = 0

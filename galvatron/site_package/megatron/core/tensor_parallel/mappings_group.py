@@ -169,7 +169,7 @@ class _ScatterToModelParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        return _gather_along_last_dim(grad_output, ctx.group)
+        return _gather_along_last_dim(grad_output, ctx.group), None
 
 
 class _GatherFromModelParallelRegion(torch.autograd.Function):

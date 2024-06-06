@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch
 from typing import Tuple, List
 from functools import partial
+from galvatron.core.redistribute import fused_split_allgather
 
 def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='bert_enc', pp_device = None, mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None):
     if dp_type is None:
@@ -135,7 +136,11 @@ def wrap_model_checkpoint(model, wrap_block_names=[]):
     apply_ckpt(model_, checkpoint_wrapper, wrap_block_names)
     return model
 
-def relocate_activations(input, allgather_group, split_group, is_input):
+def relocate_activations(input, allgather_group, split_group, fused_allgather_group, fused_split_group, is_input):
+    if fused_allgather_group is not None or fused_split_group is not None:
+        input = fused_split_allgather(input, is_input, getattr(allgather_group,"group",None), getattr(split_group,"group",None), getattr(fused_allgather_group,"group",None), getattr(fused_split_group,"group",None))
+        return input
+        
     if split_group is not None:
         input = split_group.split(input, is_input)
     if allgather_group is not None:
@@ -143,12 +148,14 @@ def relocate_activations(input, allgather_group, split_group, is_input):
     return input
 
 class Module_with_relocation(nn.Module):
-    def __init__(self, module, allgather_group, split_group):
+    def __init__(self, module, allgather_group, split_group, fused_allgather_group, fused_split_group):
         super().__init__()
         self.module = module
         self.allgather_group = allgather_group
         self.split_group = split_group
-        self.relocate_activations = lambda x,y: relocate_activations(x, self.allgather_group, self.split_group, y)
+        self.fused_allgather_group = fused_allgather_group
+        self.fused_split_group = fused_split_group
+        self.relocate_activations = lambda x,y: relocate_activations(x, self.allgather_group, self.split_group, self.fused_allgather_group, self.fused_split_group, y)
         if hasattr(module, 'get_extended_attention_mask'):
             self.get_extended_attention_mask = module.get_extended_attention_mask
 
@@ -230,9 +237,11 @@ def modules_to_devices(module_list, pp_devices):
     for i in range(len(module_list)):
         module_list[i].to('cuda:%d'%pp_devices[i])
 
-def wrap_modules_relocation(module_list, allgather_groups, split_groups):
+def wrap_modules_relocation(module_list, allgather_groups, split_groups, fused_allgather_groups, fused_split_groups):
     assert len(module_list) == len(allgather_groups)
     assert len(module_list) == len(split_groups)
+    assert len(module_list) == len(fused_allgather_groups)
+    assert len(module_list) == len(fused_split_groups)
     for i in range(len(module_list)):
-        module_list[i] = Module_with_relocation(module_list[i], allgather_groups[i], split_groups[i])
+        module_list[i] = Module_with_relocation(module_list[i], allgather_groups[i], split_groups[i], fused_allgather_groups[i], fused_split_groups[i])
     return module_list

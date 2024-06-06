@@ -40,7 +40,8 @@ PARALLEL_ARGS="
     --global_tp_consec 1 \
     --sdp 0 \
     --global_checkpoint 0 \
-    --chunks 4 \
+    --vocab_tp 4 \
+    --chunks 8 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \

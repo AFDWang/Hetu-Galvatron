@@ -104,20 +104,20 @@ def construct_hybrid_parallel_model_api(
     shapes_whole, dtypes_whole = layer_shapes_dtypes_whole_model(module_types, layernum_list, layer_shapes_list, layer_dtypes_list)
     
     # Get hp_configs_whole for the whole model (including embed/cls/... layers)
-    hp_configs_whole = hp_config_whole_model(module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0)
+    hp_configs_whole = hp_config_whole_model(module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp = args.vocab_tp)
 
     # [Step 0] Generate communication groups
-    pp_group, tp_groups_whole, dp_groups_whole, allgather_groups_whole, split_groups_whole = \
+    pp_group, tp_groups_whole, dp_groups_whole, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole = \
         gen_comm_groups(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['pp_deg'], hp_configs_whole['tp_consec_whole'], show_rank = 0)
     
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
-    model = construct_tensor_parallel_model(model, config, get_enc_groups(tp_groups_whole, module_types))
+    model = construct_tensor_parallel_model(model, config, tp_groups_whole) # get_enc_groups(tp_groups_whole, module_types))
 
     # [Step 2] Construct Sequantial model using model-specific sequential function
     model = construct_sequential_model(model, config)
 
     # [Step 3] Wrap Relocation modules if necessary
-    model = wrap_modules_relocation(model, allgather_groups_whole, split_groups_whole)
+    model = wrap_modules_relocation(model, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole)
 
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
     from galvatron.core.pipeline import PipelineParallel
@@ -147,4 +147,7 @@ def construct_hybrid_parallel_model_api(
     hp_model.wrap_pipeline_modules_checkpoint(hp_configs_whole['checkpoint_flags_whole'], wrap_block_name=wrap_block_name)
     
     model = GalvatronModel(hp_model)
+    
+    model.dp_groups_whole = dp_groups_whole
+    
     return model

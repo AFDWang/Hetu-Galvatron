@@ -478,8 +478,6 @@ def core_transformer_config_from_args(args):
         kw_args['retro_preprocess'] = retro_args
         return RetroConfig(**kw_args)
     
-    kw_args['sequence_parallel'] = args.sequence_parallel
-
     # Return Transformer config.
     return TransformerConfig(**kw_args)
 

@@ -11,15 +11,15 @@ def set_seed():
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
-def distributed_dataloader(dataset, global_bsz, shuffle = True, args = None):
-    rank = torch.distributed.get_rank()
-    world_size = torch.distributed.get_world_size()
-    pp_deg = args.pp_deg if args is not None and 'pp_deg' in args else 1
-    data_num_replicas = world_size // pp_deg
-    train_batch_size_input = global_bsz // data_num_replicas
+def distributed_dataloader(dataset, global_bsz, shuffle = True, args = None, group = None):
+    rank = torch.distributed.get_rank(group)
+    world_size = torch.distributed.get_world_size(group)
+    # pp_deg = args.pp_deg if args is not None and 'pp_deg' in args else 1
+    # data_num_replicas = world_size // pp_deg
+    train_batch_size_input = global_bsz // world_size
     trainloader = DataLoader(dataset=dataset,
                             batch_size=train_batch_size_input,
-                            sampler=DistributedSampler(dataset,shuffle=shuffle,num_replicas=data_num_replicas,rank=rank%data_num_replicas))
+                            sampler=DistributedSampler(dataset,shuffle=shuffle,num_replicas=world_size,rank=rank))
     return trainloader
 
 def print_loss(args, loss, ep, iter):

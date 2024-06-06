@@ -13,9 +13,9 @@ def build_num_microbatches_calculator(args):
         num_microbatches_calculator = ConstantNumMicroBatches(
             args.global_batch_size, args.micro_batch_size,
             args.data_parallel_size)
-        # if args.rank == 0:
-        #     print('setting number of micro-batches to constant {}'.format(
-        #         num_microbatches_calculator.get()), flush=True)
+        if args.rank == 0:
+            print('setting number of micro-batches to constant {}'.format(
+                num_microbatches_calculator.get()), flush=True)
 
     else:
         assert len(args.rampup_batch_size) == 3, 'expected the following ' \

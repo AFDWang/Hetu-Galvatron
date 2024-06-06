@@ -138,7 +138,7 @@ def print_hp_configs(hp_configs):
         print_hp_config(key, val)
     print('================================================================================')
     
-def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0):
+def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1):
     pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc = \
         hp_configs['pp_deg'], hp_configs['tp_sizes_enc'], hp_configs['tp_consecutive_flags'], hp_configs['dp_types_enc'], hp_configs['pp_ranks_enc'], hp_configs['checkpoint_flags_enc']
     
@@ -158,7 +158,7 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0):
             hp_configs_whole['checkpoint_flags_whole'].append(checkpoint_flags_enc[idx_enc])
             idx_enc += 1
         else:
-            hp_configs_whole['tp_sizes_whole'].append(1)
+            hp_configs_whole['tp_sizes_whole'].append(vocab_tp)
             hp_configs_whole['dp_types_whole'].append(embed_sdp)
             hp_configs_whole['pp_ranks_whole'].append(pp_ranks_enc[idx_enc] if idx_enc < len(pp_ranks_enc) else pp_ranks_enc[-1])
             hp_configs_whole['tp_consec_whole'].append(1)

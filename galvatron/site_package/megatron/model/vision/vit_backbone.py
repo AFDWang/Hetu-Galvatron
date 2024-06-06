@@ -5,7 +5,7 @@
 import math
 import einops
 import torch
-# import apex
+import apex
 import torch.nn.functional as F
 from megatron import get_args
 from megatron.model.transformer import ParallelTransformer
@@ -30,8 +30,9 @@ class VitMlpHead(MegatronModule):
             bias is set to zero.
     """
 
-    def __init__(self, hidden_size, num_classes):
+    def __init__(self, config, hidden_size, num_classes):
         super(VitMlpHead, self).__init__()
+        self.config = config
         self.dense_in = torch.nn.Linear(hidden_size, hidden_size)
         self.relu = torch.nn.ReLU()
         self.dense_out = torch.nn.Linear(hidden_size, num_classes)
@@ -130,24 +131,18 @@ class VitBackbone(MegatronModule):
     """Vision Transformer Model."""
 
     def __init__(self,
+                 config,
                  pre_process=True,
                  post_process=True,
                  class_token=True,
                  single_token_output=False,
                  post_layer_norm=True,
                  drop_path_rate=0.0):
-        super(VitBackbone, self).__init__(share_word_embeddings=False)
+        super(VitBackbone, self).__init__(share_embeddings_and_output_weights=False)
         args = get_args()
+        self.config = config
 
         self.fp16_lm_cross_entropy = args.fp16_lm_cross_entropy
-        if args.init_method_xavier_uniform:
-            self.init_method = torch.nn.init.xavier_uniform_
-            self.scaled_init_method = torch.nn.init.xavier_uniform_
-        else:
-            self.init_method = init_method_normal(args.init_method_std)
-            self.scaled_init_method = scaled_init_method_normal(
-                args.init_method_std, args.num_layers
-            )
 
         self.pre_process = pre_process
         self.post_process = post_process
@@ -179,7 +174,7 @@ class VitBackbone(MegatronModule):
                 )
                 torch.nn.init.zeros_(self.cls_token)
             self.position_ids = torch.arange(self.seq_length).expand(1, -1).cuda()
-            
+
             # Linear encoder
             self.linear_encoder = torch.nn.Linear(
                 self.flatten_dim, self.hidden_size
@@ -202,8 +197,8 @@ class VitBackbone(MegatronModule):
 
         # Transformer
         self.transformer = ParallelTransformer(
-            self.init_method,
-            self.scaled_init_method,
+            config,
+            model_type=args.model_type,
             pre_process=self.pre_process,
             post_process=self.post_process,
             post_layer_norm=self.post_layer_norm,

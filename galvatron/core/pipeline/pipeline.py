@@ -43,6 +43,7 @@ class PipelineParallel(nn.Module):
         layer_output_tensor_shapes,
         layer_output_tensor_dtypes=None,
         layer_dp_sizes=None,
+        layer_tp_sizes=None,
         chunks = 1, 
         process_group=None, 
         nproc_per_node=None,
@@ -76,12 +77,15 @@ class PipelineParallel(nn.Module):
         self.model_cur_stage = model[self.stage_start_idx:self.stage_end_idx]#.cuda(self.local_rank)
         self.chunks = int(chunks)
         assert(self.chunks >= 1)
-        self.stage_input_tensor_shape = [None] if self.is_pipeline_first_stage() else layer_output_tensor_shapes[self.stage_start_idx - 1]
-        self.stage_output_tensor_shape = [None] if self.is_pipeline_last_stage() else layer_output_tensor_shapes[self.stage_end_idx - 1]
+        self.template_stage_input_tensor_shape = [None] if self.is_pipeline_first_stage() else layer_output_tensor_shapes[self.stage_start_idx - 1]
+        self.template_stage_output_tensor_shape = [None] if self.is_pipeline_last_stage() else layer_output_tensor_shapes[self.stage_end_idx - 1]
         self.stage_input_tensor_dtype = [None] if self.is_pipeline_first_stage() else layer_output_tensor_dtypes[self.stage_start_idx - 1]
         self.stage_output_tensor_dtype = [None] if self.is_pipeline_last_stage() else layer_output_tensor_dtypes[self.stage_end_idx - 1]
         self.dp_size_prev_stage = None if self.is_pipeline_first_stage() else layer_dp_sizes[self.stage_start_idx - 1]
         self.dp_size_cur_stage = None if self.is_pipeline_last_stage() else layer_dp_sizes[self.stage_end_idx - 1]
+
+        self.tp_size_prev_stage = None if self.is_pipeline_first_stage() else layer_tp_sizes[self.stage_start_idx - 1]
+        self.tp_size_cur_stage = None if self.is_pipeline_last_stage() else layer_tp_sizes[self.stage_end_idx - 1]
 
         self.dp_size_input = layer_dp_sizes[0]
         self.info = info
@@ -89,6 +93,10 @@ class PipelineParallel(nn.Module):
         
         self.checkpoint_flags_stage = [0] * (self.stage_end_idx-self.stage_start_idx) # checkpoint default off
         self.require_loss = require_loss
+        
+        args = get_args()
+        self.sequence_parallel = args.sequence_parallel
+        self.shape_order = args.shape_order
         
         self.async_grad_reduce = async_grad_reduce
 
@@ -135,14 +143,31 @@ class PipelineParallel(nn.Module):
             if wrap_block_name is not None: # in this way, checkpoint will be warpped inside FSDP
                 self.checkpoint_flags_stage = [0] * (self.stage_end_idx-self.stage_start_idx)
 
-    def update_tensor_shape(self, microbatches, dp_size_input, dp_size, template_tensor_shape):
+    def update_tensor_shape(self, microbatches, dp_size_input, dp_size, tp_size, template_tensor_shape):
         # Update tensor_shape with correct microbatch_size
         tensor_shape, tensor_shape_last = copy.deepcopy(template_tensor_shape), copy.deepcopy(template_tensor_shape)
         microbatch_size = microbatches[0][0][0].shape[0] * dp_size_input // dp_size
         microbatch_size_last = microbatches[0][-1][0].shape[0] * dp_size_input // dp_size
+        
         for i in range(len(tensor_shape)):
-            tensor_shape[i][0] = microbatch_size
-            tensor_shape_last[i][0] = microbatch_size_last
+            for j in range(len(tensor_shape[i])):
+                if tensor_shape[i][j] == -1:
+                    tensor_shape[i][j] = microbatch_size
+            if i == 0:
+                if self.sequence_parallel:
+                    if self.shape_order == "SBH":
+                        tensor_shape[i][0] = tensor_shape[i][0] // tp_size
+                    else:
+                        tensor_shape[i] = [tensor_shape[i][0] * tensor_shape[i][1] // tp_size, tensor_shape[i][2]]
+            for j in range(len(tensor_shape_last[i])):
+                if tensor_shape_last[i][j] == -1:
+                    tensor_shape_last[i][j] = microbatch_size_last
+            if i == 0:
+                if self.sequence_parallel:
+                    if self.shape_order == "SBH":
+                        tensor_shape_last[i][0] = tensor_shape_last[i][0] // tp_size
+                    else:
+                        tensor_shape_last[i] = [tensor_shape_last[i][0] * tensor_shape_last[i][1] // tp_size, tensor_shape_last[i][2]]
         return tensor_shape, tensor_shape_last
 
     def no_pipeline_forward_backward(
@@ -150,15 +175,15 @@ class PipelineParallel(nn.Module):
         batch, 
         loss_func, 
         forward_only=False,
+        profiler=None,
+        iter=0,
         ):
         """Run no pipeline method.
         
         Returns dictionary with losses.
         """
         model = self.model_cur_stage
-        if self.group_size > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)
-            
+        
         forward_step_func = forward_step_function(loss_func)
         # Chunk input batch into microbatches
         if batch[0][0].shape[0] % self.chunks != 0:
@@ -173,6 +198,9 @@ class PipelineParallel(nn.Module):
                 self.chunk_warning = False
                 
         num_microbatches = self.real_chunks
+        if num_microbatches > 1 and self.async_grad_reduce:
+            enter_no_sync_context(model)
+        
         losses_reduced = []
         
         for i in range(num_microbatches):
@@ -186,13 +214,16 @@ class PipelineParallel(nn.Module):
                 losses_reduced,
             )
             
+            if profiler is not None and i == num_microbatches - 1:
+                profiler.profile_memory(iter,"After Forward")
+            
             input_tensor_grad = self.backward_step(
                     None,
                     output_tensor,
                     None,
                 )
             
-        if self.group_size > 1 and self.async_grad_reduce:
+        if num_microbatches > 1 and self.async_grad_reduce:
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
 
@@ -208,10 +239,9 @@ class PipelineParallel(nn.Module):
         stages.
 
         Returns dictionary with losses if the last stage, empty dict otherwise."""
-
+        assert(self.group_size > 1)
         model = self.model_cur_stage
-        if self.group_size > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)
+        
         forward_step_func = forward_step_function(loss_func)
 
         # Chunk input batch into microbatches
@@ -225,6 +255,8 @@ class PipelineParallel(nn.Module):
 
         # Compute number of warmup microbatches.
         num_microbatches = self.real_chunks
+        if num_microbatches > 1 and self.async_grad_reduce:
+            enter_no_sync_context(model)
         num_warmup_microbatches = self.group_size - self.group_rank - 1
         num_warmup_microbatches = min(num_warmup_microbatches, num_microbatches)
         num_microbatches_remaining = num_microbatches - num_warmup_microbatches
@@ -237,14 +269,14 @@ class PipelineParallel(nn.Module):
             self.stage_input_tensor_shape = self.stage_input_tensor_shape_last = [None]
         else:
             self.stage_input_tensor_shape, self.stage_input_tensor_shape_last = \
-                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_prev_stage, self.stage_input_tensor_shape)
+                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_prev_stage, self.tp_size_prev_stage, self.template_stage_input_tensor_shape)
 
         # Update stage_output_tensor_shape with correct microbatch_size
         if self.is_pipeline_last_stage():
             self.stage_output_tensor_shape = self.stage_output_tensor_shape_last = [None]
         else:
             self.stage_output_tensor_shape, self.stage_output_tensor_shape_last = \
-                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_cur_stage, self.stage_output_tensor_shape)
+                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_cur_stage, self.tp_size_cur_stage, self.template_stage_output_tensor_shape)
 
         # print('rank %d'%self.global_rank, self.stage_input_tensor_shape, self.stage_input_tensor_shape_last, self.stage_output_tensor_shape, self.stage_output_tensor_shape_last, self.stage_input_tensor_dtype, self.stage_output_tensor_dtype)
 
@@ -436,7 +468,7 @@ class PipelineParallel(nn.Module):
         if self.info:
             print('rank %d'%self.global_rank, 'finish cooldown')
             
-        if self.group_size > 1 and self.async_grad_reduce:
+        if num_microbatches > 1 and self.async_grad_reduce:
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
 
@@ -463,10 +495,9 @@ class PipelineParallel(nn.Module):
         loss_func, 
         forward_only=False,
         ):
-
+        assert(self.group_size > 1)
         model = self.model_cur_stage
-        if self.group_size > 1 and self.async_grad_reduce:
-            enter_no_sync_context(model)
+        
         forward_step_func = forward_step_function(loss_func)
 
         # Chunk input batch into microbatches
@@ -478,6 +509,9 @@ class PipelineParallel(nn.Module):
                 print()
             self.chunk_warning = False
         self.num_microbatches = self.real_chunks
+        
+        if self.num_microbatches > 1 and self.async_grad_reduce:
+            enter_no_sync_context(model)
 
         # Compute tensor shapes for all microbatches, note that the last microbatch may have different microbatch_size, thus different shape!
         batch_size = batch[0][0].shape[0] * self.dp_size_input
@@ -487,14 +521,14 @@ class PipelineParallel(nn.Module):
             self.stage_input_tensor_shape = self.stage_input_tensor_shape_last = [None]
         else:
             self.stage_input_tensor_shape, self.stage_input_tensor_shape_last = \
-                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_prev_stage, self.stage_input_tensor_shape)
+                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_prev_stage, self.tp_size_prev_stage, self.template_stage_input_tensor_shape)
 
         # Update stage_output_tensor_shape with correct microbatch_size
         if self.is_pipeline_last_stage():
             self.stage_output_tensor_shape = self.stage_output_tensor_shape_last = [None]
         else:
             self.stage_output_tensor_shape, self.stage_output_tensor_shape_last = \
-                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_cur_stage, self.stage_output_tensor_shape)
+                self.update_tensor_shape(microbatches, self.dp_size_input, self.dp_size_cur_stage, self.tp_size_cur_stage, self.template_stage_output_tensor_shape)
 
         self.input_tensors = []
         self.output_tensors = []
@@ -535,11 +569,13 @@ class PipelineParallel(nn.Module):
         return losses_reduced
 
     def gpipe_backward(self):
+        assert(self.group_size > 1)
         if get_args().profile_forward:
             return
         
         if self.info:
             print('rank %d'%self.global_rank, 'start backward')
+
         model = self.model_cur_stage
         # Run backward passes.
         for i in range(self.num_microbatches):
@@ -582,7 +618,7 @@ class PipelineParallel(nn.Module):
         if self.info:
             print('rank %d'%self.global_rank, 'finish backward')
         
-        if self.group_size > 1 and self.async_grad_reduce:    
+        if self.num_microbatches > 1 and self.async_grad_reduce: 
             model = self.model_cur_stage
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)

@@ -1,7 +1,10 @@
-export NUM_NODES=1
+export NUM_NODES=2
 export NUM_GPUS_PER_NODE=8
 export MASTER_ADDR=$MASTER_ADDR
 export MASTER_PORT=$MASTER_PORT
+# export NCCL_SOCKET_IFNAME=eth0
+export NCCL_IB_HCA=mlx5_2,mlx5_5
+export NCCL_IB_TIMEOUT=22
 export NODE_RANK=$RANK
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
@@ -15,12 +18,12 @@ LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 TRAINER="train_dist.py"
 
 MODEL_ARGS="
-    --model_size llama-0.3b \
+    --model_size llama-13b \
     --set_model_config_manually 0 \
-    --set_layernum_manually 0 \
+    --set_layernum_manually 1 \
     --vocab_size 32000 \
     --hidden_size 4096 \
-    --num_hidden_layers 32 \
+    --num_hidden_layers 20 \
     --num_attention_heads 32 \
     --seq_length 2048"
 
@@ -44,9 +47,8 @@ PARALLEL_ARGS="
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \
-    --sequence-parallel \
-    --use-flash-attn"
-    # --initialize_on_meta 1 \
-    # --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
+    --use-flash-attn \
+    --initialize_on_meta 1 \
+    --galvatron_config_path ./configs/galvatron_config_hidden5120_head40_seqlen2048_2nodes_8gpus_per_node_30GB_bf16_bsz64.json"
 
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS}

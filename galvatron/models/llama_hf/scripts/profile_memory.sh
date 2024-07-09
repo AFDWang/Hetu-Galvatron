@@ -22,7 +22,7 @@ MODEL_ARGS="
 
 PROFILE_ARGS_BF16="
     --profile_type memory \
-    --profile_batch_size 8 \
+    --profile_batch_size 16 \
     --layernum_min 1 \
     --layernum_max 2 \
     --max_tp_deg 8 \

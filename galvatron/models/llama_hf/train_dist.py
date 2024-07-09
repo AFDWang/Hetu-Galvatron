@@ -10,6 +10,7 @@ from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_hybrid_para
 from galvatron.models.llama_hf.dataloader import DataLoaderForLlama
 from galvatron.models.llama_hf.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
 from galvatron.models.llama_hf.arguments import model_args
+from megatron.arguments import _print_args
 
 
 def train(args):
@@ -23,6 +24,7 @@ def train(args):
     config = set_model_config(config, args, False)
     if local_rank == 0:
         print(config)
+        _print_args("arguments", args)
     
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if local_rank == 0:
@@ -44,7 +46,8 @@ def train(args):
         dataset=DataLoaderForLlama(args, device),
         global_bsz=args.global_train_batch_size,
         shuffle=True,
-        args=args
+        args=args,
+        group = model.dp_groups_whole[0].group
     )
     
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)

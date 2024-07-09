@@ -1,16 +1,16 @@
 export NUM_NODES=2
 export NUM_GPUS_PER_NODE=8
 
-MODEL_SIZE="llama-7b"
-MEMORY=34
+MODEL_SIZE="llama-13b"
+MEMORY=30
 
 MODEL_ARGS="
     --model_size ${MODEL_SIZE} \
     --set_model_config_manually 0 \
-    --set_layernum_manually 0 \
+    --set_layernum_manually 1 \
     --vocab_size 32000 \
     --hidden_size 4096 \
-    --num_hidden_layers 32 \
+    --num_hidden_layers 20 \
     --num_attention_heads 32 \
     --seq_length 2048"
 
@@ -18,7 +18,7 @@ BSZ_ARGS="
     --min_bsz 16 \
     --max_bsz 1024 \
     --bsz_scale 16 \
-    --settle_bsz -1 \
+    --settle_bsz 64 \
     --recommend_min_bsz 0
 "
 

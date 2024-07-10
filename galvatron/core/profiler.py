@@ -605,6 +605,10 @@ class GalvatronProfiler():
                             'profile_dp_type', 
                             'mixed_precision',
                             'use_flash_attn',
+                            'add_bias_linear',
+                            'ffn_hidden_size',
+                            'kv_channels',
+                            'swiglu',
                             'extra_args_str']
         exclude_arg_names = profile_arg_names+self.layernum_arg_names
         MODEL_ARGS = self.args2str(self.args._get_kwargs(), exclude_arg_names)

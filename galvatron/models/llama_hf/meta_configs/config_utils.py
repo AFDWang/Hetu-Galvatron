@@ -29,7 +29,7 @@ def set_model_config(config, args, overwrite_args=True):
     if args.set_model_config_manually:
         config.vocab_size = args.vocab_size
         config.hidden_size = args.hidden_size
-        config.intermediate_size = 4 * args.hidden_size
+        config.intermediate_size = (args.hidden_size * 8 // 3 + 256 - 1) // 256 * 256
         config.num_hidden_layers = args.num_hidden_layers
         config.num_attention_heads = args.num_attention_heads
         config.max_position_embeddings = args.seq_length
@@ -57,11 +57,14 @@ def overwrite_megatron_args(config, args):
 # Need to overwrite the arguments with the model config
 def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
+    args.ffn_hidden_size = config.intermediate_size
     args.seq_length = config.max_position_embeddings
     args.num_hidden_layers = config.num_hidden_layers
     args.vocab_size = config.vocab_size
     args.num_attention_heads = config.num_attention_heads
     args.kv_channels = args.hidden_size // args.num_attention_heads
+    args.add_bias_linear = False
+    args.swiglu = True
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):

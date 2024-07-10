@@ -215,7 +215,7 @@ class TimeCostModel:
         self.use_zero2_for_dp = use_zero2_for_dp
         if self.checkpoint:
             # self.fct *= 2
-            self.bct += self.fct * 0.5
+            self.bct += self.fct #  * 0.5
             self.tp_message_size *= 1.5
 
         if mixed_precision:

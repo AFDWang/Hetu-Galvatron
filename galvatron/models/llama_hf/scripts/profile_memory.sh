@@ -13,7 +13,7 @@ export PROFILE_LAUNCHER="$LAUNCHER"
 export PROFILE_TRAINER="train_dist.py"
 
 MODEL_ARGS="
-    --model_size llama-7b \
+    --model_size llama-13b \
     --set_model_config_manually 0 \
     --vocab_size 32000 \
     --hidden_size 4096 \
@@ -22,7 +22,7 @@ MODEL_ARGS="
 
 PROFILE_ARGS_BF16="
     --profile_type memory \
-    --profile_batch_size 8 \
+    --profile_batch_size 16 \
     --layernum_min 1 \
     --layernum_max 2 \
     --max_tp_deg 8 \
@@ -39,4 +39,4 @@ PROFILE_ARGS_BF16="
 #     --profile_dp_type zero3 \
 #     --mixed_precision fp32"
 
-python3 profile.py ${MODEL_ARGS} ${PROFILE_ARGS_BF16}
+python3 profiler.py ${MODEL_ARGS} ${PROFILE_ARGS_BF16}

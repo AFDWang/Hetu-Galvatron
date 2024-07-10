@@ -160,7 +160,7 @@ def gen_redistributed_group(tp_size_old, tp_size_new, tp_consec_old, tp_consec_n
     tp_group_new = None if tp_size_new == 1 else tp_group_new
     return (tp_group_old, tp_group_new)
 
-def merge_redistributed_group(split_group, allgather_group):
+def merge_redistributed_group(split_group, allgather_group, world_ranks = None):
     if split_group is None or allgather_group is None:
         return None, None
 
@@ -177,26 +177,31 @@ def merge_redistributed_group(split_group, allgather_group):
     
     if split_consecutive == 0 or allgather_consecutive == 0:
         return None, None
+    
+    world_ranks = sort_ranks(world_ranks)
+    rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
+    
 
     if split_tp_size > allgather_tp_size:
-        rank = torch.distributed.get_rank()
-        mul = split_tp_size // allgather_tp_size
-        for i in range(mul):
-            ranks = range(split_group.ranks[i], split_group.ranks[-1] + 1, mul)
-            group = CommGroup(ranks)
-            if group.has_rank(rank):
-                fused_group = group
+        num_tp_groups = world_size // split_tp_size
+        # mul = split_tp_size // allgather_tp_size
+        for i in range(num_tp_groups):
+            for j in range(allgather_tp_size):
+                ranks = range(i * split_tp_size + j, (i+1) * split_tp_size + j, allgather_tp_size)
+                group = CommGroup(ranks)
+                if group.has_rank(rank):
+                    fused_group = group
         return fused_group, None
     
     if split_tp_size < allgather_tp_size:
-        rank = torch.distributed.get_rank()
-        mul = allgather_tp_size // split_tp_size
-        for i in range(mul):
-            ranks = range(allgather_group.ranks[i], allgather_group.ranks[-1] + 1, mul)
-            group = CommGroup(ranks)
-            if group.has_rank(rank):
-                fused_group = group
-        
+        num_tp_groups = world_size // allgather_tp_size
+        # mul = allgather_tp_size // split_tp_size
+        for i in range(num_tp_groups):
+            for j in range(split_tp_size):
+                ranks = range(i * allgather_tp_size + j, (i+1) * allgather_tp_size + j, split_tp_size)
+                group = CommGroup(ranks)
+                if group.has_rank(rank):
+                    fused_group = group
         return None, fused_group
     
     assert False,"merge_redistributed_group error!"
@@ -230,7 +235,7 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
         fused_split_groups.append(fused_split_group)
         fused_allgather_groups.append(fused_allgather_group)
     
-    show_rank = 5
+    show_rank = 0
     if show_rank >= 0 and torch.distributed.get_rank() == show_rank:
         print('====================== Galvatron Communication Group ===========================')
         print("TP groups for rank %d (all layers):"%show_rank)

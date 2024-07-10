@@ -170,6 +170,14 @@ def galvatron_profile_args(parser):
         "--use-flash-attn", action="store_true", help="Use FlashAttention implementation of attention."
     )
     group.add_argument(
+        "--shape_order", type=str, default='SBH', help="Model shape order.", choices=['SBH', 'BSH'],
+    )
+
+    group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
+                       help='Pad the vocab size to be divisible by this value.'
+                       'This is added for computational efficieny reasons.')
+    
+    group.add_argument(
         "--extra_args_str", type=str, default="", help="Extra arguments for megatron initilization."
     )
     
@@ -296,5 +304,10 @@ def galvatron_search_args(parser):
     group.add_argument(
         "--costmodel_coe", type=float, default=1.0, help="Multiply the outcome of time cost model by this coefficient. Only for fine-tuning time cost model, should be 1.0 in default.",
     )
+    
+    group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
+                       help='Pad the vocab size to be divisible by this value.'
+                       'This is added for computational efficieny reasons.')
+    
     
     return parser

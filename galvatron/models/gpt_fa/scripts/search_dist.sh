@@ -1,8 +1,8 @@
-export NUM_NODES=2
+export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
 
-MODEL_SIZE="gpt-6.7b"
-MEMORY=34
+MODEL_SIZE="gpt-1.5b"
+MEMORY=8
 
 MODEL_ARGS="
     --model_size ${MODEL_SIZE} \
@@ -10,8 +10,8 @@ MODEL_ARGS="
     --set_layernum_manually 0"
 
 BSZ_ARGS="
-    --min_bsz 16 \
-    --max_bsz 1024 \
+    --min_bsz 128 \
+    --max_bsz 128 \
     --bsz_scale 16 \
     --settle_bsz -1 \
     --recommend_min_bsz 0

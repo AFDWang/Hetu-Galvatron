@@ -44,6 +44,7 @@ PARALLEL_ARGS="
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \
+    --shape_order BSH \
     --use-flash-attn \
     --initialize_on_meta 1 \
     --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"

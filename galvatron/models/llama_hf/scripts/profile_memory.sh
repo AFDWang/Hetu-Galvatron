@@ -13,7 +13,7 @@ export PROFILE_LAUNCHER="$LAUNCHER"
 export PROFILE_TRAINER="train_dist.py"
 
 MODEL_ARGS="
-    --model_size llama-7b \
+    --model_size llama-13b \
     --set_model_config_manually 0 \
     --vocab_size 32000 \
     --hidden_size 4096 \

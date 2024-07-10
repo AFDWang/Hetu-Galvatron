@@ -39,4 +39,4 @@ PROFILE_ARGS_BF16="
 #     --profile_dp_type zero3 \
 #     --mixed_precision fp32"
 
-python3 profile.py ${MODEL_ARGS} ${PROFILE_ARGS_BF16}
+python3 profiler.py ${MODEL_ARGS} ${PROFILE_ARGS_BF16}

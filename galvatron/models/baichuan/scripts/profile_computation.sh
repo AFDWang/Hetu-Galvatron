@@ -26,7 +26,6 @@ PROFILE_ARGS_BF16="
     --layernum_min 6 \
     --layernum_max 12 \
     --mixed_precision bf16 \
-    --use-flash-attn \
-    --shape_order BSH"
+    --use-flash-attn"
 
-python3 profiler.py ${MODEL_ARGS} ${PROFILE_ARGS_BF16}
+python3 profile.py ${MODEL_ARGS} ${PROFILE_ARGS_BF16}

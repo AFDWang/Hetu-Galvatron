@@ -11,21 +11,7 @@ def array2str(a):
     return ",".join(map(str,a))
 
 def read_json_config(path):
-    try:
-        if not os.path.exists(path):
-            print(f"File {path} does not exist. Returning empty JSON.")
-            return {}
-        with open(path, 'r', encoding="utf-8") as file:
-            return json.load(file)
-    except FileNotFoundError:
-        print(f"File {path} not found. Returning empty JSON.")
-        return {}
-    except json.JSONDecodeError:
-        print(f"Error decoding JSON from file {path}. Returning empty JSON.")
-        return {}
-    except Exception as e:
-        print(f"An error occurred while reading the file {path}: {str(e)}. Returning empty JSON.")
-        return {}
+    return json.load(open(path,'r',encoding="utf-8"))
 
 def write_json_config(config, path):
     with open(path,'w') as fp:

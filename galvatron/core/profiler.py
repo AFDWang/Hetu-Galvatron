@@ -605,15 +605,6 @@ class GalvatronProfiler():
                             'profile_dp_type', 
                             'mixed_precision',
                             'use_flash_attn',
-                            'sequence_parallel',
-                            'attention_dropout',
-                            'hidden_dropout',
-                            'kv_channels',
-                            'make_vocab_size_divisible_by',
-                            'padded_vocab_size',
-                            'ffn_hidden_size',
-                            'add_bias_linear',
-                            'swiglu',
                             'extra_args_str']
         exclude_arg_names = profile_arg_names+self.layernum_arg_names
         MODEL_ARGS = self.args2str(self.args._get_kwargs(), exclude_arg_names)
@@ -698,7 +689,6 @@ class GalvatronProfiler():
             'pipeline_type': 'gpipe',
             'default_dp_type': self.args.profile_dp_type if self.args.profile_type == 'memory' else 'ddp',
             'mixed_precision': self.args.mixed_precision,
-            'shape_order': self.args.shape_order
         }
         
         if self.args.use_flash_attn:

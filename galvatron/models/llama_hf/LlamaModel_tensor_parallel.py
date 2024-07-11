@@ -75,6 +75,6 @@ class LlamaLayer_tp(nn.Module):
         return layer_output
     
 def construct_tensor_parallel_model(model, config, tp_groups_enc):
-    layers_tp = nn.ModuleList([LlamaLayer_tp(config, i, tp_group = tp_groups_enc[i+1]) for i in range(config.num_hidden_layers)])
+    layers_tp = nn.ModuleList([LlamaLayer_tp(config, i, tp_group = tp_groups_enc[i]) for i in range(config.num_hidden_layers)])
     setattr(model.model, 'layers', layers_tp)
     return model

@@ -12,7 +12,6 @@ from galvatron.utils import (
     write_json_config
 )
 from galvatron.core import MemoryCostModel, TimeCostModel, DpOnModel
-from galvatron.core.cost_model import pipeline_costmodel
 
 class GalvatronSearchEngine():
     def __init__(self, args):
@@ -70,7 +69,7 @@ class GalvatronSearchEngine():
         return self.time_path
     
     def set_microbatch_func(self, microbatch_size, max_chunk):
-        self.optimal_chunk_func = lambda local_bsz, strategy, microbatch_size: optimal_chunk_func_default(local_bsz, strategy, microbatch_size)
+        self.optimal_chunk_func = lambda local_bsz, strategy: optimal_chunk_func_default(local_bsz, strategy, microbatch_size)
     
     def set_model_layer_configs(self, model_layer_configs):
         if model_layer_configs is None:
@@ -371,17 +370,10 @@ class GalvatronSearchEngine():
         memory = [[] for _ in range(self.num_layertype)]
         memory_total = [[] for _ in range(self.num_layertype)]
         other = []
-        pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
-        mbsz_dict = dict() # calc micro batch size in different pp size when tp=1
-        for pp in pp_deg_list:
-            mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp) + chunk - 1) // chunk
-            if mbsz_dict[pp] == 0:
-                mbsz_dict[pp] += 1
-        print(mbsz_dict)
         for i in range(self.num_layertype):
             memcost_model_args, timecost_model_args, layer_num = self.memcost_model_args_list[i], self.timecost_model_args_list[i], self.layernum_list[i]
             for strategy in self.strategies:
-                re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz=mbsz_dict[strategy[0]], **memcost_model_args).get_memory_cost()
+                re = MemoryCostModel(strategy, global_batch_size=bsz, chunk=chunk, **memcost_model_args).get_memory_cost()
                 re_total = re['enc_total']*layer_num/strategy[0]
                 print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other']])
                 memory[i].append(re['enc_total'])
@@ -399,27 +391,19 @@ class GalvatronSearchEngine():
                 print(form_strategy(strategy), mem_cost_stages[0]+other[i][0], mem_cost_stages[-1]+other[i][-1])
             
         print()
-        if self.num_layertype == 1:
+        timecost = [[] for _ in range(self.num_layertype)]
+        timecost_total = [[] for _ in range(self.num_layertype)]
+        for i in range(self.num_layertype):
             for strategy in self.strategies:
-                tot_res_list = []
-                pp_deg = strategy[0]
-                res_list = [strategy] * (self.layernum_list[0] // pp_deg) * pp_deg
-                pipeline_cost = pipeline_costmodel(TimeCostModel, self.layernum_list, self.timecost_model_args_list, res_list, [self.layernum_list[0]//pp_deg]*pp_deg, [chunk], bsz)
-                print(form_strategy(strategy), pipeline_cost)
-        else:
-            timecost = [[] for _ in range(self.num_layertype)]
-            timecost_total = [[] for _ in range(self.num_layertype)]
-            for i in range(self.num_layertype):
-                for strategy in self.strategies:
-                    re = TimeCostModel(strategy, global_batch_size=bsz, **timecost_model_args).gen_result()
-                    print(form_strategy(strategy), re*layer_num)
-                    timecost[i].append(re)
-                    timecost_total[i].append(re*layer_num)
-                print()
-            if self.num_layertype > 1:
-                for i, strategy in enumerate(self.strategies):
-                    print(form_strategy(strategy), np.sum([timecost_total[j][i] for j in range(self.num_layertype)]))
-            
+                re = TimeCostModel(strategy, global_batch_size=bsz, **timecost_model_args).gen_result()
+                print(form_strategy(strategy), re*layer_num)
+                timecost[i].append(re)
+                timecost_total[i].append(re*layer_num)
+            print()
+        if self.num_layertype > 1:
+            for i, strategy in enumerate(self.strategies):
+                print(form_strategy(strategy), np.sum([timecost_total[j][i] for j in range(self.num_layertype)]))
+        
     # =============== Strategies & Search Space Utils ===============
     def generate_strategies(self):
         args = self.args

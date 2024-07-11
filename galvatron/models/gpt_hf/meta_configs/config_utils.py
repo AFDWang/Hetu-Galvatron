@@ -55,7 +55,6 @@ def overwrite_megatron_args(config, args):
 # Need to overwrite the arguments with the model config
 def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
-    args.ffn_hidden_size = args.hidden_size * 4
     args.seq_length = config.max_position_embeddings
     args.num_hidden_layers = config.num_hidden_layers
     args.vocab_size = config.vocab_size

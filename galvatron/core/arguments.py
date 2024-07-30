@@ -173,6 +173,14 @@ def galvatron_profile_args(parser):
         "--extra_args_str", type=str, default="", help="Extra arguments for megatron initilization."
     )
     
+    group.add_argument(
+        "--sequence_parallel", action="store_true", help="Whether to use sequence parallel",
+    )
+    
+    group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
+                       help='Pad the vocab size to be divisible by this value.'
+                       'This is added for computational efficieny reasons.')
+    
     return parser
 
 def galvatron_profile_hardware_args(parser):
@@ -261,6 +269,9 @@ def galvatron_search_args(parser):
         "--disable_tp", type=int, default=0, help="Whether to disable tp."
     )
     group.add_argument(
+        "--disable_vtp", type=int, default=0, help="Whether to disable vocab tp."
+    )
+    group.add_argument(
         "--disable_pp", type=int, default=0, help="Whether to disable pp."
     )
     group.add_argument(
@@ -296,5 +307,13 @@ def galvatron_search_args(parser):
     group.add_argument(
         "--costmodel_coe", type=float, default=1.0, help="Multiply the outcome of time cost model by this coefficient. Only for fine-tuning time cost model, should be 1.0 in default.",
     )
+    group.add_argument(
+        "--sequence_parallel", action="store_true", help="Whether to use sequence parallel",
+    )
+    
+    group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
+                       help='Pad the vocab size to be divisible by this value.'
+                       'This is added for computational efficieny reasons.')
+    
     
     return parser

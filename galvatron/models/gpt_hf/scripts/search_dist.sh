@@ -25,7 +25,8 @@ SEARCH_SPACE_ARGS="
     --disable_pp 0 \
     --disable_sdp 0 \
     --disable_ckpt 0 \
-    --disable_tp_consec 0 \
+    --disable_vtp 0 \
+    --disable_tp_consec 1 \
     --max_tp_deg 8 \
     --max_pp_deg 8
 "

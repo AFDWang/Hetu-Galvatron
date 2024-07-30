@@ -18,27 +18,36 @@ class MemoryCostModel:
             use_zero2_for_dp=0,
             use_zero3_for_embed=0,
             mixed_precision=False,
-            pipeline_type='gpipe',
+            pipeline_type='gpipe', 
+            disable_vtp=0,
+            max_tp_deg=8,
             stage_idx=0,
             mbsz=-1,
+            min_tp = -1,
+            gpu_num = 8,
             chunks=None):
         assert mbsz > -1
+        assert min_tp > -1
         self.strategy = strategy
         self.pp_size = self.strategy[0]
         self.tp_size = self.strategy[1]
         self.dp_size = self.strategy[2]
         self.parameter_size = parameter_size/self.tp_size
         self.model_states_size = 4 * self.parameter_size
+        self.max_tp_deg = max_tp_deg
+        self.gpu_num = gpu_num
+        self.disable_vtp = disable_vtp
 
         self.bsz = global_batch_size/self.dp_size
         if chunks is None:
-            chunks = optimal_chunk_func(global_batch_size//self.dp_size, strategy, mbsz) # if microbatch else 1
-        max_chunks = global_batch_size // (self.tp_size*self.dp_size)
+            chunks = optimal_chunk_func(global_batch_size//self.dp_size, strategy, mbsz, min_tp) # if microbatch else 1
+        max_chunks = global_batch_size // (self.tp_size*self.dp_size // min_tp)
         max_chunks = 1 if max_chunks == 0 else max_chunks
         chunks = max_chunks if chunks > max_chunks else chunks
         chunks = int(chunks)
+        
         if (pipeline_type == 'pipedream_flush' and self.pp_size > 1) or self.pp_size==1:
-            microbatches = [t.shape[0] for t in torch.arange(int(global_batch_size/self.dp_size/self.tp_size)).chunk(chunks)]
+            microbatches = [t.shape[0] for t in torch.arange(int(global_batch_size/self.dp_size/(self.tp_size//min_tp))).chunk(chunks)]
             chunks = len(microbatches)
             end = self.pp_size-stage_idx if self.pp_size-stage_idx <= chunks else chunks
             act_1f1b_ratio = np.sum(microbatches[:end]) / np.sum(microbatches)
@@ -68,49 +77,64 @@ class MemoryCostModel:
             self.model_states_size *= zero2_ratio(self.dp_size)
         
         self.total = self.model_states_size + self.activation_size
-        self.other_memcosts = [0] * self.pp_size
-        other_layers_bsz = global_batch_size/self.tp_size/self.dp_size
         
-        other_ms_zero2_ratio = zero3_ratio(self.tp_size*self.dp_size) if use_zero3_for_embed else (zero2_ratio(self.tp_size*self.dp_size) if use_zero2_for_dp else 1.0)
+        total_min_tp = []
+        i = min_tp
+        while i * self.pp_size <= self.gpu_num and i <= self.max_tp_deg:
+            total_min_tp.append(i)
+            i *= 2
+        if self.disable_vtp:
+            total_min_tp = [1]
         
-        model_type = 'gpt' if model_type not in ['bert', 't5', 'vit', 'swin', 'gpt'] else model_type
-        
-        if self.pp_size == 1:
-            self.other_memcosts[0] += other_memory_pp_off['model_states'] * other_ms_zero2_ratio + other_memory_pp_off['activation'] * other_layers_bsz * act_1f1b_ratio
-        else:
-            if pipeline_type == 'pipedream_flush':
-                other_layers_bsz_first = other_layers_bsz * act_1f1b_ratio_first
-                other_layers_bsz_last = other_layers_bsz * act_1f1b_ratio_last
+        self.other_memcosts = dict()
+        for tp in total_min_tp:
+            tp_other_memcosts = [0] * self.pp_size
+            other_layers_bsz = global_batch_size * tp /self.tp_size/self.dp_size
+            
+            # print(self.tp_size, self.dp_size, tp)
+            other_ms_zero2_ratio = zero3_ratio(self.tp_size*self.dp_size//tp) if use_zero3_for_embed else (zero2_ratio(self.tp_size*self.dp_size//tp) if use_zero2_for_dp else 1.0)
+            
+            model_type = 'gpt' if model_type not in ['bert', 't5', 'vit', 'swin', 'gpt'] else model_type
+            
+            # print(other_memory_pp_off['model_states'])
+            if self.pp_size == 1:
+                tp_other_memcosts[0] += other_memory_pp_off['model_states'][tp] * other_ms_zero2_ratio + other_memory_pp_off['activation'][tp] * other_layers_bsz * act_1f1b_ratio
             else:
-                other_layers_bsz_first = other_layers_bsz_last = other_layers_bsz
-            # Model type may affect other memory performance (embedding, cls, etc.)
-            if model_type in ['bert', 't5']:
-                self.other_memcosts[0] += other_memory_pp_on['first_stage']['model_states'] * other_ms_zero2_ratio + other_memory_pp_on['first_stage']['activation'] * (other_layers_bsz_first/self.pp_size)
-            elif model_type in ['vit', 'swin', 'gpt']:
-                self.other_memcosts[0] += other_memory_pp_on['first_stage']['model_states'] * other_ms_zero2_ratio + other_memory_pp_on['first_stage']['activation'] * other_layers_bsz_first
-                # When chunks get larger, peak memory may reduce. Adjust peak memory if needed.
-                if peak_reduction_with_chunks is not None: 
-                    if isinstance(peak_reduction_with_chunks, dict):
-                        self.other_memcosts[0] -= peak_reduction_with_chunks['first'] * other_layers_bsz_first * (1 - 1 / chunks)
-                    else:
-                        self.other_memcosts[0] -= peak_reduction_with_chunks * other_layers_bsz_first * (1 - 1 / chunks)
-            if model_type in ['swin']:
-                self.other_memcosts[-1] += other_memory_pp_on['last_stage']['model_states'] * other_ms_zero2_ratio + other_memory_pp_on['last_stage']['activation'] * (other_layers_bsz_last/self.pp_size)
-            elif model_type in ['bert', 't5', 'vit', 'gpt']:
-                self.other_memcosts[-1] += other_memory_pp_on['last_stage']['model_states'] * other_ms_zero2_ratio + other_memory_pp_on['last_stage']['activation'] * other_layers_bsz_last
-                # When chunks get larger, peak memory may reduce. Adjust peak memory if needed.
-                if peak_reduction_with_chunks is not None: 
-                    if isinstance(peak_reduction_with_chunks, dict):
-                        self.other_memcosts[-1] -= peak_reduction_with_chunks['last'] * other_layers_bsz_last * (1 - 1 / chunks)
-                    else:
-                        self.other_memcosts[-1] -= peak_reduction_with_chunks * other_layers_bsz_last * (1 - 1 / chunks)
+                if pipeline_type == 'pipedream_flush':
+                    other_layers_bsz_first = other_layers_bsz * act_1f1b_ratio_first
+                    other_layers_bsz_last = other_layers_bsz * act_1f1b_ratio_last
+                else:
+                    other_layers_bsz_first = other_layers_bsz_last = other_layers_bsz
+                # Model type may affect other memory performance (embedding, cls, etc.)
+                if model_type in ['bert', 't5']:
+                    tp_other_memcosts[0] += other_memory_pp_on['first_stage']['model_states'][tp] * other_ms_zero2_ratio + other_memory_pp_on['first_stage']['activation'][tp] * (other_layers_bsz_first/self.pp_size)
+                elif model_type in ['vit', 'swin', 'gpt']:
+                    tp_other_memcosts[0] += other_memory_pp_on['first_stage']['model_states'][tp] * other_ms_zero2_ratio + other_memory_pp_on['first_stage']['activation'][tp] * other_layers_bsz_first
+                    # When chunks get larger, peak memory may reduce. Adjust peak memory if needed.
+                    if peak_reduction_with_chunks is not None: 
+                        if isinstance(peak_reduction_with_chunks, dict):
+                            tp_other_memcosts[0] -= peak_reduction_with_chunks['first'] * other_layers_bsz_first * (1 - 1 / chunks)
+                        else:
+                            tp_other_memcosts[0] -= peak_reduction_with_chunks * other_layers_bsz_first * (1 - 1 / chunks)
+                if model_type in ['swin']:
+                    tp_other_memcosts[-1] += other_memory_pp_on['last_stage']['model_states'][tp] * other_ms_zero2_ratio + other_memory_pp_on['last_stage']['activation'][tp] * (other_layers_bsz_last/self.pp_size)
+                elif model_type in ['bert', 't5', 'vit', 'gpt']:
+                    tp_other_memcosts[-1] += other_memory_pp_on['last_stage']['model_states'][tp] * other_ms_zero2_ratio + other_memory_pp_on['last_stage']['activation'][tp] * other_layers_bsz_last
+                    # When chunks get larger, peak memory may reduce. Adjust peak memory if needed.
+                    if peak_reduction_with_chunks is not None: 
+                        if isinstance(peak_reduction_with_chunks, dict):
+                            tp_other_memcosts[-1] -= peak_reduction_with_chunks['last'] * other_layers_bsz_last * (1 - 1 / chunks)
+                        else:
+                            tp_other_memcosts[-1] -= peak_reduction_with_chunks * other_layers_bsz_last * (1 - 1 / chunks)
 
-        if checkpoint:
-            for i in range(len(self.other_memcosts)):
-                self.other_memcosts[i] += tp_activation_per_bsz_dict[1] * self.bsz // self.tp_size
+            if checkpoint:
+                for i in range(len(tp_other_memcosts)):
+                    tp_other_memcosts[i] += tp_activation_per_bsz_dict[1] * self.bsz // self.tp_size
 
-        for i in range(len(self.other_memcosts)):
-            self.other_memcosts[i] += pytorch_context_mem
+            for i in range(len(tp_other_memcosts)):
+                tp_other_memcosts[i] += pytorch_context_mem
+                
+            self.other_memcosts[tp] = tp_other_memcosts
 
     def get_memory_cost(self):
         result = dict()
@@ -131,6 +155,7 @@ class TimeCostModel:
             optimal_chunk_func = None,
             sequence_length=512,
             hidden_size=1024,
+            vocab_size=32000,
             forward_computation_time=35 / 24,
             bct_fct_coe=2,
             extra_overhead=0,
@@ -369,22 +394,23 @@ def get_time_cost_all_stages(layer_timecosts, pp_stage_division):
         stage_timecosts.append(np.sum(layer_timecosts[layer_start_id:layer_end_id]))
     return stage_timecosts
 
-def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, strategies, partition, chunks, bsz, return_stage_cost=False):
+def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, strategies, partition, chunks, bsz, min_tp, return_stage_cost=False):
     if strategies is None:
         if return_stage_cost:
             return [np.inf] * len(partition), np.inf
         else:
             return np.inf
     layer_type_ids = []
+    # print(layer_num_list)
     for layer_type_id in range(len(layer_num_list)):
         layer_type_ids += [layer_type_id] * layer_num_list[layer_type_id]
     if isinstance(chunks, list):
-        chunks = [get_real_chunk(int(bsz/strategies[0][1]/strategies[0][2]), chunks_) for chunks_ in chunks]
+        chunks = [get_real_chunk(int(bsz/(strategies[0][1] * strategies[0][2] // min_tp)), chunks_) for chunks_ in chunks]
         bsz_chunked = [bsz / chunks_ for chunks_ in chunks]
         max_chunk = np.max(chunks)
         # print('Detected multi chunks!', chunks, 'Using %d as chunks!'%max_chunk)
     else:
-        chunks = get_real_chunk(int(bsz/strategies[0][1]/strategies[0][2]), chunks)
+        chunks = get_real_chunk(int(bsz/(strategies[0][1] * strategies[0][2] // min_tp)), chunks)
         bsz_chunked = [bsz / chunks] * len(layer_num_list)
         # print(bsz, bsz/chunks, chunks)
         max_chunk = chunks

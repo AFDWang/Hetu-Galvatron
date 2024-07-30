@@ -81,6 +81,8 @@ def train(args):
             profiler.post_profile_memory(iter)
             profiler.profile_time_end(iter)
 
+            torch.distributed.barrier()
+
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='train_dist')
     set_seed()

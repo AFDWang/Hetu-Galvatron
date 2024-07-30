@@ -4,6 +4,7 @@ import torch
 import numpy as np
 from galvatron.utils import save_profiled_memory, print_peak_memory, save_profiled_time, array2str, str2array, read_json_config, write_json_config
 import re
+from collections import defaultdict
 
 class GalvatronProfiler():
     def __init__(self, args):
@@ -125,7 +126,7 @@ class GalvatronProfiler():
                     world_size = torch.distributed.get_world_size()
                     memory_config_path = self.memory_profiling_path()
                     save_profiled_memory(memory_config_path, args.pp_deg, args.global_tp_deg, world_size, self.layernum_list, \
-                                        args.global_train_batch_size, rank, mem_dict['model_states'], mem_dict['activation'], mem_dict['peak_activation'], args.global_checkpoint)
+                                        args.global_train_batch_size, rank, mem_dict['model_states'], mem_dict['activation'], mem_dict['peak_activation'], args.global_checkpoint, args.sequence_parallel, args.vocab_tp)
             if 'save_profiled_memory' in args and args.save_profiled_memory:
                 exit(0)
     
@@ -152,7 +153,7 @@ class GalvatronProfiler():
             if 'profile_forward' in args and args.profile_forward:
                 assert self.layernum_list is not None
                 time_config_path = self.time_profiling_path()
-                save_profiled_time(time_config_path, avg_time*1e3, args.global_train_batch_size, self.layernum_list)
+                save_profiled_time(time_config_path, avg_time*1e3, args.global_train_batch_size, self.layernum_list, args.sequence_parallel)
             if self.exit:
                 exit(0)
             else:
@@ -193,6 +194,7 @@ class GalvatronProfiler():
     # =============== For Launching Profiling Scripts ===============
     def launch_profiling_scripts(self):
         args = self.args
+        os.environ['CUDA_DEVICE_MAX_CONNECTIONS'] = "1"
         MODEL_ARGS, PROFILE_ARGS, LAUNCH_SCRIPTS, world_size, layernum_lists = self.prepare_launch_args()
         if args.profile_type == 'memory':
             max_tp_deg = min(world_size, self.args.max_tp_deg)
@@ -201,15 +203,19 @@ class GalvatronProfiler():
                 tp_deg = 1
                 while tp_deg <= max_tp_deg:
                     if pp_deg * tp_deg <= world_size:
-                        for layernum_list in layernum_lists:
-                            args_ = self.get_layernum_args(layernum_list)
-                            args_['pp_deg'] = pp_deg
-                            args_['global_tp_deg'] = tp_deg
-                            args_['global_checkpoint'] = checkpoint
-                            ARGS_ = self.args2str(args_)
-                            CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
-                            print(CMD)
-                            os.system(CMD)
+                        for enable_vocab_tp in [0,1]:
+                            if tp_deg == 1 and enable_vocab_tp == 1:
+                                continue
+                            for layernum_list in layernum_lists:
+                                args_ = self.get_layernum_args(layernum_list)
+                                args_['pp_deg'] = pp_deg
+                                args_['global_tp_deg'] = tp_deg
+                                args_['global_checkpoint'] = checkpoint
+                                args_['vocab_tp'] = tp_deg if enable_vocab_tp == 1 else 1
+                                ARGS_ = self.args2str(args_)
+                                CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
+                                print(CMD)
+                                os.system(CMD)
                     if checkpoint:
                         break
                     tp_deg *= 2
@@ -219,14 +225,18 @@ class GalvatronProfiler():
                 tp_deg = 1
                 while tp_deg <= max_tp_deg:
                     if pp_deg * tp_deg <= world_size:
-                        args_ = self.get_layernum_args([layernum] * self.num_layertype)
-                        args_['pp_deg'] = pp_deg
-                        args_['global_tp_deg'] = tp_deg
-                        args_['global_checkpoint'] = 0
-                        ARGS_ = self.args2str(args_)
-                        CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
-                        print(CMD)
-                        os.system(CMD)
+                        for enable_vocab_tp in [0,1]:
+                            if tp_deg == 1 and enable_vocab_tp == 1:
+                                continue
+                            args_ = self.get_layernum_args([layernum] * self.num_layertype)
+                            args_['pp_deg'] = pp_deg
+                            args_['global_tp_deg'] = tp_deg
+                            args_['global_checkpoint'] = 0
+                            args_['vocab_tp'] = tp_deg if enable_vocab_tp == 1 else 1
+                            ARGS_ = self.args2str(args_)
+                            CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
+                            print(CMD)
+                            os.system(CMD)
                     tp_deg *= 2
         elif args.profile_type == 'computation':
             for layernum_list in layernum_lists:
@@ -273,6 +283,8 @@ class GalvatronProfiler():
                     break
                 print(pp_deg, tp_deg)
                 strategy = '%d_%d_%d'%(pp_deg,tp_deg,world_size//pp_deg//tp_deg)
+                if args.sequence_parallel:
+                    strategy += '_sp'
                 if strategy not in config:
                     tp_deg *= 2
                     continue
@@ -306,6 +318,8 @@ class GalvatronProfiler():
                     break
                 print(pp_deg, tp_deg)
                 strategy = '%d_%d_%d_c'%(pp_deg,tp_deg,world_size//pp_deg//tp_deg)
+                if args.sequence_parallel:
+                    strategy += '_sp'
                 if strategy not in config:
                     tp_deg *= 2
                     continue
@@ -330,7 +344,7 @@ class GalvatronProfiler():
 
             inf=1e6
             other_memory_pp_off, other_memory_pp_on_first, other_memory_pp_on_last = \
-                {'model_states': inf, 'activation': inf}, {'model_states': inf, 'activation': inf}, {'model_states': inf, 'activation': inf}
+                {'model_states': defaultdict(lambda: inf), 'activation': defaultdict(lambda: inf)}, {'model_states': defaultdict(lambda: inf), 'activation': defaultdict(lambda: inf)}, {'model_states': defaultdict(lambda: inf), 'activation': defaultdict(lambda: inf)}
             pp_deg = 1
             while True:
                 if pp_deg > world_size:
@@ -340,48 +354,62 @@ class GalvatronProfiler():
                     if pp_deg * tp_deg > world_size:
                         break
                     print(pp_deg, tp_deg)
-                    strategy = '%d_%d_%d'%(pp_deg,tp_deg,world_size//pp_deg//tp_deg)
-                    if strategy not in config:
-                        tp_deg *= 2
-                        continue
-                    re = config[strategy]
-                    if pp_deg == 1:
-                        layernum_list = layernum_list_base
-                        layernum = layernum_list_base[0]
-                    else:
-                        layernum = pp_deg
-                        layernum_list = [layernum] * layertype
-                    ms_cost, act_cost = [], []
-                    for l in range(layertype):
-                        ms_cost.append(param_result_list[l][tp_deg]*4)
-                        act_cost.append(act_result_list[l][tp_deg])
-                    layer_ms_costs_first = self.total_memcost(pp_deg, layernum, layertype, ms_cost, 0)
-                    layer_ms_costs_last = self.total_memcost(pp_deg, layernum, layertype, ms_cost, pp_deg-1)
-                    layer_act_costs_first = self.total_memcost(pp_deg, layernum, layertype, act_cost, 0)
-                    layer_act_costs_last = self.total_memcost(pp_deg, layernum, layertype, act_cost, pp_deg-1)
-                    other_ms_first = re[self.key_format(layernum_list, bsz, 0, 'ms')] - layer_ms_costs_first
-                    if args.profile_dp_type == 'zero3':
-                        other_ms_first = (re[self.key_format(layernum_list, bsz, 0, 'ms')] - layer_ms_costs_first / (world_size//pp_deg//tp_deg)) * world_size//pp_deg
-                    other_ms_last = re[self.key_format(layernum_list, bsz, world_size-1, 'ms')] - layer_ms_costs_last
-                    if args.profile_dp_type == 'zero3':
-                        other_ms_last = (re[self.key_format(layernum_list, bsz, world_size-1, 'ms')] - layer_ms_costs_last / (world_size//pp_deg//tp_deg)) * world_size//pp_deg
-                    act_peak_first = max(re[self.key_format(layernum_list, bsz, 0, 'act_peak')], re[self.key_format(layernum_list, bsz, 0, 'act')])
-                    act_peak_last = max(re[self.key_format(layernum_list, bsz, world_size-1, 'act_peak')], re[self.key_format(layernum_list, bsz, world_size-1, 'act')])
-                    other_act_first = act_peak_first * world_size / bsz  - layer_act_costs_first * (pp_deg*tp_deg) 
-                    other_act_last = act_peak_last * world_size / bsz - layer_act_costs_last * (pp_deg*tp_deg) 
-                    print(other_ms_first, other_act_first, other_ms_last, other_act_last)
-                    other_ms_first = other_ms_first if other_ms_first > 0 else 0
-                    other_ms_last = other_ms_last if other_ms_last > 0 else 0
-                    other_act_first = other_act_first if other_act_first > 0 else 0
-                    other_act_last = other_act_last if other_act_last > 0 else 0
-                    if pp_deg == 1:
-                        other_memory_pp_off['model_states'] = min(other_memory_pp_off['model_states'], other_ms_first)
-                        other_memory_pp_off['activation'] = min(other_memory_pp_off['activation'], other_act_first)
-                    else:
-                        other_memory_pp_on_first['model_states'] = min(other_memory_pp_on_first['model_states'], other_ms_first)
-                        other_memory_pp_on_first['activation'] = min(other_memory_pp_on_first['activation'], other_act_first / pp_deg)
-                        other_memory_pp_on_last['model_states'] = min(other_memory_pp_on_last['model_states'], other_ms_last)
-                        other_memory_pp_on_last['activation'] = min(other_memory_pp_on_last['activation'], other_act_last / pp_deg)
+                    for enable_vocab_tp in [0,1]:
+                        if tp_deg == 1 and enable_vocab_tp == 1:
+                            continue
+                        strategy = '%d_%d_%d'%(pp_deg,tp_deg,world_size//pp_deg//tp_deg)
+                        if enable_vocab_tp and tp_deg != 1:
+                            strategy += '_vtp'
+                        if args.sequence_parallel:
+                            strategy += '_sp'
+                        
+                        if strategy not in config:
+                            tp_deg *= 2
+                            continue
+                        re = config[strategy]
+                        if pp_deg == 1:
+                            layernum_list = layernum_list_base
+                            layernum = layernum_list_base[0]
+                        else:
+                            layernum = pp_deg
+                            layernum_list = [layernum] * layertype
+                        ms_cost, act_cost = [], []
+                        for l in range(layertype):
+                            ms_cost.append(param_result_list[l][tp_deg]*4)
+                            act_cost.append(act_result_list[l][tp_deg])
+                        layer_ms_costs_first = self.total_memcost(pp_deg, layernum, layertype, ms_cost, 0)
+                        layer_ms_costs_last = self.total_memcost(pp_deg, layernum, layertype, ms_cost, pp_deg-1)
+                        layer_act_costs_first = self.total_memcost(pp_deg, layernum, layertype, act_cost, 0)
+                        layer_act_costs_last = self.total_memcost(pp_deg, layernum, layertype, act_cost, pp_deg-1)
+                        other_ms_first = re[self.key_format(layernum_list, bsz, 0, 'ms')] - layer_ms_costs_first
+                        if args.profile_dp_type == 'zero3':
+                            other_ms_first = (re[self.key_format(layernum_list, bsz, 0, 'ms')] - layer_ms_costs_first / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
+                        other_ms_last = re[self.key_format(layernum_list, bsz, world_size-1, 'ms')] - layer_ms_costs_last
+                        if args.profile_dp_type == 'zero3':
+                            other_ms_last = (re[self.key_format(layernum_list, bsz, world_size-1, 'ms')] - layer_ms_costs_last / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
+                        act_peak_first = max(re[self.key_format(layernum_list, bsz, 0, 'act_peak')], re[self.key_format(layernum_list, bsz, 0, 'act')])
+                        act_peak_last = max(re[self.key_format(layernum_list, bsz, world_size-1, 'act_peak')], re[self.key_format(layernum_list, bsz, world_size-1, 'act')])
+                        act_first = re[self.key_format(layernum_list, bsz, 0, 'act')]
+                        act_last = re[self.key_format(layernum_list, bsz, world_size-1, 'act')]
+                        other_act_first = (act_peak_first * world_size / bsz  - layer_act_costs_first * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
+                        other_act_last = (act_peak_last * world_size / bsz - layer_act_costs_last * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
+                        # other_act_first = act_peak_first - act_first
+                        # other_act_last = act_peak_last - act_last
+                        # embed_act_first = (act_first * world_size / bsz  - layer_act_costs_first * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
+                        # embed_act_last = (act_last * world_size / bsz  - layer_act_costs_last * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
+                        print(other_ms_first, other_act_first, other_ms_last, other_act_last)
+                        other_ms_first = other_ms_first if other_ms_first > 0 else 0
+                        other_ms_last = other_ms_last if other_ms_last > 0 else 0
+                        other_act_first = other_act_first if other_act_first > 0 else 0
+                        other_act_last = other_act_last if other_act_last > 0 else 0
+                        if pp_deg == 1:
+                            other_memory_pp_off['model_states'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_off['model_states'][tp_deg if enable_vocab_tp == 1 else 1], other_ms_first)
+                            other_memory_pp_off['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_off['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_first)
+                        else:
+                            other_memory_pp_on_first['model_states'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_first['model_states'][tp_deg if enable_vocab_tp == 1 else 1], other_ms_first)
+                            other_memory_pp_on_first['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_first['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_first / pp_deg)
+                            other_memory_pp_on_last['model_states'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_last['model_states'][tp_deg if enable_vocab_tp == 1 else 1], other_ms_last)
+                            other_memory_pp_on_last['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_last['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_last / pp_deg)
                     tp_deg *= 2
                 pp_deg *=2
 
@@ -390,14 +418,25 @@ class GalvatronProfiler():
             print('other_memory_pp_on_first:', other_memory_pp_on_first)
             print('other_memory_pp_on_last:', other_memory_pp_on_last)
 
-            for l in range(layertype):
-                if 'layertype_%d'%l not in config.keys():
-                    config['layertype_%d'%l] = dict()
-                config['layertype_%d'%l]['parameter_size'] = param_list[l]
-                config['layertype_%d'%l]['tp_activation_per_bsz_dict'] = act_result_list[l]
-            config['other_memory_pp_off'] = other_memory_pp_off
-            config['other_memory_pp_on_first'] = other_memory_pp_on_first
-            config['other_memory_pp_on_last'] = other_memory_pp_on_last
+            if args.sequence_parallel:
+                for l in range(layertype):
+                    if 'layertype_%d_sp'%l not in config.keys():
+                        config['layertype_%d_sp'%l] = dict()
+                    config['layertype_%d_sp'%l]['parameter_size'] = param_list[l]
+                    config['layertype_%d_sp'%l]['tp_activation_per_bsz_dict'] = act_result_list[l]
+                config['other_memory_pp_off_sp'] = other_memory_pp_off
+                config['other_memory_pp_on_first_sp'] = other_memory_pp_on_first
+                config['other_memory_pp_on_last_sp'] = other_memory_pp_on_last
+            else:
+                for l in range(layertype):
+                    if 'layertype_%d'%l not in config.keys():
+                        config['layertype_%d'%l] = dict()
+                    config['layertype_%d'%l]['parameter_size'] = param_list[l]
+                    config['layertype_%d'%l]['tp_activation_per_bsz_dict'] = act_result_list[l]
+                config['other_memory_pp_off'] = other_memory_pp_off
+                config['other_memory_pp_on_first'] = other_memory_pp_on_first
+                config['other_memory_pp_on_last'] = other_memory_pp_on_last
+                
             write_json_config(config, memory_config_path)
 
 
@@ -700,6 +739,8 @@ class GalvatronProfiler():
         
         if self.args.use_flash_attn:
             args['use-flash-attn'] = ''
+        if self.args.sequence_parallel:
+            args['sequence-parallel'] = ''
         return args
     
     def get_layernum_args(self, layernum_list):

@@ -1,8 +1,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
+#include <pybind11/stl.h>
 #include <iostream>
 #include <vector>
 #include <limits>
+#include <tuple>
 #include<algorithm>
 
 namespace py = pybind11;
@@ -19,16 +21,21 @@ inline size_t argmax(const ForwardIterator begin, const ForwardIterator end)
     return std::distance(begin, std::max_element(begin, end));
 }
 
-std::pair<double, int> dynamic_programming_core(int layer_num,
-                                                int max_mem,
-                                                int strategy_num,
-                                                py::array_t<int> v_data,
-                                                py::array_t<int> _mark,
-                                                py::array_t<double> _f,
-                                                py::array_t<double> inter_cost,
-                                                py::array_t<double> intra_cost,
-                                                py::array_t<int> res_list) {
-
+std::pair<std::map<int, double>, std::map<int, int> > dynamic_programming_core(  int layer_num,
+                                int max_mem,
+                                int strategy_num,
+                                py::array_t<int> v_data,
+                                py::array_t<int> _mark,
+                                py::array_t<double> _f,
+                                py::array_t<double> inter_cost,
+                                py::array_t<double> intra_cost,
+                                std::map<int, int> other_mem_cost,
+                                std::map<int, double> other_time_cost,
+                                std::map<int, py::array_t<int> > res_list
+                                )
+{
+    std::map<int, double> total_cost;
+    std::map<int, int> remaining_mem;
     py::buffer_info v_data_info = v_data.request();
     int* v_data_ptr = static_cast<int*>(v_data_info.ptr);
 
@@ -44,8 +51,8 @@ std::pair<double, int> dynamic_programming_core(int layer_num,
     py::buffer_info intra_cost_info = intra_cost.request();
     double* intra_cost_ptr = static_cast<double*>(intra_cost_info.ptr);
 
-    py::buffer_info res_list_info = res_list.request();
-    int* res_list_ptr = static_cast<int*>(res_list_info.ptr);
+    // py::buffer_info res_list_info = res_list.request();
+    // int* res_list_ptr = static_cast<int*>(res_list_info.ptr);
 
     for (int i = 0; i < layer_num; ++i) {
         for (int v = max_mem - 1; v >= 0; --v) {
@@ -68,25 +75,42 @@ std::pair<double, int> dynamic_programming_core(int layer_num,
         }
     }
 
-    double* ptr = _f_ptr + (max_mem - 1) * strategy_num;
-    int next_index = argmin(ptr , ptr + strategy_num), next_v = max_mem - 1;
-    double total_cost = ptr[next_index];
+    for (auto item : other_mem_cost)
+    {
+        int vtp = item.first;
 
-    if (!(total_cost < std::numeric_limits<double>::infinity())) {
-        return {std::numeric_limits<double>::infinity(), -1};
+        double* ptr = _f_ptr + (max_mem - 1 - other_mem_cost[vtp]) * strategy_num;
+        int next_index = argmin(ptr , ptr + strategy_num), next_v = max_mem - 1 - other_mem_cost[vtp];
+
+        total_cost[vtp] = ptr[next_index];
+
+        if (!(total_cost[vtp] < std::numeric_limits<double>::infinity())) {
+            total_cost[vtp] = std::numeric_limits<double>::infinity();
+            remaining_mem[vtp] = -1;
+            continue;
+        }
+
+        total_cost[vtp] += other_time_cost[vtp];
+
+        
+
+        py::buffer_info res_list_info = res_list[vtp].request();
+        int* res_list_ptr = static_cast<int*>(res_list_info.ptr);
+        res_list_ptr[layer_num - 1] = next_index;
+        int cur_index;
+
+        for (int i = layer_num - 1; i > 0; --i) {
+            cur_index = next_index;
+            next_index = _mark_ptr[i * max_mem * strategy_num + next_v * strategy_num + next_index];
+            next_v -= v_data_ptr[i * strategy_num + cur_index];
+            res_list_ptr[i - 1] = next_index;
+        }
+
+        remaining_mem[vtp] = next_v - v_data_ptr[0 * strategy_num + next_index];
+        
     }
 
-    res_list_ptr[layer_num - 1] = next_index;
-    int cur_index;
-
-    for (int i = layer_num - 1; i > 0; --i) {
-        cur_index = next_index;
-        next_index = _mark_ptr[i * max_mem * strategy_num + next_v * strategy_num + next_index];
-        next_v -= v_data_ptr[i * strategy_num + cur_index];
-        res_list_ptr[i - 1] = next_index;
-    }
-
-    return {total_cost, next_v - v_data_ptr[0 * strategy_num + next_index]};
+    return {total_cost, remaining_mem};
 }
 
 PYBIND11_MODULE(galvatron_dp_core, m) {

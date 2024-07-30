@@ -28,7 +28,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         pp_divide = None
     else:
         galvatron_config = read_json_config(args.galvatron_config_path)
-        pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc = config2strategy(galvatron_config)
+        pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, vtp = config2strategy(galvatron_config)
         bsz, chunks = galvatron_config['global_bsz'], galvatron_config['chunks']
         checkpoint_flags_enc = str2array(galvatron_config['checkpoint']) if 'checkpoint' in galvatron_config.keys() else [0] * len(tp_sizes_enc)
         pp_divide = str2array(galvatron_config['pp_division']) if 'pp_division' in galvatron_config.keys() else None
@@ -47,14 +47,16 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         args.global_train_batch_size = bsz
         args.chunks = chunks
         args.pp_deg = pp_deg
-
+        args.vocab_tp = vtp
+        
     if pp_divide is None:
         avg_layer_num = int(total_layer_num // pp_deg)
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg-1)
         pp_divide = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
     pp_ranks_enc = get_pp_ranks_enc(pp_divide)
 
-    assert args.global_train_batch_size % (world_size//pp_deg) == 0, 'global_train_batch_size should be multiple of world_size//pp_deg!'
+    min_tp = min(min(tp_sizes_enc), args.vocab_tp)
+    assert args.global_train_batch_size % (world_size // pp_deg // min_tp) == 0, 'global_train_batch_size should be multiple of world_size//pp_deg!'
     hybrid_parallel_configs = {
         'pp_deg':pp_deg,
         'tp_sizes_enc':tp_sizes_enc,

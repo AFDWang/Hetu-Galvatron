@@ -87,13 +87,14 @@ class GPTPreNorm_(nn.Module):
         return hidden_states, input_ids
 
 class GPTCls_(nn.Module):
-    def __init__(self, model, parallel_loss = True):
+    def __init__(self, model, parallel_loss = True, half_entorpy = True):
         super().__init__()
         self.lm_head = model.lm_head
         self.clone_scatter_output_in_embedding = get_args().clone_scatter_output_in_embedding
         self.sequence_parallel = get_args().sequence_parallel
         self.tp_group = self.lm_head.tp_group
         self.parallel_loss = parallel_loss
+        self.half_entorpy = half_entorpy
 
     def forward(self, hidden_states, input_ids):
 
@@ -115,7 +116,10 @@ class GPTCls_(nn.Module):
         # loss = tensor_parallel.vocab_parallel_cross_entropy(output.float(), input_ids)
         if not self.parallel_loss:
             output = tensor_parallel.gather_from_tensor_model_parallel_region_group(logits_parallel, self.tp_group)
-            logits = output.float()
+            if not self.half_entorpy:
+                logits = output.float()
+            else:
+                logits = output
             loss = None
             # Shift so that tokens < n predict n
             shift_logits = logits.contiguous() # logits[:-1, ..., :].contiguous()
@@ -129,7 +133,10 @@ class GPTCls_(nn.Module):
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
         else:
-            loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), input_ids, tp_group = self.tp_group)
+            if not self.half_entorpy:
+                loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), input_ids, tp_group = self.tp_group)
+            else:
+                loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, input_ids, tp_group = self.tp_group)
             loss = loss.mean()
         return loss
 

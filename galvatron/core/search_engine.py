@@ -88,24 +88,42 @@ class GalvatronSearchEngine():
         self.set_cost_models()
         self.show_search_info()
         
+    def convert_keys_to_int(self, d):
+        if isinstance(d, dict):
+            new_dict = {}
+            for k, v in d.items():
+                if isinstance(k, str) and k.isdigit():
+                    new_dict[int(k)] = self.convert_keys_to_int(v)
+                else:
+                    new_dict[k] = self.convert_keys_to_int(v)
+            return new_dict
+        return d
     def get_profiled_model_configs(self):
         self.time_config = read_json_config(self.time_profiling_path())
         self.memory_config = read_json_config(self.memory_profiling_path())
+        self.memory_config = self.convert_keys_to_int(self.memory_config)
         self.time_profiled_list = [self.time_config['layertype_%d'%i] for i in range(self.num_layertype)]
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
-        for i in range(self.num_layertype):
-            layer_mem_config = self.memory_config['layertype_%d'%i]
-            parameter_size = layer_mem_config['parameter_size']
-            tp_activation_per_bsz_dict = layer_mem_config['tp_activation_per_bsz_dict'].copy()
-            for key, val in layer_mem_config['tp_activation_per_bsz_dict'].items():
-                if len(key) < 5:
-                    tp_activation_per_bsz_dict[int(key)] = val
-                    del tp_activation_per_bsz_dict[key]
-            self.param_sizes[i] = parameter_size
-            self.act_sizes[i] = tp_activation_per_bsz_dict
-        self.other_memory_pp_off = self.memory_config['other_memory_pp_off']
-        self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'], 'last_stage':self.memory_config['other_memory_pp_on_last']}
+        if self.args.sequence_parallel:
+            for i in range(self.num_layertype):
+                layer_mem_config = self.memory_config['layertype_%d_sp'%i]
+                parameter_size = layer_mem_config['parameter_size']
+                tp_activation_per_bsz_dict = layer_mem_config['tp_activation_per_bsz_dict'].copy()
+                self.param_sizes[i] = parameter_size
+                self.act_sizes[i] = tp_activation_per_bsz_dict
+            self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp']
+            self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'], 'last_stage':self.memory_config['other_memory_pp_on_last_sp']}
+        else:
+            for i in range(self.num_layertype):
+                layer_mem_config = self.memory_config['layertype_%d'%i]
+                parameter_size = layer_mem_config['parameter_size']
+                tp_activation_per_bsz_dict = layer_mem_config['tp_activation_per_bsz_dict'].copy()
+                self.param_sizes[i] = parameter_size
+                self.act_sizes[i] = tp_activation_per_bsz_dict
+            self.other_memory_pp_off = self.memory_config['other_memory_pp_off']
+            self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'], 'last_stage':self.memory_config['other_memory_pp_on_last']}
+        
         return self.time_config, self.memory_config
         
     def get_profiled_hardware_configs(self):
@@ -132,6 +150,7 @@ class GalvatronSearchEngine():
                     'optimal_chunk_func': self.optimal_chunk_func,
                     'sequence_length': self.seqlen_list[i],
                     'hidden_size': self.hiddensize_list[i],
+                    'vocab_size': self.args.padded_vocab_size,
                     'forward_computation_time': self.time_profiled_list[i],
                     'bct_fct_coe': 2,
                     'extra_overhead': 0,
@@ -160,7 +179,10 @@ class GalvatronSearchEngine():
                     'use_zero2_for_dp':1 if self.args.default_dp_type == 'zero2' else 0,
                     'use_zero3_for_embed':self.args.embed_sdp,
                     'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
-                    'pipeline_type': self.args.pipeline_type
+                    'pipeline_type': self.args.pipeline_type,
+                    'disable_vtp': self.args.disable_vtp,
+                    'max_tp_deg': self.args.max_tp_deg,
+                    'gpu_num': self.args.gpu_num,
                     })
     
     # =============== For Galvatron Search Engine Parallelism Optimization ===============
@@ -174,44 +196,64 @@ class GalvatronSearchEngine():
         pp_stage_dict_for_bsz = get_pp_stages_for_all_bsz(self.strategies, self.memcost_model_args_list, self.layernum_list, self.BSZs)
         temp_strategies = copy.deepcopy(self.strategies)
         max_throughput, optimal_bsz, max_bsz = -1, -1, -1
+        
+        total_min_tp = []
+        i = 1
+        while i<=self.args.gpu_num and i <= self.args.max_tp_deg:
+            total_min_tp.append(i)
+            i *= 2
+        if self.args.disable_vtp:
+            total_min_tp = [1]
+            
         for bsz in self.BSZs:
             pp_stage_dict = pp_stage_dict_for_bsz[bsz]
             results[bsz] = dict()
             chunk_list = range(1,bsz)
-            assert(bsz % self.args.gpu_num == 0), "bdz should be divisible by world size"
+            # assert(bsz % self.args.gpu_num == 0), "bdz should be divisible by world size"
             if self.args.settle_chunk != -1:
                 chunk_list = [self.args.settle_chunk]
             for chunk in chunk_list:
-                
-                self.strategies = [s for s in temp_strategies if chunk <= bsz // (self.args.gpu_num // s[0]) ]
-                if len(self.strategies) == 0:
-                    continue
-                
-                pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
-                
-                mbsz_dict = dict() # calc micro batch size in different pp size when tp=1
-                for pp in pp_deg_list:
-                    mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp) + chunk - 1) // chunk
-                
-                # strict mode: search chunk must be equal to real chunk 
-                self.strategies = [s for s in self.strategies if chunk == (bsz // (self.args.gpu_num // s[0]) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]] ]
-                
-                if len(self.strategies) == 0:
-                    continue
-                
-                results[bsz][chunk] = self.dynamic_programming(bsz, chunk, mbsz_dict, pp_stage_dict)
-                min_res_list, min_pp_deg, throughput = results[bsz][chunk]['min_res_list'], results[bsz][chunk]['min_pp_deg'], results[bsz][chunk]['throughput']
-                if throughput > max_throughput:
-                    max_throughput = throughput
-                    optimal_bsz = bsz
-                    optimal_chunk = chunk
-                # if min_pp_deg == -1 and min_res_list is None:
-                #     break
-                max_bsz = bsz
+                results[bsz][chunk] = dict()
+                for min_tp in total_min_tp:
+                    
+                    self.strategies = [s for s in temp_strategies if min_tp <= s[1]]
+                    self.strategies = [s for s in self.strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
+                    if len(self.strategies) == 0:
+                        continue
+                    
+                    pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
+                    
+                    pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
+                    
+                    if len(pp_deg_list) == 0:
+                        continue
+                    
+                    self.strategies = [s for s in self.strategies if s[0] in pp_deg_list]
+                    
+                    mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
+                    for pp in pp_deg_list:
+                        mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
+                    
+                    # strict mode: search chunk must be equal to real chunk 
+                    self.strategies = [s for s in self.strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
+                    
+                    if len(self.strategies) == 0:
+                        continue
+                    
+                    results[bsz][chunk][min_tp] = self.dynamic_programming(bsz, chunk, mbsz_dict, pp_stage_dict, min_tp)
+                    min_res_list, min_pp_deg, throughput = results[bsz][chunk][min_tp]['min_res_list'], results[bsz][chunk][min_tp]['min_pp_deg'], results[bsz][chunk][min_tp]['throughput']
+                    if throughput > max_throughput:
+                        max_throughput = throughput
+                        optimal_bsz = bsz
+                        optimal_chunk = chunk
+                        optimal_min_tp = min_tp
+                    # if min_pp_deg == -1 and min_res_list is None:
+                    #     break
+                    max_bsz = bsz
 
         print('\nFinal results of max memory %d MB:'%self.memory_constraint)
-        re = results[optimal_bsz][optimal_chunk]
-        print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Max throughput={re['throughput']} samples/s")
+        re = results[optimal_bsz][optimal_chunk][optimal_min_tp]
+        print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Max throughput={re['throughput']} samples/s")
         print(f"pp_deg={re['min_pp_deg']} Minimized timecost={re['min_cost']} Memory remaining={re['mem_remain']} Memory cost={re['mem_cost']}")
         print_strategies(re['min_res_list'])
         
@@ -220,7 +262,7 @@ class GalvatronSearchEngine():
         if max_bsz > -1 and max_bsz != optimal_bsz:
             re = results[max_bsz]
             chunk = max(re,key=re.get)
-            print(f"\nMax bsz = {max_bsz} Optimal chunk = {chunk} Max throughput={re[chunk]['throughput']} samples/s")
+            print(f"\nMax bsz = {max_bsz} Optimal chunk = {chunk} Optimal vocab tp = {re['vtp']} Max throughput={re[chunk]['throughput']} samples/s")
             print(f"pp_deg={re[chunk]['min_pp_deg']} Minimized timecost={re[chunk]['min_cost']} Memory remaining={re[chunk]['mem_remain']} Memory cost={re[chunk]['mem_cost']}")
             print_strategies(re[chunk]['min_res_list'])
         print("-----------------------------------------")
@@ -282,7 +324,8 @@ class GalvatronSearchEngine():
                                     self.memcost_model_args_list, self.timecost_model_args_list,
                                     max_mem=self.memory_constraint, layer_num=self.layernum_list, 
                                     multi_layer_type = True, pp_stage_dict = pp_stage_dict,
-                                    comm_coe_dict=self.allreduce_comm_coe, gpu_num=self.args.gpu_num)
+                                    comm_coe_dict=self.allreduce_comm_coe, gpu_num=self.args.gpu_num,
+                                    config = self.args)
             min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost = dp_on_model.fit(bsz, False)
             if min_pp_deg == -1:
                 max_bsz = bsz - scale
@@ -290,7 +333,7 @@ class GalvatronSearchEngine():
             bsz += scale
         return max_bsz
 
-    def dynamic_programming(self, bsz, chunk, mbsz_dict, pp_stage_dict):
+    def dynamic_programming(self, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp):
         args = self.args
         print('bsz=%d'%bsz, pp_stage_dict)
         dp_on_model = DpOnModel(self.strategies, 
@@ -306,20 +349,22 @@ class GalvatronSearchEngine():
                                 comm_coe_dict=self.allreduce_comm_coe,
                                 gpu_num=args.gpu_num,
                                 model_microbatch_after_dp=args.use_pipeline_costmodel,
-                                pipeline_type=args.pipeline_type)
+                                pipeline_type=args.pipeline_type,
+                                config = self.args)
         
-        print("****Searching with bsz=", bsz, " chunk=", chunk, "****")
-        chunk_dict = check_optimal_chunks(args.gpu_num, self.strategies, self.optimal_chunk_func, bsz, mbsz_dict)
+        print("****Searching with bsz=", bsz, " chunk=", chunk, " min_tp =", min_tp, "****")
+        chunk_dict = check_optimal_chunks(args.gpu_num, self.strategies, self.optimal_chunk_func, bsz, mbsz_dict, min_tp)
         print('Chunk_dict for bsz %d: '%bsz, chunk_dict)
         print('Mbsz_dict for bsz %d'%bsz, mbsz_dict)
         
-        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost = dp_on_model.fit(bsz, mbsz_dict = mbsz_dict)
+        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_min_tp, min_vtp = dp_on_model.fit(bsz, min_tp, mbsz_dict = mbsz_dict)
         throughput = bsz / min_cost
-        print(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost}")
+        print(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Min tp={min_tp} Vocab tp={min_vtp}")
         print(f"Max throughput={throughput} samples/s")
         print_strategies(min_res_list)
+        # print(min_res_list)
         result = {'min_cost': min_cost, 'min_res_list': min_res_list, 'min_pp_deg': min_pp_deg, 
-                        'mem_remain': mem_remain, 'mem_cost': mem_cost, 'throughput': throughput}
+                        'mem_remain': mem_remain, 'mem_cost': mem_cost, 'throughput': throughput, "vtp": min_vtp}
         return result
 
     def save_results(self, results, bsz, chunk, pp_stage_dict):
@@ -327,11 +372,12 @@ class GalvatronSearchEngine():
         args = self.args
         if re['min_pp_deg'] > 0 and re['min_res_list'] is not None:
             result_strategy = []
-            if isinstance(re['min_res_list'],list):
+            if isinstance(re['min_res_list'],list) and isinstance(re['min_res_list'][0],list) and isinstance(re['min_res_list'][0][0],list):
                 for l in re['min_res_list']:
                     result_strategy += l
             else:
                 result_strategy = re['min_res_list']
+            # print(re['min_res_list'], result_strategy)
             config = strategy2config(result_strategy)
             config['checkpoint'] = array2str([1 if 'cpt' in s[-1] and s[-1]['cpt'] else 0 for s in result_strategy])
             config['global_bsz'] = optimal_bsz
@@ -339,6 +385,7 @@ class GalvatronSearchEngine():
             config['pp_division'] = array2str(pp_stage_dict[config['pp_deg']])
             config['pipeline_type'] = args.pipeline_type
             config['default_dp_type'] = args.default_dp_type
+            config['vtp'] = re['vtp']
             if args.embed_sdp:
                 config['embed_sdp'] = 1
             
@@ -370,15 +417,10 @@ class GalvatronSearchEngine():
         memory = [[] for _ in range(self.num_layertype)]
         memory_total = [[] for _ in range(self.num_layertype)]
         other = []
-        pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
-        mbsz_dict = dict() # calc micro batch size in different pp size when tp=1
-        for pp in pp_deg_list:
-            mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp) + chunk - 1) // chunk
-        
         for i in range(self.num_layertype):
             memcost_model_args, timecost_model_args, layer_num = self.memcost_model_args_list[i], self.timecost_model_args_list[i], self.layernum_list[i]
             for strategy in self.strategies:
-                re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz=mbsz_dict[strategy[0]], **memcost_model_args).get_memory_cost()
+                re = MemoryCostModel(strategy, global_batch_size=bsz, chunk=chunk, **memcost_model_args).get_memory_cost()
                 re_total = re['enc_total']*layer_num/strategy[0]
                 print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other']])
                 memory[i].append(re['enc_total'])
@@ -689,17 +731,18 @@ def pp_division_even(layernum_list, pp_deg):
     pp_division = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
     return pp_division
     
-def optimal_chunk_func_default(local_bsz, strategy, microbatch_size):
+def optimal_chunk_func_default(local_bsz, strategy, microbatch_size, min_tp):
     # if strategy[0] == 1:
     #     return 1
-    local_bsz = local_bsz // strategy[1]
+    assert(strategy[1] % min_tp == 0)
+    local_bsz = local_bsz // (strategy[1] // min_tp)
     chunk = np.ceil(local_bsz / microbatch_size)
     chunk = 1 if chunk == 0 else chunk
     # chunk = int(min(max_chunk,chunk))
     return chunk
 
-def check_optimal_chunks(world_size, strategies, optimal_chunk_func, bsz, mbsz_dict):
+def check_optimal_chunks(world_size, strategies, optimal_chunk_func, bsz, mbsz_dict, min_tp):
     chunk_dict = {}
     for pp_deg in sorted(set([s[0] for s in strategies])):
-        chunk_dict[pp_deg] = optimal_chunk_func(bsz/(world_size//pp_deg), [pp_deg,1,world_size//pp_deg,{'fsdp':0,'cpt':0}], mbsz_dict[pp_deg])
+        chunk_dict[pp_deg] = optimal_chunk_func(bsz / (world_size // pp_deg // min_tp), [pp_deg, min_tp, world_size // pp_deg, {'fsdp':0, 'cpt':0}], mbsz_dict[pp_deg], min_tp)
     return chunk_dict

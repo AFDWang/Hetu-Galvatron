@@ -176,15 +176,17 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
     assert len(module_list) == len(dp_groups)
     
     process_group = default_process_group if default_process_group is not None else dp_groups[0]
-    pp_on = True if process_group.size < torch.distributed.get_world_size() else False
+    from .arguments import get_args
+    args = get_args()
+    pp_on = True if args.pp_deg > 1 else False
+    # pp_on = True if process_group.size < torch.distributed.get_world_size() else False
     
     if pp_devices is not None:
         assert len(pp_devices) == len(module_list)
     for i in range(len(module_list)):
         pp_device = None if pp_devices is None else pp_devices[i]
         module_list[i] = wrap_data_parallel(module_list[i], dp_types[i], dp_groups[i], module_type=module_types[i], pp_device = pp_device, mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name)
-    from .arguments import get_args
-    args = get_args()
+    
     sharding_strategy = {'ddp': ShardingStrategy.NO_SHARD,
                            'zero2': ShardingStrategy.SHARD_GRAD_OP,
                            'zero3': ShardingStrategy.FULL_SHARD}[args.default_dp_type]

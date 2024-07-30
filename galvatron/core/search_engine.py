@@ -370,10 +370,15 @@ class GalvatronSearchEngine():
         memory = [[] for _ in range(self.num_layertype)]
         memory_total = [[] for _ in range(self.num_layertype)]
         other = []
+        pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
+        mbsz_dict = dict() # calc micro batch size in different pp size when tp=1
+        for pp in pp_deg_list:
+            mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp) + chunk - 1) // chunk
+        
         for i in range(self.num_layertype):
             memcost_model_args, timecost_model_args, layer_num = self.memcost_model_args_list[i], self.timecost_model_args_list[i], self.layernum_list[i]
             for strategy in self.strategies:
-                re = MemoryCostModel(strategy, global_batch_size=bsz, chunk=chunk, **memcost_model_args).get_memory_cost()
+                re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz=mbsz_dict[strategy[0]], **memcost_model_args).get_memory_cost()
                 re_total = re['enc_total']*layer_num/strategy[0]
                 print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other']])
                 memory[i].append(re['enc_total'])

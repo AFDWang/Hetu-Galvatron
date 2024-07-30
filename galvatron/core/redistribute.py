@@ -226,7 +226,7 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(input_, allgat
         torch.distributed.all_gather_into_tensor(
             output_, input_.contiguous(), group=split_group)
     else:
-        output_ = input_
+        output_ = input_.contiguous()
     
     if args.shape_order == "SBH": # [s, b, h] -> [b, s, h]
         output_ = rearrange(output_, "s b h -> b s h")

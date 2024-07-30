@@ -3,7 +3,7 @@ import torch
 from galvatron.core.pipeline import PipeSequential
 from galvatron.core import mixed_precision_dtype, ModelInfo
 
-
+# TODO: Support sp + vtp
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
     micro_batch_size, seq_length = data.size()
@@ -63,7 +63,7 @@ class LlamaCls_(nn.Module):
         self.vocab_size = model.vocab_size
 
     def forward(self, hidden_states, input_ids):
-        # [b, s, h] -> [s, b, h]
+        # [s, b, h] -> [b, s, h]
         hidden_states = hidden_states.permute(1, 0, 2).contiguous()
         logits = self.lm_head(hidden_states)
         logits = logits.float()

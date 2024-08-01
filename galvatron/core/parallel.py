@@ -1,3 +1,4 @@
+import torch.distributed
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import ShardingStrategy, CPUOffload, MixedPrecision, BackwardPrefetch
@@ -8,8 +9,9 @@ import torch
 from typing import Tuple, List
 from functools import partial
 from galvatron.core.redistribute import fused_split_allgather
+from .utils import rgetattr, rsetattr, rhasattr
 
-def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='bert_enc', pp_device = None, mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None):
+def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='bert_enc', pp_device = None, mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None, tied_wte_attr_names=None):
     if dp_type is None:
         return module
     else:
@@ -17,7 +19,7 @@ def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='ber
         from .arguments import get_args
         fsdp_type_dict = {0:get_args().default_dp_type, 1:'zero3'}
         assert dp_type in fsdp_type_dict.keys()
-        return wrap_module_fsdp_manually(module, pp_device, module_type, dp_group, fsdp_type=fsdp_type_dict[dp_type], mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name)
+        return wrap_module_fsdp_manually(module, pp_device, module_type, dp_group, fsdp_type=fsdp_type_dict[dp_type], mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name, tied_wte_attr_names=tied_wte_attr_names)
 
 def param_init_fn(module):
     module.to_empty(device=torch.device("cuda"))
@@ -25,7 +27,7 @@ def param_init_fn(module):
         if callable(getattr(m, 'reset_parameters', None)):
             m.reset_parameters()
 
-def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_group=None, fsdp_type='zero3', mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None):
+def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_group=None, fsdp_type='zero3', mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None, tied_wte_attr_names=None):
     comm_group = None if dp_group is None else dp_group.group
     sharding_strategy = {'ddp': ShardingStrategy.NO_SHARD,
                            'zero2': ShardingStrategy.SHARD_GRAD_OP,
@@ -52,12 +54,20 @@ def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_grou
     if wrap_block_name is not None:
         if 'enc' in module_type or 'dec' in module_type:
             module = apply_fsdp(module, fsdp_args, wrap_block_name)
-        else: 
-            # return module
-            if 'initialize_on_meta' in args and args.initialize_on_meta:
-                module = FSDP(module, **fsdp_args)
-            else:
-                module = FSDP(module.to(pp_device), **fsdp_args)
+        else:
+            if 'initialize_om_meta' in args and args.intialize_on_meta:
+                module = module.to(pp_device)
+            
+            if tied_wte_attr_names is not None:
+                if module_type == 'embed':
+                    assert rhasattr(module.module, tied_wte_attr_names[0])
+                    tied_module = rgetattr(module.module, tied_wte_attr_names[0])
+                    rsetattr(module.module, tied_wte_attr_names[0], FSDP(tied_module, **fsdp_args))
+                elif module_type == 'cls':
+                    assert rhasattr(module.module, tied_wte_attr_names[-1])
+                    tied_module = rgetattr(module.module, tied_wte_attr_names[-1])
+                    rsetattr(module.module, tied_wte_attr_names[-1], FSDP(tied_module, **fsdp_args))
+            module = FSDP(module, **fsdp_args)
         return module
 
     # Wrap manually
@@ -171,7 +181,7 @@ class Module_with_relocation(nn.Module):
             input_relocated = self.relocate_activations(inputs)
             return self.module(input_relocated)
 
-def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, pp_devices=None, mixed_precision=torch.bfloat16, default_process_group=None, wrap_block_name=None):
+def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, pp_devices=None, mixed_precision=torch.bfloat16, default_process_group=None, wrap_block_name=None, tied_wte_attr_names=None):
     assert len(module_list) == len(dp_types)
     assert len(module_list) == len(dp_groups)
     
@@ -185,8 +195,17 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
         assert len(pp_devices) == len(module_list)
     for i in range(len(module_list)):
         pp_device = None if pp_devices is None else pp_devices[i]
-        module_list[i] = wrap_data_parallel(module_list[i], dp_types[i], dp_groups[i], module_type=module_types[i], pp_device = pp_device, mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name)
-    
+        module_list[i] = wrap_data_parallel(
+            module_list[i], dp_types[i], dp_groups[i],
+            module_type=module_types[i],
+            pp_device = pp_device,
+            mixed_precision=mixed_precision,
+            pp_on=pp_on,
+            wrap_block_name=wrap_block_name,
+            tied_wte_attr_names=tied_wte_attr_names
+        )
+    from .arguments import get_args
+    args = get_args()
     sharding_strategy = {'ddp': ShardingStrategy.NO_SHARD,
                            'zero2': ShardingStrategy.SHARD_GRAD_OP,
                            'zero3': ShardingStrategy.FULL_SHARD}[args.default_dp_type]

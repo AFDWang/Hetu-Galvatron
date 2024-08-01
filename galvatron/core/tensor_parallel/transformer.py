@@ -525,16 +525,13 @@ class ParallelAttention(MegatronModule):
             kv_projection_size = args.kv_channels * args.num_attention_heads
 
         self.use_flash_attn = args.use_flash_attn \
-            and attention_type == AttnType.self_attn \
-            and self.attn_mask_type == AttnMaskType.causal
+            and attention_type == AttnType.self_attn
         if self.use_flash_attn:
             if flash_attn_unpadded_func is None:
                 raise ImportError('FlashAttention is not installed, please install with '
                                   'pip install flash-attn')
             assert attention_type == AttnType.self_attn, ('FlashAttention code path only supports '
                                                           'self-attention for now')
-            assert self.attn_mask_type == AttnMaskType.causal, ('FlashAttention code path only '
-                                                                'supports causal mask for now')
             if rearrange is None:
                 raise ImportError('einops is not installed, please install with pip install einops')
 
@@ -598,7 +595,7 @@ class ParallelAttention(MegatronModule):
 
         if self.use_flash_attn:
             self.core_attention_flash = FlashSelfAttention(
-                causal=True, attention_dropout=config.attention_dropout
+                causal=attn_mask_type == AttnMaskType.causal, attention_dropout=config.attention_dropout
             )
 
         # Output.

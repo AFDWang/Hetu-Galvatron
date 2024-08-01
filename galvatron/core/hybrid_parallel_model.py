@@ -87,6 +87,8 @@ def construct_hybrid_parallel_model_api(
     construct_sequential_model,
     construct_tensor_parallel_model,
     wrap_block_name=None,
+    tied_wte_attr_names=None,
+    sp_layernorm_attr_names=None,
 ):
     config, args, hp_configs = model_config, training_args, hybrid_parallel_configs
 
@@ -107,7 +109,7 @@ def construct_hybrid_parallel_model_api(
     hp_configs_whole = hp_config_whole_model(module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp = args.vocab_tp)
 
     # [Step 0] Generate communication groups
-    pp_group, tp_groups_whole, dp_groups_whole, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole = \
+    pp_group, tp_groups_whole, dp_groups_whole, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole, embedding_group = \
         gen_comm_groups(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['pp_deg'], hp_configs_whole['tp_consec_whole'], show_rank = 0)
     
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
@@ -122,25 +124,34 @@ def construct_hybrid_parallel_model_api(
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
     from galvatron.core.pipeline import PipelineParallel
     hp_model = PipelineParallel(
-        model=model, 
-        model_ranks=hp_configs_whole['pp_ranks_whole'], 
-        layer_output_tensor_shapes=shapes_whole, 
+        model=model,
+        model_ranks=hp_configs_whole['pp_ranks_whole'],
+        layer_output_tensor_shapes=shapes_whole,
         layer_output_tensor_dtypes=dtypes_whole,
         layer_dp_sizes=hp_configs_whole['dp_sizes_whole'],
         layer_tp_sizes=hp_configs_whole['tp_sizes_whole'],
-        chunks=get_chunks(args), 
-        process_group=pp_group.ranks, 
+        chunks=get_chunks(args),
+        process_group=pp_group.ranks,
+        embedding_group=embedding_group,
         nproc_per_node=8,
-        info=False
+        info=False,
+        tied_wte_attr_names=tied_wte_attr_names,
     )
 
     # [Step 5] Wrap Data Parallel modules based on dp_types & dp_groups
     hp_model.wrap_pipeline_modules_data_parallel(
-        hp_configs_whole['dp_types_whole'], 
-        dp_groups_whole, 
-        module_types=module_types, 
-        mixed_precision=mixed_precision_dtype(args.mixed_precision), 
-        wrap_block_name=wrap_block_name
+        hp_configs_whole['dp_types_whole'],
+        dp_groups_whole,
+        module_types=module_types,
+        mixed_precision=mixed_precision_dtype(args.mixed_precision),
+        wrap_block_name=wrap_block_name,
+        tied_wte_attr_names=tied_wte_attr_names,
+    )
+    
+    hp_model.gen_sp_layernorm_info(
+        layer_module_types=module_types,
+        layer_tp_groups=tp_groups_whole,
+        sp_layernorm_attr_names=sp_layernorm_attr_names,
     )
     
     # [Step 6] Wrap checkpoint based on checkpoint_flags

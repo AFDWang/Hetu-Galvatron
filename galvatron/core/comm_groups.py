@@ -137,7 +137,25 @@ def gen_pp_group_dist(pp_size, to_print = True, world_ranks = None):
     if rank == 0 and to_print:
         print("PP groups:", end = ' ')
         show_groups(all_pp_groups)
-    return pp_group
+    return pp_group, all_pp_groups
+
+def gen_embedding_group_dist(pp_size, all_pp_groups, to_print = True):
+    rank = torch.distributed.get_rank()
+    all_embedding_groups, embedding_group = [], None
+    for pp_group in all_pp_groups:
+        if pp_size > 1:
+            embedding_ranks = [pp_group.ranks[0], pp_group.ranks[-1]]
+        else:
+            embedding_ranks = [pp_group.ranks[0]]
+        group = CommGroup(embedding_ranks)
+        all_embedding_groups.append(group)
+        if group.has_rank(rank):
+            embedding_group = group
+    
+    if rank == 0 and to_print:
+        print("Embedding groups:", end = ' ')
+        show_groups(all_embedding_groups)
+    return embedding_group
 
 def get_tp_group_dict_dist(all_tp_sizes, pp_size, consecutive = True, world_ranks =  None):
     tp_sizes_set = list(set(all_tp_sizes))
@@ -220,7 +238,8 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
     dp_groups = []
     allgather_groups, split_groups = [None], [None]
     fused_split_groups, fused_allgather_groups = [None], [None]
-    pp_group = gen_pp_group_dist(pp_size, to_print=False, world_ranks=world_ranks)
+    pp_group, all_pp_groups = gen_pp_group_dist(pp_size, to_print=False, world_ranks=world_ranks)
+    embedding_group = gen_embedding_group_dist(pp_size, all_pp_groups, to_print=False)
     tp_group_dict, dp_group_dict = {}, {}
     for consec in [0, 1]:
         tp_group_dict[consec] = get_tp_group_dict_dist(all_tp_sizes, pp_size, consec, world_ranks=world_ranks)
@@ -239,6 +258,8 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
     show_rank = 5
     if show_rank >= 0 and torch.distributed.get_rank() == show_rank:
         print('====================== Galvatron Communication Group ===========================')
+        print("Embedding group for rank %d:"%show_rank)
+        show_groups([embedding_group])
         print("TP groups for rank %d (all layers):"%show_rank)
         show_groups(tp_groups)
         print("DP groups for rank %d (all layers):"%show_rank)
@@ -252,4 +273,4 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
         print("Fused allgather groups for rank %d:"%show_rank)
         show_groups(fused_allgather_groups)
         print('================================================================================')
-    return pp_group, tp_groups, dp_groups, allgather_groups, split_groups, fused_allgather_groups, fused_split_groups
+    return pp_group, tp_groups, dp_groups, allgather_groups, split_groups

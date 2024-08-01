@@ -1,6 +1,8 @@
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from typing import (
     Any,
     Callable,
@@ -17,6 +19,8 @@ from torch.distributed.fsdp._runtime_utils import (
     _post_backward_hook,
     _unshard,
 )
+
+from ..utils import rgetattr, rhasattr
 
 def _send_backward_hook(
     input_tensor_grad: List[torch.Tensor],
@@ -47,6 +51,53 @@ def fsdp_reduce_gradients(model):
     for m in model.modules():
         if isinstance(m, FSDP) and m._is_root:
             _post_backward_final_callback(m, m)
+
+# For Finalization of Model Gradients
+def _allreduce_word_embedding_grads(module, tied_wte_attr_name, group):
+    word_embedding = rgetattr(module._fsdp_wrapped_module.module, tied_wte_attr_name)
+    if hasattr(word_embedding, "_handles"):
+        for handle in word_embedding._handles:
+            assert handle.flat_param.grad is not None
+            dist.all_reduce(handle.flat_param.grad, group=group)
+    else:
+        assert word_embedding._handle.flat_param.grad is not None
+        dist.all_reduce(word_embedding._handle.flat_param.grad, group=group)
+
+def _gen_sp_group_module_dict(layer_module_types, model_layer_list, layer_tp_groups, sp_layernorm_attr_names):
+    sp_group_module_dict = dict()
+    for module_type, module, tp_group in zip(layer_module_types, model_layer_list, layer_tp_groups):
+        if 'enc' not in module_type and 'dec' not in module_type:
+            continue
+        if tp_group.size == 1:
+            continue
+        for attr_name in sp_layernorm_attr_names:
+            if rhasattr(module.module, attr_name):
+                if tp_group not in sp_group_module_dict:
+                    sp_group_module_dict[tp_group] = [rgetattr(module.module, attr_name)]
+                else:
+                    sp_group_module_dict[tp_group].append(rgetattr(module.module, attr_name))
+    return sp_group_module_dict
+    
+def _allreduce_sp_layernorm_grads(sp_group_module_dict):
+    for sp_group, module_list in sp_group_module_dict.items():
+        grads = list()
+        for module in module_list:
+            if hasattr(module, "_handles"):
+                for handle in module._handles:
+                    if handle.flat_param.requires_grad:
+                        assert handle.flat_param.grad is not None
+                        grads.append(handle.flat_param.grad)
+            else:
+                if module._handle.flat_param.requires_grad:
+                    assert module._handle.flat_param.grad is not None
+                    # dist.all_reduce(module._handle.flat_param.grad, group=sp_group.group)
+                    grads.append(module._handle.flat_param.grad)
+        
+        if grads:
+            coalesced = _flatten_dense_tensors(grads)
+            dist.all_reduce(coalesced, group=sp_group.group)
+            for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
+                buf.copy_(synced)
 
 # ================ FSDP Async Reduce Gradient Utils ================
 # Only Available on PyTorch 2.0

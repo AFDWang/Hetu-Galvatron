@@ -1,3 +1,4 @@
+from torch.nn import LayerNorm
 from transformers import GPT2LMHeadModel
 from galvatron.core import construct_hybrid_parallel_model_api, get_hybrid_parallel_configs_api
 from galvatron.models.gpt_hf.GPTModel_sequential import GPTModelInfo, construct_sequential_model
@@ -8,7 +9,7 @@ def get_hybrid_parallel_configs(model_config, training_args):
     return hybrid_parallel_configs
 
 def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_parallel_configs):
-    wrap_block_name = [GPTLayer_tp]
+    wrap_block_name = [GPTLayer_tp, LayerNorm]
     hp_model = construct_hybrid_parallel_model_api(
         model,
         model_config,
@@ -17,7 +18,9 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
         GPTModelInfo,
         construct_sequential_model,
         construct_tensor_parallel_model,
-        wrap_block_name=wrap_block_name
+        wrap_block_name=wrap_block_name,
+        tied_wte_attr_names=['wte', 'lm_head'],
+        sp_layernorm_attr_names=['layer.attention.LayerNorm', 'layer.mlp.LayerNorm']
     )
     return hp_model
 

@@ -1,3 +1,4 @@
+import torch.distributed
 import torch.nn as nn
 import torch
 from galvatron.core.pipeline import PipeSequential
@@ -63,15 +64,14 @@ class GPTEmbeddings_(nn.Module):
         return hidden_states, labels
 
 class GPTLayers_(nn.Module):
-    def __init__(self, model, layer_idx_start, layer_idx_end):
+    def __init__(self, model, layer_idx):
         super().__init__()
         model = model.transformer
-        self.layers = model.h[layer_idx_start:layer_idx_end]
+        self.layer = model.h[layer_idx]
 
     def forward(self, hidden_states, input_ids):
         attention_mask = get_ltor_masks_and_position_ids(input_ids)
-        for layer in self.layers:
-            hidden_states = layer(hidden_states, attention_mask = attention_mask) # , position_ids = position_ids)
+        hidden_states = self.layer(hidden_states, attention_mask = attention_mask) # , position_ids = position_ids)
         input_ids = input_ids.clone()
         return hidden_states, input_ids
 
@@ -144,7 +144,7 @@ def construct_sequential_model(model, config):
     model_ = PipeSequential()
     model_.add_module('embeddings', GPTEmbeddings_(model))
     for i in range(config.num_hidden_layers):
-        enc = GPTLayers_(model, i, i + 1)
+        enc = GPTLayers_(model, i)
         model_.add_module('layer_%d'%i, enc)
     model_.add_module('prenorm', GPTPreNorm_(model))
     model_.add_module('cls', GPTCls_(model))

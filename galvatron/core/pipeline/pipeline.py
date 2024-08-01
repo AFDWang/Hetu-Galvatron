@@ -22,7 +22,7 @@ else:
 
 from .utils import *
 from .grad_reduce import *
-from .grad_reduce import _send_backward_hook, _allreduce_word_embedding_grads, _retain_word_embedding_grads, _gen_sp_group_module_dict, _allreduce_sp_layernorm_grads
+from .grad_reduce import _send_backward_hook, _allreduce_word_embedding_grads, _gen_sp_group_module_dict, _allreduce_sp_layernorm_grads
 
 Shape = Union[List[int], torch.Size]
 

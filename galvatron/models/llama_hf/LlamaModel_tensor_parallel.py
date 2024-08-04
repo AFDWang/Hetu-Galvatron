@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding
+from megatron.core.tensor_parallel import VocabParallelEmbedding, ColumnParallelLinear
 from megatron.arguments import core_transformer_config_from_args
 from galvatron.core import get_args
 from galvatron.core.tensor_parallel import ParallelMLP, ParallelAttention
@@ -75,6 +76,13 @@ class LlamaLayer_tp(nn.Module):
         return layer_output
     
 def construct_tensor_parallel_model(model, config, tp_groups_enc):
-    layers_tp = nn.ModuleList([LlamaLayer_tp(config, i, tp_group = tp_groups_enc[i+1]) for i in range(config.num_hidden_layers)])
+    layers_tp = nn.ModuleList([LlamaLayer_tp(config, i, tp_group = tp_groups_enc[i + 1]) for i in range(config.num_hidden_layers)])
     setattr(model.model, 'layers', layers_tp)
+    args = get_args()
+    megatron_config = core_transformer_config_from_args(get_args())
+    setattr(model.model, 'embed_tokens', VocabParallelEmbedding(
+            args.padded_vocab_size, megatron_config.hidden_size, config = megatron_config, init_method = megatron_config.init_method, tp_group = tp_groups_enc[0].group))
+    setattr(model, 'lm_head', ColumnParallelLinear(
+            megatron_config.hidden_size, args.padded_vocab_size, config = megatron_config, init_method = megatron_config.init_method, bias=False, tp_group = tp_groups_enc[-1].group))
+    
     return model

@@ -1,8 +1,8 @@
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
-export MASTER_ADDR=localhost # $MASTER_ADDR
-export MASTER_PORT=12345 # $MASTER_PORT
-export NODE_RANK=0
+export MASTER_ADDR=$MASTER_ADDR
+export MASTER_PORT=$MASTER_PORT
+export NODE_RANK=$RANK
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 LAUNCHER="python3 -m torch.distributed.launch"

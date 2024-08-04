@@ -1,8 +1,8 @@
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
-export MASTER_ADDR=$MASTER_ADDR
-export MASTER_PORT=$MASTER_PORT
-export NODE_RANK=$RANK
+export MASTER_ADDR=localhost # $MASTER_ADDR
+export MASTER_PORT=12345 # $MASTER_PORT
+export NODE_RANK=0 # $RANK
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 LAUNCHER="python3 -m torch.distributed.launch"
@@ -25,7 +25,7 @@ MODEL_ARGS="
     --seq_length 2048"
 
 TRAIN_ARGS="
-    --global_train_batch_size 8 \
+    --global_train_batch_size 64 \
     --epochs 10 \
     --lr 1e-4 \
     --adam_weight_decay 0.01 \
@@ -39,12 +39,12 @@ PARALLEL_ARGS="
     --global_tp_deg 2 \
     --global_tp_consec 1 \
     --sdp 1 \
-    --global_checkpoint 1 \
-    --chunks 2 \
+    --global_checkpoint 0 \
+    --vocab_tp 4 \
+    --chunks 8 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \
-    --sequence-parallel \
     --use-flash-attn"
     # --initialize_on_meta 1 \
     # --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"

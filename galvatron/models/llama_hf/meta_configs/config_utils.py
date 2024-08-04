@@ -65,6 +65,9 @@ def overwrite_model_args(config, args):
     args.kv_channels = args.hidden_size // args.num_attention_heads
     args.add_bias_linear = False
     args.swiglu = True
+    if getattr(args, "padded_vocab_size", None) is None:
+        args.padded_vocab_size = (config.vocab_size + args.make_vocab_size_divisible_by - 1) // args.make_vocab_size_divisible_by * args.make_vocab_size_divisible_by
+
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):

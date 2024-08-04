@@ -44,7 +44,8 @@ def train(args):
         dataset=DataLoaderForLlama(args, device),
         global_bsz=args.global_train_batch_size,
         shuffle=True,
-        args=args
+        args=args,
+        group = model.dp_groups_whole[0].group
     )
     
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)

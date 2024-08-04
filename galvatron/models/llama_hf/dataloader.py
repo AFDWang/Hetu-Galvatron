@@ -16,7 +16,10 @@ class DataLoaderForLlama(Dataset):
             sentence[self.data_length[i]:] = 0
             mask = np.ones((self.sentence_length,))
             mask[self.data_length[i]:] = 0
-            self.input_ids.append(sentence)
+            
+            padding_sentence = np.zeros(self.sentence_length + 1, dtype=sentence.dtype)
+            padding_sentence[:self.sentence_length] = sentence
+            self.input_ids.append(padding_sentence)
         
         self.input_ids = np.array(self.input_ids)
 

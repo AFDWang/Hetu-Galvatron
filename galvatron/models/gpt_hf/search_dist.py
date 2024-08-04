@@ -17,5 +17,5 @@ if __name__ == '__main__':
     search_engine.set_model_type('gpt') # Optional
     
     search_engine.initialize_search_engine()
-    # search_engine.check_cost_model(bsz=128)
+    search_engine.check_cost_model(bsz=16,chunk=1)
     search_engine.parallelism_optimization()

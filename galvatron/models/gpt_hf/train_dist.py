@@ -31,9 +31,6 @@ def train(args):
         print("Creating Model...")
     gpt_model = GPT2LMHeadModel(config)
 
-    if local_rank == 0:
-        for p,q in gpt_model.named_parameters():
-            print(p,q.numel(),q.dtype)
     model = construct_hybrid_parallel_model(
         model=gpt_model, 
         model_config=config, 
@@ -41,10 +38,6 @@ def train(args):
         hybrid_parallel_configs=hybrid_parallel_configs
     )
 
-    if local_rank == 4:
-        for p,q in model.named_parameters():
-            print(p,q.numel(),q.dtype)
-    
     if local_rank == 0:
         print("Creating Dataset...")
     trainloader = distributed_dataloader(

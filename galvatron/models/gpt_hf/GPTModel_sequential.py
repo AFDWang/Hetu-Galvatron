@@ -35,6 +35,7 @@ class GPTEmbeddings_(nn.Module):
         self.tp_group = self.wte.tp_group
         
     def forward(self, input_ids):
+
         tokens = input_ids[:, :-1].contiguous()
         labels = input_ids[:, 1:].contiguous()
         
@@ -85,14 +86,33 @@ class GPTPreNorm_(nn.Module):
         hidden_states = self.ln_f(hidden_states)
         input_ids = input_ids.clone()
         return hidden_states, input_ids
+    
+class GPTLoss_(nn.Module):
+    def __init__(self, weight, sequence_parallel, tp_group):
+        super().__init__()
+        self.weight = weight
+        self.sequence_parallel = sequence_parallel
+        self.tp_group = tp_group
+    
+    def forward(self, hidden_states):
+        logits_parallel = tensor_parallel.linear_with_grad_accumulation_and_async_allreduce(
+            input=hidden_states,
+            weight=self.weight,
+            bias=None,
+            gradient_accumulation_fusion=False,
+            async_grad_allreduce=False,
+            sequence_parallel=self.sequence_parallel,
+            tp_group=self.tp_group)
+        return logits_parallel
+
 
 class GPTCls_(nn.Module):
     def __init__(self, model, parallel_loss = True, half_entorpy = True):
         super().__init__()
-        self.lm_head = model.lm_head
-        self.clone_scatter_output_in_embedding = get_args().clone_scatter_output_in_embedding
         self.sequence_parallel = get_args().sequence_parallel
-        self.tp_group = self.lm_head.tp_group
+        self.tp_group = model.lm_head.tp_group
+        self.lm_head = GPTLoss_(model.lm_head.weight, self.sequence_parallel, self.tp_group)
+        self.clone_scatter_output_in_embedding = get_args().clone_scatter_output_in_embedding
         self.parallel_loss = parallel_loss
         self.half_entorpy = half_entorpy
 
@@ -101,14 +121,7 @@ class GPTCls_(nn.Module):
         if not self.sequence_parallel:
             hidden_states = tensor_parallel.copy_to_tensor_model_parallel_region_group(hidden_states, self.tp_group)
         
-        logits_parallel = tensor_parallel.linear_with_grad_accumulation_and_async_allreduce(
-            input=hidden_states,
-            weight=self.lm_head.weight,
-            bias=None,
-            gradient_accumulation_fusion=False,
-            async_grad_allreduce=False,
-            sequence_parallel=self.sequence_parallel,
-            tp_group=self.tp_group)
+        logits_parallel = self.lm_head(hidden_states)
     
         # [b s] -> [s b]
         input_ids = input_ids.transpose(0,1).contiguous()

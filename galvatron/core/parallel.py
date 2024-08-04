@@ -55,7 +55,7 @@ def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_grou
         if 'enc' in module_type or 'dec' in module_type:
             module = apply_fsdp(module, fsdp_args, wrap_block_name)
         else:
-            if 'initialize_om_meta' in args and args.intialize_on_meta:
+            if not ('initialize_om_meta' in args and args.intialize_on_meta):
                 module = module.to(pp_device)
             
             if tied_wte_attr_names is not None:

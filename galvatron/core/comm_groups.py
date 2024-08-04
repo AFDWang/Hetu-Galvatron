@@ -273,4 +273,4 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
         print("Fused allgather groups for rank %d:"%show_rank)
         show_groups(fused_allgather_groups)
         print('================================================================================')
-    return pp_group, tp_groups, dp_groups, allgather_groups, split_groups, fused_split_groups, fused_allgather_groups, embedding_group
+    return pp_group, tp_groups, dp_groups, allgather_groups, split_groups, fused_allgather_groups, fused_split_groups, embedding_group

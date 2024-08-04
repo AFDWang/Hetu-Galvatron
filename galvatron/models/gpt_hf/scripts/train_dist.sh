@@ -45,9 +45,8 @@ PARALLEL_ARGS="
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \
-    --use-flash-attn \
-    --sequence-parallel \
-    --initialize_on_meta 1"
+    --use-flash-attn" # \
+    # --initialize_on_meta 1"
     # --galvatron_config_path ./configs/galvatron_config_gpt-2.7b_1nodes_8gpus_per_node_40GB_bf16_example.json"
 
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS}

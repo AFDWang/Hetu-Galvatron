@@ -44,8 +44,9 @@ PROFILE_ARGS_BF16="
     --max_tp_deg 8 \
     --profile_dp_type zero3 \
     --mixed_precision bf16 \
-    --use-flash-attn"
+    --use-flash-attn \
+    --shape_order BSH"
 
-python3 profile.py ${MODEL_ARGS_SIZE15B} ${PROFILE_ARGS_BF16}
-# python3 profile.py ${MODEL_ARGS_SIZE27B} ${PROFILE_ARGS_BF16}
-# python3 profile.py ${MODEL_ARGS_SIZE67B} ${PROFILE_ARGS_BF16}
+python3 profiler.py ${MODEL_ARGS_SIZE15B} ${PROFILE_ARGS_BF16}
+# python3 profiler.py ${MODEL_ARGS_SIZE27B} ${PROFILE_ARGS_BF16}
+# python3 profiler.py ${MODEL_ARGS_SIZE67B} ${PROFILE_ARGS_BF16}

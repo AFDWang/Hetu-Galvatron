@@ -79,6 +79,12 @@ std::pair<std::map<int, double>, std::map<int, int> > dynamic_programming_core( 
     {
         int vtp = item.first;
 
+        if (max_mem - 1 - other_mem_cost[vtp] < 0) {
+            total_cost[vtp] = std::numeric_limits<double>::infinity();
+            remaining_mem[vtp] = -1;
+            continue;
+        }
+
         double* ptr = _f_ptr + (max_mem - 1 - other_mem_cost[vtp]) * strategy_num;
         int next_index = argmin(ptr , ptr + strategy_num), next_v = max_mem - 1 - other_mem_cost[vtp];
 

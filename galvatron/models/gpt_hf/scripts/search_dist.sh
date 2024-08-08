@@ -2,7 +2,7 @@ export NUM_NODES=2
 export NUM_GPUS_PER_NODE=8
 
 MODEL_SIZE="gpt-6.7b"
-MEMORY=40
+MEMORY=34
 
 MODEL_ARGS="
     --model_size ${MODEL_SIZE} \
@@ -13,7 +13,7 @@ BSZ_ARGS="
     --min_bsz 16 \
     --max_bsz 1024 \
     --bsz_scale 16 \
-    --settle_bsz 640 \
+    --settle_bsz -1 \
     --recommend_min_bsz 0 \
     --settle_chunk -1
 "
@@ -41,6 +41,7 @@ SEARCH_ARGS="
     --mixed_precision bf16 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
+    --sequence_parallel \
     --embed_sdp 0
 "
 

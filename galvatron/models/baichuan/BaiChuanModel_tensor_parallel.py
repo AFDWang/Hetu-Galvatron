@@ -9,6 +9,6 @@ def construct_tensor_parallel_model(model, config, tp_groups_enc):
     }
     for i in range(config.num_hidden_layers):
         layer = model.transformer.layers[i]
-        setattr(layer, 'mixer', create_mixer_cls(config, layer_idx=i, process_group=tp_groups_enc[i].group, **factory_kwargs)(config.hidden_size))
-        setattr(layer, 'mlp', create_mlp_cls(config, layer_idx=i, process_group=tp_groups_enc[i].group, **factory_kwargs)(config.hidden_size))
+        setattr(layer, 'mixer', create_mixer_cls(config, layer_idx=i, process_group=tp_groups_enc[i+1].group, **factory_kwargs)(config.hidden_size))
+        setattr(layer, 'mlp', create_mlp_cls(config, layer_idx=i, process_group=tp_groups_enc[i+1].group, **factory_kwargs)(config.hidden_size))
     return model

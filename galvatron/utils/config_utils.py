@@ -19,10 +19,11 @@ def write_json_config(config, path):
 
 def config2strategy(config):
     pp_deg = config['pp_deg']
+    vtp = config['vtp']
     tp_sizes_enc = str2array(config['tp_sizes_enc'])
     tp_consecutive_flags = str2array(config['tp_consecutive_flags'])
     dp_types_enc = str2array(config['dp_types_enc'])
-    return pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc
+    return pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, vtp
 
 def strategy2config(strategy_list):
     layer_num = len(strategy_list)
@@ -79,11 +80,15 @@ def layernum2str(layer_num):
         layernum_info = 'layernum%d'%layer_num
     return layernum_info
 
-def save_profiled_memory(path, pp_deg, tp_deg, world_size, layer_num, bsz, rank, model_states, activation, activation_peak, cpt):
+def save_profiled_memory(path, pp_deg, tp_deg, world_size, layer_num, bsz, rank, model_states, activation, activation_peak, cpt, sequence_parallel = False, vocab_tp = 1):
     config = read_json_config(path) if os.path.exists(path) else {}
     key = '%d_%d_%d'%(pp_deg,tp_deg,world_size//pp_deg//tp_deg)
     if cpt:
         key += '_c'
+    if vocab_tp == tp_deg and tp_deg != 1:
+        key += '_vtp'
+    if sequence_parallel:
+        key += '_sp'
     if key not in config.keys():
         config[key] = {}
     layernum_info = layernum2str(layer_num)
@@ -92,7 +97,7 @@ def save_profiled_memory(path, pp_deg, tp_deg, world_size, layer_num, bsz, rank,
     config[key]['%s_bsz%d_rank%d_act_peak'%(layernum_info, bsz, rank)] = activation_peak
     write_json_config(config, path)
     print('Already written profiled memory into config file %s!\n'%(path)) 
-    
+     
 def save_profiled_time(path, time, bsz, layer_num):
     config = read_json_config(path) if os.path.exists(path) else {}
     layernum_info = layernum2str(layer_num)

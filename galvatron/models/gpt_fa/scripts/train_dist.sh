@@ -45,6 +45,7 @@ PARALLEL_ARGS="
     --default_dp_type zero2 \
     --mixed_precision bf16 \
     --use-flash-attn \
+    --shape_order BSH \
     --initialize_on_meta 1 \
     --galvatron_config_path ./configs/galvatron_config_gpt-6.7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
 

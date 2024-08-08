@@ -177,6 +177,10 @@ def galvatron_profile_args(parser):
         "--sequence_parallel", action="store_true", help="Whether to use sequence parallel",
     )
     
+    group.add_argument(
+        "--shape_order", type=str, default='SBH', help="Model shape order.", choices=['SBH', 'BSH'],
+    )
+    
     group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
                        help='Pad the vocab size to be divisible by this value.'
                        'This is added for computational efficieny reasons.')

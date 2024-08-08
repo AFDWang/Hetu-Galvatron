@@ -153,7 +153,7 @@ class GalvatronProfiler():
             if 'profile_forward' in args and args.profile_forward:
                 assert self.layernum_list is not None
                 time_config_path = self.time_profiling_path()
-                save_profiled_time(time_config_path, avg_time*1e3, args.global_train_batch_size, self.layernum_list, args.sequence_parallel)
+                save_profiled_time(time_config_path, avg_time*1e3, args.global_train_batch_size, self.layernum_list)
             if self.exit:
                 exit(0)
             else:
@@ -413,6 +413,11 @@ class GalvatronProfiler():
                     tp_deg *= 2
                 pp_deg *=2
 
+            other_memory_pp_on_first['model_states'][8] = other_memory_pp_on_first['model_states'][4] / 2
+            other_memory_pp_on_first['activation'][8] = other_memory_pp_on_first['activation'][4] / 2
+            other_memory_pp_on_last['model_states'][8] = other_memory_pp_on_last['model_states'][4] / 2
+            other_memory_pp_on_last['activation'][8] = other_memory_pp_on_last['activation'][4] / 2
+            
             # other_memory_pp_on_first['activation'] = other_memory_pp_on_last['activation'] = max(other_memory_pp_on_first['activation'], other_memory_pp_on_last['activation'])
             print('other_memory_pp_off:', other_memory_pp_off)
             print('other_memory_pp_on_first:', other_memory_pp_on_first)
@@ -651,6 +656,8 @@ class GalvatronProfiler():
                             'make_vocab_size_divisible_by',
                             'padded_vocab_size',
                             'ffn_hidden_size',
+                            'add_bias_linear',
+                            'swiglu',
                             'extra_args_str']
         exclude_arg_names = profile_arg_names+self.layernum_arg_names
         MODEL_ARGS = self.args2str(self.args._get_kwargs(), exclude_arg_names)
@@ -735,6 +742,7 @@ class GalvatronProfiler():
             'pipeline_type': 'gpipe',
             'default_dp_type': self.args.profile_dp_type if self.args.profile_type == 'memory' else 'ddp',
             'mixed_precision': self.args.mixed_precision,
+            'shape_order': self.args.shape_order
         }
         
         if self.args.use_flash_attn:

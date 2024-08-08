@@ -90,7 +90,7 @@ class GPTPreNorm_(nn.Module):
 class GPTLoss_(nn.Module):
     def __init__(self, weight, sequence_parallel, tp_group):
         super().__init__()
-        self.weight = weight
+        self.weight = nn.Parameter(weight.clone())
         self.sequence_parallel = sequence_parallel
         self.tp_group = tp_group
     

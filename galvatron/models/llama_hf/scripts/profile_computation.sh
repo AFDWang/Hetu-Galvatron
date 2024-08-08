@@ -36,4 +36,4 @@ PROFILE_ARGS="
 #     --layernum_max 24 \
 #     --mixed_precision fp32"
 
-python3 profile.py ${MODEL_ARGS} ${PROFILE_ARGS}
+python3 profiler.py ${MODEL_ARGS} ${PROFILE_ARGS}

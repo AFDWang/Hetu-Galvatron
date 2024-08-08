@@ -26,7 +26,8 @@ PROFILE_ARGS="
     --layernum_min 6 \
     --layernum_max 12 \
     --mixed_precision bf16 \
-    --use-flash-attn"
+    --use-flash-attn \
+    --shape_order BSH"
 
 # models in flash_attn cannot use fp32 without flash_attn
 # PROFILE_ARGS="
@@ -36,4 +37,4 @@ PROFILE_ARGS="
 #     --layernum_max 24 \
 #     --mixed_precision fp32"
 
-python3 profile.py ${MODEL_ARGS} ${PROFILE_ARGS}
+python3 profiler.py ${MODEL_ARGS} ${PROFILE_ARGS}

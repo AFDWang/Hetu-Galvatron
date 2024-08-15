@@ -5,6 +5,7 @@ from galvatron.core.pipeline import PipeSequential
 from galvatron.core import mixed_precision_dtype, ModelInfo
 from galvatron.core import get_args
 from megatron.core import tensor_parallel
+from galvatron.core.tensor_parallel import colummn_row_reset_parameters
 
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
@@ -105,7 +106,6 @@ class GPTLoss_(nn.Module):
             tp_group=self.tp_group)
         return logits_parallel
 
-
 class GPTCls_(nn.Module):
     def __init__(self, model, parallel_loss = True, half_entorpy = True):
         super().__init__()
@@ -161,6 +161,7 @@ def construct_sequential_model(model, config):
         model_.add_module('layer_%d'%i, enc)
     model_.add_module('prenorm', GPTPreNorm_(model))
     model_.add_module('cls', GPTCls_(model))
+    GPTLoss_.reset_parameters = colummn_row_reset_parameters
     return model_
 
 class GPTModelInfo(ModelInfo):

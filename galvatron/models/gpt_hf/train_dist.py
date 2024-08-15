@@ -10,7 +10,7 @@ from galvatron.models.gpt_hf.GPTModel_hybrid_parallel import get_hybrid_parallel
 from galvatron.models.gpt_hf.dataloader import DataLoaderForGPT
 from galvatron.models.gpt_hf.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
 from galvatron.models.gpt_hf.arguments import model_args
-
+from galvatron.core.initialize import init_empty_weights
 from megatron.arguments import _print_args
 
 def train(args):
@@ -29,7 +29,12 @@ def train(args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if local_rank == 0:
         print("Creating Model...")
-    gpt_model = GPT2LMHeadModel(config)
+    if args.initialize_on_meta:
+        with init_empty_weights():
+            gpt_model = GPT2LMHeadModel(config)
+    else:
+        gpt_model = GPT2LMHeadModel(config)
+    
 
     model = construct_hybrid_parallel_model(
         model=gpt_model, 

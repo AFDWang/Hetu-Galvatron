@@ -3,6 +3,7 @@ from torch import nn
 import numpy as np
 from galvatron.core import check_hp_config, hp_config_whole_model, get_enc_groups, mixed_precision_dtype, layer_shapes_dtypes_whole_model, get_chunks
 from galvatron.core import gen_comm_groups, wrap_modules_relocation
+from galvatron.core.initialize import init_empty_weights
 
 class GalvatronModel(nn.Module):
     def __init__(self, hp_model):
@@ -30,7 +31,7 @@ class GalvatronModel(nn.Module):
             elif args.pipeline_type == "pipedream_flush":
                 loss = model.pipedream_flush_forward_backward(batch, loss_func)
         else:
-            loss = model.no_pipeline_forward_backward(batch, loss_func, profiler = profiler, iter = self.iter)
+            loss = model.no_pipeline_forward_backward(batch, loss_func, forward_only = args.profile_forward, profiler = profiler, iter = self.iter)
         self.iter += 1
         return self.loss_to_cpu(loss)
     
@@ -113,10 +114,17 @@ def construct_hybrid_parallel_model_api(
         gen_comm_groups(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['pp_deg'], hp_configs_whole['tp_consec_whole'], show_rank = 0)
     
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
-    model = construct_tensor_parallel_model(model, config, tp_groups_whole) # get_enc_groups(tp_groups_whole, module_types))
-
+    if args.initialize_on_meta and args.shape_order == "SBH":
+        with init_empty_weights(True):
+            model = construct_tensor_parallel_model(model, config, tp_groups_whole)
+    else:
+        model = construct_tensor_parallel_model(model, config, tp_groups_whole)
     # [Step 2] Construct Sequantial model using model-specific sequential function
-    model = construct_sequential_model(model, config)
+    if args.initialize_on_meta and args.shape_order == "SBH":
+        with init_empty_weights(True):
+            model = construct_sequential_model(model, config)
+    else:
+        model = construct_sequential_model(model, config)
 
     # [Step 3] Wrap Relocation modules if necessary
     model = wrap_modules_relocation(model, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole)

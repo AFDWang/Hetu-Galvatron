@@ -239,7 +239,7 @@ class PipelineParallel(nn.Module):
             if profiler is not None and i == num_microbatches - 1:
                 profiler.profile_memory(iter,"After Forward")
             
-            if get_args().profile_forward:
+            if forward_only:
                 continue
             input_tensor_grad = self.backward_step(
                     None,
@@ -247,7 +247,7 @@ class PipelineParallel(nn.Module):
                     None,
                 )
             
-        if get_args().profile_forward:
+        if forward_only:
             return losses_reduced
         if num_microbatches > 1 and self.async_grad_reduce:
             exit_no_sync_context(model)
@@ -610,8 +610,6 @@ class PipelineParallel(nn.Module):
 
     def gpipe_backward(self):
         assert(self.group_size > 1)
-        if get_args().profile_forward:
-            return
         
         if self.info:
             print('rank %d'%self.global_rank, 'start backward')

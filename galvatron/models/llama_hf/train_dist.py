@@ -10,7 +10,7 @@ from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_hybrid_para
 from galvatron.models.llama_hf.dataloader import DataLoaderForLlama
 from galvatron.models.llama_hf.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
 from galvatron.models.llama_hf.arguments import model_args
-
+from galvatron.core.initialize import init_empty_weights
 
 def train(args):
     local_rank = args.local_rank
@@ -27,7 +27,14 @@ def train(args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if local_rank == 0:
         print("Creating Model...")
-    llama_model = LlamaForCausalLM(config)
+
+    if args.initialize_on_meta:
+        with init_empty_weights():
+            llama_model = LlamaForCausalLM(config)
+    else:
+        llama_model = LlamaForCausalLM(config)
+    
+    
     model = construct_hybrid_parallel_model(
         model=llama_model, 
         model_config=config, 

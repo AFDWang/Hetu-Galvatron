@@ -12,6 +12,7 @@ from galvatron.utils import (
     write_json_config
 )
 from galvatron.core import MemoryCostModel, TimeCostModel, DpOnModel
+from scipy.optimize import curve_fit
 
 class GalvatronSearchEngine():
     def __init__(self, args):
@@ -102,7 +103,26 @@ class GalvatronSearchEngine():
         self.time_config = read_json_config(self.time_profiling_path())
         self.memory_config = read_json_config(self.memory_profiling_path())
         self.memory_config = self.convert_keys_to_int(self.memory_config)
-        self.time_profiled_list = [self.time_config['layertype_%d'%i] for i in range(self.num_layertype)]
+        if self.args.computation_mode=='linear':
+            self.time_profiled_list = [self.time_config['layertype_%d'%i] for i in range(self.num_layertype)]
+        else:
+            self.time_profiled_list = []
+            for i in range(self.num_layertype):
+                x_data = []
+                y_data = []
+                for s,t in self.time_config.items():
+                    if s.startswith('layertype_%d_'%i):
+                        x_data.append(int(s.split('bsz')[-1]))
+                        y_data.append(t)
+                assert len(x_data) >= 8, "Different bsz in computation profile of layertype_%d should not be lower than 8."%i
+                
+                def exp_decay(x, a, b, c):
+                    return a * np.exp(-b * x) + c
+                popt, pcov = curve_fit(exp_decay, x_data, y_data)
+                
+                print("Fitted parameters:", popt)
+                self.time_profiled_list.append(popt)
+                
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
         if self.args.sequence_parallel:
@@ -208,7 +228,7 @@ class GalvatronSearchEngine():
         for bsz in self.BSZs:
             pp_stage_dict = pp_stage_dict_for_bsz[bsz]
             results[bsz] = dict()
-            chunk_list = range(1,bsz)
+            chunk_list = range(1,bsz+1)
             # assert(bsz % self.args.gpu_num == 0), "bdz should be divisible by world size"
             if self.args.settle_chunk != -1:
                 chunk_list = [self.args.settle_chunk]
@@ -262,7 +282,7 @@ class GalvatronSearchEngine():
         if max_bsz > -1 and max_bsz != optimal_bsz:
             re = results[max_bsz]
             chunk = max(re,key=re.get)
-            print(f"\nMax bsz = {max_bsz} Optimal chunk = {chunk} Optimal vocab tp = {re['vtp']} Max throughput={re[chunk]['throughput']} samples/s")
+            print(f"\nMax bsz = {max_bsz} Optimal chunk = {chunk} Optimal vocab tp = {re['vtp'] if 'vtp' in re else -1} Max throughput={re[chunk]['throughput']} samples/s")
             print(f"pp_deg={re[chunk]['min_pp_deg']} Minimized timecost={re[chunk]['min_cost']} Memory remaining={re[chunk]['mem_remain']} Memory cost={re[chunk]['mem_cost']}")
             print_strategies(re[chunk]['min_res_list'])
         print("-----------------------------------------")
@@ -359,7 +379,7 @@ class GalvatronSearchEngine():
         
         min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_min_tp, min_vtp = dp_on_model.fit(bsz, min_tp, mbsz_dict = mbsz_dict)
         throughput = bsz / min_cost
-        print(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Min tp={min_tp} Vocab tp={min_vtp}")
+        print(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Min tp={min_min_tp} Vocab tp={min_vtp}")
         print(f"Max throughput={throughput} samples/s")
         print_strategies(min_res_list)
         # print(min_res_list)
@@ -437,14 +457,15 @@ class GalvatronSearchEngine():
                 if i == 0:
                     other.append(re['other'])
             print()
+        # print(other)
         for i, strategy in enumerate(self.strategies):
             if strategy[0]==1:
-                print(form_strategy(strategy), np.sum([memory_total[j][i] for j in range(self.num_layertype)])+other[i][0])
+                print(form_strategy(strategy), np.sum([memory_total[j][i] for j in range(self.num_layertype)])+other[i][min_tp][0])
             else:
                 layer_memcosts = get_layer_costs(self.layernum_list, [memory[j][i] for j in range(self.num_layertype)])
                 pp_division = pp_division_even(self.layernum_list, strategy[0])
                 mem_cost_stages = get_cost_all_stages(layer_memcosts, pp_division)
-                print(form_strategy(strategy), mem_cost_stages[0]+other[i][0], mem_cost_stages[-1]+other[i][-1])
+                print(form_strategy(strategy), mem_cost_stages[0]+other[i][min_tp][0], mem_cost_stages[-1]+other[i][min_tp][-1])
             
         print()
         timecost = [[] for _ in range(self.num_layertype)]

@@ -13,6 +13,7 @@ LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
 TRAINER="train_dist.py"
+DATA_PATH=/home/pkuhetu/lxy/dataset/gpt2/my-gpt2_text_document
 
 MODEL_ARGS="
     --model_size gpt-0.3b \
@@ -26,13 +27,18 @@ MODEL_ARGS="
 
 TRAIN_ARGS="
     --global_train_batch_size 64 \
-    --epochs 10 \
+    --train-iters 25 \
     --lr 1e-4 \
     --adam_weight_decay 0.01 \
     --dropout_prob 0.1 \
     --check_loss 1 \
     --profile 1 \
     --save_profiled_memory 0"
+
+DATA_ARGS="
+    --data-path $DATA_PATH \
+    --split 949,50,1
+"
 
 PARALLEL_ARGS="
     --pp_deg 2 \
@@ -50,4 +56,4 @@ PARALLEL_ARGS="
     --initialize_on_meta 1"
     # --galvatron_config_path ./configs/galvatron_config_gpt-2.7b_1nodes_8gpus_per_node_40GB_bf16_example.json"
 
-${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS}
+${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS}

@@ -168,5 +168,6 @@ def construct_hybrid_parallel_model_api(
     model = GalvatronModel(hp_model)
     
     model.dp_groups_whole = dp_groups_whole
+    model.tp_groups_whole = tp_groups_whole
     
     return model

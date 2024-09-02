@@ -38,9 +38,11 @@ MODEL_ARGS_SIZE67B="
 
 PROFILE_ARGS="
     --profile_type computation \
-    --profile_batch_size 2 \
-    --layernum_min 6 \
-    --layernum_max 12 \
+    --profile_min_batch_size 1 \
+    --profile_max_batch_size 16 \
+    --profile_batch_size_step 1 \
+    --layernum_min 2 \
+    --layernum_max 4 \
     --mixed_precision bf16 \
     --use-flash-attn"
 

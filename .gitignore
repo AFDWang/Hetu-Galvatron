@@ -12,3 +12,10 @@ dist/
 log/
 *.o
 *.so
+
+
+*.log
+*.json
+galvatron/profile_hardware/hostfile
+galvatron/profile_hardware/profile_reducescatter.py
+galvatron/profile_hardware/test.sh

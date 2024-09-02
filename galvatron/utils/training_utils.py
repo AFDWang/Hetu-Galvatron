@@ -35,4 +35,7 @@ def print_loss(args, loss, ep, iter):
                 loss = np.mean(loss)
         else:
             loss = loss.item() if isinstance(loss, torch.Tensor) else loss
-        print('[Epoch %d] (Iteration %d): Loss = %.3f'% (ep,iter,loss))
+        if ep == -1:
+            print('(Iteration %d): Loss = %.3f'% (iter,loss))
+        else:
+            print('[Epoch %d] (Iteration %d): Loss = %.3f'% (ep,iter,loss))

@@ -139,6 +139,7 @@ class GalvatronProfiler():
         self.start = torch.cuda.Event(enable_timing=True)
         self.end = torch.cuda.Event(enable_timing=True)
         self.time_list = []
+        self.world_size = torch.distributed.get_world_size()
     
     def profile_time_start(self, iter):
         if not self.args.profile:
@@ -162,7 +163,7 @@ class GalvatronProfiler():
                 torch.cuda.synchronize()
                 self.start.record()
             
-    def profile_time_end(self, iter):
+    def profile_time_end(self, iter, loss = None):
         if not self.args.profile:
             return
         if iter >= self.start_iter and iter < self.end_iter:
@@ -170,6 +171,23 @@ class GalvatronProfiler():
             torch.cuda.synchronize()
             iter_time = self.start.elapsed_time(self.end)/1e3
             self.time_list.append(iter_time)
+            
+            if self.rank == self.world_size - 1:
+                if loss is None:
+                    print(iter_time)
+                else:
+                    log_parts = []
+                    log_parts.append("| Iteration: {:6d} | Consumed samples: {:12d} | ")
+                    log_parts.append("Elapsed time per iteration (ms): {:.1f} | ")
+                    log_parts.append("Learning rate: {:.6e} | Loss: {:.6e} |")
+                    message = ''.join(log_parts)
+                    print(message.format(
+                        iter + 1,
+                        (iter + 1) * self.args.global_batch_size,
+                        iter_time * 1e3,
+                        self.args.lr,
+                        loss.item()
+                    ))
     
     def profile_time_python(self, iter):
         if not self.args.profile:
@@ -245,9 +263,18 @@ class GalvatronProfiler():
                 args_['global_tp_deg'] = 1
                 args_['global_checkpoint'] = 0
                 ARGS_ = self.args2str(args_)
-                CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
-                print(CMD)
-                os.system(CMD)
+                if args.profile_batch_size is None:
+                    assert (args.profile_min_batch_size is not None and args.profile_max_batch_size is not None)
+                    for i in range(args.profile_min_batch_size, args.profile_max_batch_size + 1, args.profile_batch_size_step):
+                        PROFILE_ARGS = self.prepare_profile_args(i)
+                        CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
+                        print(CMD)
+                        os.system(CMD)
+                else:
+                    assert args.profile_batch_size is not None
+                    CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
+                    print(CMD)
+                    os.system(CMD)
     
     # =============== For Processing Profiled Memory and Time ===============
     def process_profiled_data(self):
@@ -256,17 +283,33 @@ class GalvatronProfiler():
         if args.profile_type == 'computation':
             time_config_path = self.time_profiling_path()
             config = read_json_config(time_config_path)
-            key_base = self.key_format(layernum_lists[0], args.profile_batch_size)
-            val_base = config[key_base]
-            for idx, layernum in enumerate(layernum_lists[1:]):
-                key = self.key_format(layernum, args.profile_batch_size)
-                val = config[key]
-                avg_time = val - val_base
-                avg_time = avg_time / args.profile_batch_size / (args.layernum_max-args.layernum_min)
-                write_key = 'layertype_%d'%idx
-                config[write_key] = avg_time
-            write_json_config(config, time_config_path)
-            print('Already written processed computation time into env config file %s!\n'%(time_config_path))
+            if args.profile_batch_size is None:
+                assert (args.profile_min_batch_size is not None and args.profile_max_batch_size is not None)
+                for i in range(args.profile_min_batch_size, args.profile_max_batch_size + 1, args.profile_batch_size_step):
+                    key_base = self.key_format(layernum_lists[0], i)
+                    val_base = config[key_base]
+                    for idx, layernum in enumerate(layernum_lists[1:]):
+                        key = self.key_format(layernum, i)
+                        val = config[key]
+                        avg_time = val - val_base
+                        avg_time = avg_time / i / (args.layernum_max-args.layernum_min)
+                        write_key = 'layertype_%d_bsz%d'%(idx,i)
+                        config[write_key] = avg_time
+                    write_json_config(config, time_config_path)
+                    print('Already written processed computation time into env config file %s!\n'%(time_config_path))    
+            else:
+                assert args.profile_batch_size is not None
+                key_base = self.key_format(layernum_lists[0], args.profile_batch_size)
+                val_base = config[key_base]
+                for idx, layernum in enumerate(layernum_lists[1:]):
+                    key = self.key_format(layernum, args.profile_batch_size)
+                    val = config[key]
+                    avg_time = val - val_base
+                    avg_time = avg_time / args.profile_batch_size / (args.layernum_max-args.layernum_min)
+                    write_key = 'layertype_%d'%idx
+                    config[write_key] = avg_time
+                write_json_config(config, time_config_path)
+                print('Already written processed computation time into env config file %s!\n'%(time_config_path))
         elif args.profile_type == 'memory':
             memory_config_path = self.memory_profiling_path()
             config = read_json_config(memory_config_path)
@@ -637,12 +680,27 @@ class GalvatronProfiler():
         pp_divide = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
         return np.sum(layer_costs[int(np.sum(pp_divide[:stage_idx])):int(np.sum(pp_divide[:stage_idx+1]))])
     
+    def prepare_profile_args(self, batch_size = None):
+        profile_args = self.profiling_general_args(batch_size)
+        
+        PROFILE_ARGS = self.args2str(profile_args)        
+        # zsh: Revise to accept extra_args_str
+        if "extra_args_str" in self.args:
+            extra_args_list = self.args.extra_args_str.split("/")
+            for arg in extra_args_list:
+                if arg != "":
+                    PROFILE_ARGS += f" --{arg}"
+        return PROFILE_ARGS
+    
     def prepare_launch_args(self):
         assert self.layernum_arg_names is not None
         profile_arg_names = ['profile_type', 
                             'set_model_config_manually',
                             'set_layernum_manually',
                             'profile_batch_size', 
+                            'profile_min_batch_size',
+                            'profile_max_batch_size',
+                            'profile_batch_size_step',
                             'layernum_min', 
                             'layernum_max', 
                             'max_tp_deg', 
@@ -656,6 +714,8 @@ class GalvatronProfiler():
                             'make_vocab_size_divisible_by',
                             'padded_vocab_size',
                             'ffn_hidden_size',
+                            'group_query_attention',
+                            'num_query_groups',
                             'add_bias_linear',
                             'swiglu',
                             'extra_args_str']
@@ -663,15 +723,7 @@ class GalvatronProfiler():
         MODEL_ARGS = self.args2str(self.args._get_kwargs(), exclude_arg_names)
         # print(MODEL_ARGS)
                 
-        profile_args = self.profiling_general_args()
-        
-        PROFILE_ARGS = self.args2str(profile_args)        
-        # zsh: Revise to accept extra_args_str
-        if "extra_args_str" in self.args:
-            extra_args_list = self.args.extra_args_str.split("/")
-            for arg in extra_args_list:
-                if arg != "":
-                    PROFILE_ARGS += f" --{arg}"
+        PROFILE_ARGS = self.prepare_profile_args()
         # print(PROFILE_ARGS)
         
         env_args = self.env_args()
@@ -720,12 +772,12 @@ class GalvatronProfiler():
                 s += self.arg2str(key, val)
         return s
     
-    def profiling_general_args(self):
+    def profiling_general_args(self, batch_size = None):
         args = {
             'set_model_config_manually': 0,
             'set_layernum_manually': 1,
             
-            'global_train_batch_size': self.args.profile_batch_size,
+            'global_train_batch_size': self.args.profile_batch_size if batch_size is None else batch_size,
             'epochs': 10,
             'lr': 1e-4,
             'adam_weight_decay': 0.01,
@@ -734,7 +786,7 @@ class GalvatronProfiler():
             'profile': 1,
             'save_profiled_memory': 1 if self.args.profile_type == 'memory' else 0,
             'profile_forward': 1 if self.args.profile_type == 'computation' else 0,
-            'initialize_on_meta': 0,
+            'initialize_on_meta': 1,
             
             'global_tp_consec': 1,
             'sdp': 1 if self.args.profile_dp_type == 'zero3' and self.args.profile_type == 'memory' else 0,

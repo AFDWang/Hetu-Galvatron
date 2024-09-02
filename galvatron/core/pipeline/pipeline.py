@@ -61,6 +61,8 @@ class PipelineParallel(nn.Module):
 
         if layer_dp_sizes is None:
             layer_dp_sizes = [1] * len(model)
+        if layer_tp_sizes is None:
+            layer_tp_sizes = [1] * len(model)
         assert(len(model) == len(layer_dp_sizes))
         self.world_size = torch.distributed.get_world_size()
         self.global_rank = torch.distributed.get_rank()
@@ -106,6 +108,7 @@ class PipelineParallel(nn.Module):
         self.embedding_group = embedding_group
         self.tied_wte_attr_names = tied_wte_attr_names
         self.finalize_wte_grads = tied_wte_attr_names is not None and self.total_model_len > len(self.model_cur_stage)
+        self.finalize_model_grads = False
 
     def check_tensor_dtype(self, layer_output_tensor_shapes, layer_output_tensor_dtypes):
         assert(len(layer_output_tensor_shapes) == len(layer_output_tensor_dtypes))
@@ -248,12 +251,17 @@ class PipelineParallel(nn.Module):
                 )
             
         if forward_only:
+            for m in model.modules():
+                if isinstance(m,FSDP) and m._is_root:
+                    m._exec_order_data.next_iter()
             return losses_reduced
+        
         if num_microbatches > 1 and self.async_grad_reduce:
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
             
         if self.finalize_model_grads:
+            torch.distributed.barrier()
             self.finalize_model_grads_func()
 
         return losses_reduced
@@ -508,6 +516,7 @@ class PipelineParallel(nn.Module):
             fsdp_reduce_gradients(model)
         
         if self.finalize_model_grads and not forward_only:
+            torch.distributed.barrier()
             self.finalize_model_grads_func()
         
         return losses_reduced
@@ -663,6 +672,7 @@ class PipelineParallel(nn.Module):
             fsdp_reduce_gradients(model)
         
         if self.finalize_model_grads:
+            torch.distributed.barrier()
             self.finalize_model_grads_func()
         
     def to_list(self, tensor):

@@ -72,6 +72,11 @@ _TENSOR_AND_DATA_PARALLEL_GROUP_WITH_CP = None
 _GLOBAL_MEMORY_BUFFER = None
 
 
+# =========== Galvatron Begin ===============
+_TENSOR_MODEL_PARALLEL_SRC_RANK = None
+
+# =========== Galvatron End ===============
+
 def get_nccl_options(pg_name, nccl_comm_cfgs):
     """Set the NCCL process group options.
 
@@ -802,6 +807,9 @@ def get_virtual_pipeline_model_parallel_world_size():
 def get_tensor_model_parallel_src_rank():
     """Calculate the global rank corresponding to the first local rank
     in the tensor model parallel group."""
+    global _TENSOR_MODEL_PARALLEL_SRC_RANK
+    if _TENSOR_MODEL_PARALLEL_SRC_RANK is not None:
+        return _TENSOR_MODEL_PARALLEL_SRC_RANK
     global_rank = torch.distributed.get_rank()
     local_world_size = get_tensor_model_parallel_world_size()
     return (global_rank // local_world_size) * local_world_size
@@ -978,3 +986,19 @@ def destroy_model_parallel():
     _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
+    global _TENSOR_MODEL_PARALLEL_SRC_RANK
+    _TENSOR_MODEL_PARALLEL_SRC_RANK = None
+
+# =========== Galvatron ===============
+
+def set_tensor_model_parallel_group(group):
+    global _TENSOR_MODEL_PARALLEL_GROUP
+    _TENSOR_MODEL_PARALLEL_GROUP = group
+
+def set_data_parallel_group(group):
+    global _DATA_PARALLEL_GROUP
+    _DATA_PARALLEL_GROUP = group
+
+def set_tensor_model_parallel_src_rank(rank):
+    global _TENSOR_MODEL_PARALLEL_SRC_RANK
+    _TENSOR_MODEL_PARALLEL_SRC_RANK = rank

@@ -64,6 +64,9 @@ def _allreduce_word_embedding_grads(module, tied_wte_attr_name, group):
         dist.all_reduce(word_embedding._handle.flat_param.grad, group=group)
 
 def _gen_sp_group_module_dict(layer_module_types, model_layer_list, layer_tp_groups, sp_layernorm_attr_names):
+    if sp_layernorm_attr_names is None:
+        return dict()
+    
     sp_group_module_dict = dict()
     for module_type, module, tp_group in zip(layer_module_types, model_layer_list, layer_tp_groups):
         if 'enc' not in module_type and 'dec' not in module_type:

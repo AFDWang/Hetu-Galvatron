@@ -9,3 +9,4 @@ from .hybrid_parallel_config import *
 from .hybrid_parallel_model import *
 from .profiler import *
 from .search_engine import *
+from .dataloader import *

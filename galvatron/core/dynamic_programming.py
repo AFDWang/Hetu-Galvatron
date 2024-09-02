@@ -37,7 +37,7 @@ def estimate_bsz_start_16gpus(type,scale,max_bsz_estimator):
     return bsz_start
 
 class DPAlg():
-    def __init__(self, max_mem=8200, other_mem_cost=None, other_time_cost = None, layer_num=24, strategy_num=4, use_cpp_core=True) -> None:
+    def __init__(self, max_mem=8200, other_mem_cost=None, other_time_cost = None, layer_num=24, strategy_num=4, strategy_set=None, fine_grained_mode=True, use_cpp_core=True) -> None:
         assert(other_mem_cost != None)
         self.max_mem = max_mem + 1
         self.layer_num = layer_num
@@ -53,6 +53,8 @@ class DPAlg():
 
         self._mark = np.full((layer_num, self.max_mem, strategy_num), -1, dtype=np.int32)
         self.use_cpp_core = use_cpp_core
+        self.strategy_set = strategy_set
+        self.fine_grained_mode = fine_grained_mode
     
     def set_v_and_cost(self, v: np.ndarray, intra_layer_cost: np.ndarray, inter_layer_cost: np.ndarray):
         assert v.ndim == 2
@@ -88,7 +90,21 @@ class DPAlg():
         #     if min_tp != -1:
         #         return total_cost, [0] * self.layer_num, min_mem, min_tp
         #     return np.inf, None, -1, -1
-        print(self.other_mem_cost, self.other_time_cost)
+        # print(self.other_mem_cost, self.other_time_cost)
+        if not self.fine_grained_mode:
+            res_list = {k:np.full((self.layer_num), -1, dtype=np.int32) for k,v in self.other_mem_cost.items()}
+            total_cost = {k:np.inf for k,v in self.other_mem_cost.items()}
+            remaining_mem = {k:-1 for k,v in self.other_mem_cost.items()}
+            for k,v in self.other_mem_cost.items():
+                for i in range(self.strategy_num):
+                    if self.strategy_set[i][1]==k:
+                        time_cost = sum(self.intra_cost[:,i]) + sum(self.inter_cost[:,i,i]) + self.other_time_cost[k]
+                        mem_cost = sum(self.v_data[:,i]) + self.other_mem_cost[k]
+                        if self.max_mem - 1 - mem_cost >= 0 and total_cost[k] > time_cost:
+                            remaining_mem[k] = self.max_mem - 1 - mem_cost
+                            total_cost[k] = time_cost
+                            res_list[k] = np.full((self.layer_num), i, dtype=np.int32)
+            return total_cost, res_list, remaining_mem       
         if self.use_cpp_core:
             import galvatron_dp_core
             res_list = {k:np.full((self.layer_num), -1, dtype=np.int32) for k,v in self.other_mem_cost.items()}
@@ -310,7 +326,7 @@ class DpOnModel:
         # if self.max_mem - other_mem_cost <= 0:
         #     return np.inf, None, -1, np.inf, False, False
         
-        dp = DPAlg(self.max_mem, other_mem_cost, other_time_cost, layer_num, strategy_num)
+        dp = DPAlg(self.max_mem, other_mem_cost, other_time_cost, layer_num, strategy_num, strategy_set, self.config.fine_grained_mode)
         dp.set_v_and_cost(v, intra_layer_cost, inter_layer_cost)
 
         comm_cost, res_list, mem_remain, vtp = dp.fit()
@@ -452,7 +468,7 @@ class DpOnModel:
                         coe = self.comm_coe_dict['%d_1'%tp_size]
                     else:
                         coe = self.comm_coe_dict['%d_0'%tp_size]
-                inter_layer_cost[i, j] = inter_layer_cost[i, j] * coe * 1e-9
+                inter_layer_cost[i, j] = inter_layer_cost[i, j] * coe * 1e-7
 
                 # add a small bias to sort fsdp and dp
                 strategy0, strategy1 = strategy_set[i], strategy_set[j]
@@ -461,14 +477,26 @@ class DpOnModel:
                 #     case2 = 'tp' in strategy0[-1] and strategy0[-1]['tp']==strategy1[-1]['tp'] and strategy0[-1]['fsdp']!=strategy1[-1]['fsdp']
                 #     if (case1 or case2) and strategy0[-1]['fsdp']:
                 #         inter_layer_cost[i, j] = 1e-4
+                # ->f     c -> fc
                 if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp']):
-                    if 'fsdp' in strategy0[-1] and strategy0[-1]['fsdp']:
+                    if 'fsdp' in strategy1[-1] and strategy1[-1]['fsdp']:
                         inter_layer_cost[i, j] = 1e-9
-        
+                # ->c  f -> cf
                 if i != j and self.match_strategy(strategy0, strategy1, except_keys=['cpt']):
                     if 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
+                        inter_layer_cost[i, j] = 2e-9
+                # ->fc
+                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp','cpt']):
+                    if 'fsdp' in strategy1[-1] and strategy1[-1]['fsdp'] and 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
+                        inter_layer_cost[i, j] = 3e-9
+                # f->c
+                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp','cpt']) \
+                          and not self.match_strategy(strategy0, strategy1, except_keys=['fsdp']) \
+                          and not self.match_strategy(strategy0, strategy1, except_keys=['cpt']):
+                    if 'fsdp' in strategy0[-1] and strategy0[-1]['fsdp'] and 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
                         inter_layer_cost[i, j] = 1e-9
-        
+
+        # print(inter_layer_cost)
         inter_layer_cost = np.expand_dims(inter_layer_cost, axis=0).repeat(self.total_layer_num, axis=0)
         inter_layer_cost[0, :, :] = 0 # no inter-layer communication cost in first layer
 
@@ -477,40 +505,87 @@ class DpOnModel:
         comm_cost_list, res_list_list, mem_remain_list, mem_cost_list = [], [], [], []
         best_strategy_flag = {k:[False for i in range(pp_deg)] for k,v in other_mem_cost.items()}
         from_history = None
-        # best_strategy_flag, from_history = [False for i in range(pp_deg)], [False for i in range(pp_deg)]
+
+        if self.config.fine_grained_mode==0:
+            final_comm_cost = np.inf
+            vtp = -1
+            final_comm_cost_list, final_res_list_list, final_mem_remain_list, final_mem_cost_list = [], [], [], []
+
+            for si in range(len(strategy_set)):
+                s = strategy_set[si]
+                local_strategy_set = [s]
+                start_layer = 0
+                comm_cost_list, res_list_list, mem_remain_list, mem_cost_list = [], [], [], []
+                for i in range(pp_deg):
+                    nw_other_mem_cost = {k:v[i] for k,v in other_mem_cost.items()}
+                    nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
+                    mem_cost = {k:0 for k,v in other_time_cost.items()}
+                    dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], 1, local_strategy_set, self.config.fine_grained_mode)
+                    if self.pipeline_type == "pipedream_flush":
+                        v = v_list_stage_idx[i]
+                    dp.set_v_and_cost(v[start_layer:start_layer+pp_stage_list[i],si:si+1], 
+                                        intra_layer_cost[start_layer:start_layer+pp_stage_list[i],si:si+1], 
+                                        inter_layer_cost[start_layer:start_layer+pp_stage_list[i],si:si+1,si:si+1])
+                    comm_cost, res_list, mem_remain = dp.fit()
+                    for k,v in comm_cost.items():
+                        if mem_remain[k] == -1:
+                            res_list[k] = None
+                        
+                        best_strategy_flag[k][i] = res_list[k] is not None and (np.array(res_list[k]) == min_cost_strategy_ids[start_layer:start_layer+pp_stage_list[i]]).all()
+                        if res_list[k] is not None:
+                            res_list[k] = list(map(lambda x: local_strategy_set[x], res_list[k]))
+                        mem_cost[k] = self.max_mem - mem_remain[k] if mem_remain[k] >= 0 else np.inf
+                        
+                    comm_cost_list.append(comm_cost)
+                    res_list_list.append(res_list)
+                    mem_remain_list.append(mem_remain)
+                    mem_cost_list.append(mem_cost)
+                    start_layer += pp_stage_list[i]
+                
+                for k,v in other_mem_cost.items():
+                    nw_res_list_list = [v2[k] for v2 in res_list_list]
+                    nw_comm_cost_list = [v2[k] for v2 in comm_cost_list]
+                    if self.model_microbatch_after_dp:
+                        if None not in nw_res_list_list:
+                            res_list = []
+                            for res in nw_res_list_list:
+                                res_list += res
+                            pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.timecost_model_args, res_list, pp_stage_list, chunks, bsz, min_tp)
+                            # print(sum(comm_cost_list),pipeline_cost)
+                            # print(pp_stage_list, res_list_list)
+                            if final_comm_cost > pipeline_cost:
+                                final_comm_cost = pipeline_cost
+                                vtp = k
+                                final_res_list_list = [v2[vtp] for v2 in res_list_list]
+                                final_mem_remain_list = [v2[vtp] for v2 in mem_remain_list]
+                                final_mem_cost_list = [v2[vtp] for v2 in mem_cost_list]
+                    else:
+                        final_comm_cost = sum(nw_comm_cost_list)
+                        
+                if vtp == -1:
+                    res_list_list, mem_remain_list, mem_cost_list = None, [-1 for v2 in mem_remain_list], [-1 for v2 in mem_cost_list]
+            return final_comm_cost, final_res_list_list, final_mem_remain_list, final_mem_cost_list, vtp, best_strategy_flag, from_history
+        
         for i in range(pp_deg):
-            # Apply history result
-            # if history_results[i] is not None:
-            #     re = history_results[i]
-            #     comm_cost, res_list, mem_remain, mem_cost = \
-            #         re['comm_cost'], re['res_list'], self.max_mem-re['mem_cost'], re['mem_cost']
-            #     best_strategy_flag[i], from_history[i] = True, True
-            # else:
-            if True:
-                # if self.max_mem - other_mem_cost[i] <= 0:
-                #     return np.inf, None, -1, np.inf, False, False
-                nw_other_mem_cost = {k:v[i] for k,v in other_mem_cost.items()}
-                nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
-                mem_cost = {k:0 for k,v in other_time_cost.items()}
-                dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], strategy_num)
-                if self.pipeline_type == "pipedream_flush":
-                    v = v_list_stage_idx[i]
-                dp.set_v_and_cost(v[start_layer:start_layer+pp_stage_list[i]], 
-                                    intra_layer_cost[start_layer:start_layer+pp_stage_list[i]], 
-                                    inter_layer_cost[start_layer:start_layer+pp_stage_list[i]])
-                comm_cost, res_list, mem_remain = dp.fit()
-                for k,v in comm_cost.items():
-                    if mem_remain[k] == -1:
-                        res_list[k] = None
-                    
-                    best_strategy_flag[k][i] = res_list[k] is not None and (np.array(res_list[k]) == min_cost_strategy_ids[start_layer:start_layer+pp_stage_list[i]]).all()
-                    if res_list[k] is not None:
-                        res_list[k] = list(map(lambda x: strategy_set[x], res_list[k]))
-                    mem_cost[k] = self.max_mem - mem_remain[k] if mem_remain[k] >= 0 else np.inf
-                # Write search result into history
-                # if self.search_history is not None and best_strategy_flag[i]:
-                #     key = (bsz, mbsz, pp_deg, i)
-                #     self.search_history[key]={'comm_cost': comm_cost, 'res_list': res_list, 'mem_cost': mem_cost}
+            nw_other_mem_cost = {k:v[i] for k,v in other_mem_cost.items()}
+            nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
+            mem_cost = {k:0 for k,v in other_time_cost.items()}
+            dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], strategy_num, strategy_set, self.config.fine_grained_mode)
+            if self.pipeline_type == "pipedream_flush":
+                v = v_list_stage_idx[i]
+            dp.set_v_and_cost(v[start_layer:start_layer+pp_stage_list[i]], 
+                                intra_layer_cost[start_layer:start_layer+pp_stage_list[i]], 
+                                inter_layer_cost[start_layer:start_layer+pp_stage_list[i]])
+            comm_cost, res_list, mem_remain = dp.fit()
+            for k,v in comm_cost.items():
+                if mem_remain[k] == -1:
+                    res_list[k] = None
+                
+                best_strategy_flag[k][i] = res_list[k] is not None and (np.array(res_list[k]) == min_cost_strategy_ids[start_layer:start_layer+pp_stage_list[i]]).all()
+                if res_list[k] is not None:
+                    res_list[k] = list(map(lambda x: strategy_set[x], res_list[k]))
+                mem_cost[k] = self.max_mem - mem_remain[k] if mem_remain[k] >= 0 else np.inf
+                
             comm_cost_list.append(comm_cost)
             res_list_list.append(res_list)
             mem_remain_list.append(mem_remain)

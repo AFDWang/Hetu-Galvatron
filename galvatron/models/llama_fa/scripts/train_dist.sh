@@ -4,6 +4,7 @@ export MASTER_ADDR=$MASTER_ADDR
 export MASTER_PORT=$MASTER_PORT
 # export NCCL_SOCKET_IFNAME=ib0
 export NODE_RANK=$RANK
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 LAUNCHER="python3 -m torch.distributed.launch"
 LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"
@@ -47,6 +48,6 @@ PARALLEL_ARGS="
     --use-flash-attn \
     --shape_order BSH \
     --initialize_on_meta 1 \
-    --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
+    --galvatron_config_path ./configs/galvatron_config_hidden4096_head32_seqlen2048_2nodes_8gpus_per_node_34GB_bf16_bsz48_[tpconsec_off].json"
 
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS}

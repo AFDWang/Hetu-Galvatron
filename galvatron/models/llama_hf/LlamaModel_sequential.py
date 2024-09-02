@@ -4,6 +4,7 @@ from galvatron.core.pipeline import PipeSequential
 from galvatron.core import mixed_precision_dtype, ModelInfo
 from galvatron.core import get_args
 from megatron.core import tensor_parallel
+from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
 
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
@@ -63,10 +64,9 @@ class LlamaLayers_(nn.Module):
         return hidden_states, input_ids
 
 class LlamaPreNorm_(nn.Module):
-    def __init__(self, model):
+    def __init__(self, model, config):
         super().__init__()
-        model = model.model
-        self.norm = model.norm
+        self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(self, hidden_states, input_ids):
         hidden_states = self.norm(hidden_states)
@@ -144,7 +144,7 @@ def construct_sequential_model(model, config):
     for i in range(config.num_hidden_layers):
         enc = LlamaLayers_(model, i)
         model_.add_module('layer_%d'%i, enc)
-    model_.add_module('prenorm', LlamaPreNorm_(model))
+    model_.add_module('prenorm', LlamaPreNorm_(model, config))
     model_.add_module('cls', LlamaCls_(model))
     return model_
 

@@ -2,7 +2,7 @@ from transformers import LlamaForCausalLM
 from galvatron.core import construct_hybrid_parallel_model_api, get_hybrid_parallel_configs_api
 from galvatron.models.llama_hf.LlamaModel_sequential import LlamaModelInfo, construct_sequential_model
 from galvatron.models.llama_hf.LlamaModel_tensor_parallel import construct_tensor_parallel_model, LlamaLayer_tp
-from transformers.models.llama.modeling_llama import LlamaRMSNorm
+from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
 
 def get_hybrid_parallel_configs(model_config, training_args):
     hybrid_parallel_configs = get_hybrid_parallel_configs_api(model_config, training_args, LlamaModelInfo)

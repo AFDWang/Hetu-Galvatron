@@ -149,7 +149,16 @@ def galvatron_profile_args(parser):
         "--set_layernum_manually", type=int, default=1, help="Whether to set layernum config manually (doesn't overwrite other model configs)."
     )
     group.add_argument(
-        "--profile_batch_size", type=int, default=32, help="Galvatron profiling batch size"
+        "--profile_batch_size", type=int, default=None, help="Galvatron profiling batch size"
+    )
+    group.add_argument(
+        "--profile_min_batch_size", type=int, default=None, help="Galvatron profiling min batch size"
+    )
+    group.add_argument(
+        "--profile_max_batch_size", type=int, default=None, help="Galvatron profiling max batch size"
+    )
+    group.add_argument(
+        "--profile_batch_size_step", type=int, default=1, help="Galvatron profiling batch size step"
     )
     group.add_argument(
         "--layernum_min", type=int, default=1, help="Layernum min for profiling."
@@ -319,5 +328,7 @@ def galvatron_search_args(parser):
                        help='Pad the vocab size to be divisible by this value.'
                        'This is added for computational efficieny reasons.')
     
+    group.add_argument("--fine_grained_mode", type=int, default=1, help="Enable fine-grained search.")
+    group.add_argument("--computation_mode", type=str, default="linear", help="Mode of computation cost model.", choices=["curve","linear"])
     
     return parser

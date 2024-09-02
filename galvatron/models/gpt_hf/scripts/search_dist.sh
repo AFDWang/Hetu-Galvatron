@@ -13,7 +13,7 @@ BSZ_ARGS="
     --min_bsz 16 \
     --max_bsz 1024 \
     --bsz_scale 16 \
-    --settle_bsz -1 \
+    --settle_bsz 128 \
     --recommend_min_bsz 0 \
     --settle_chunk -1
 "
@@ -28,7 +28,9 @@ SEARCH_SPACE_ARGS="
     --disable_vtp 0 \
     --disable_tp_consec 1 \
     --max_tp_deg 8 \
-    --max_pp_deg 8
+    --max_pp_deg 8 \
+    --fine_grained_mode 1 \
+    --computation_mode curve \
 "
 
 SEARCH_ARGS="

@@ -212,7 +212,12 @@ class TimeCostModel:
             self.checkpoint = True
 
         # forward & backward computation time of whole model (depending on dummy layer_num)
-        self.fct = forward_computation_time * self.bs / self.tp_size * self.layer_num 
+        if isinstance(forward_computation_time,np.ndarray):
+            def exp_decay(x, a, b, c):
+                return (a * np.exp(-b * x) + c) * x
+            self.fct = exp_decay(self.bs / self.tp_size, *forward_computation_time) * self.layer_num
+        else:
+            self.fct = forward_computation_time * self.bs / self.tp_size * self.layer_num 
         self.bct = self.fct * bct_fct_coe
         self.bct_overlap_coe = bct_overlap_coe
         self.bct_overlap = self.bct*bct_overlap_coe
@@ -240,8 +245,8 @@ class TimeCostModel:
         self.use_zero2_for_dp = use_zero2_for_dp
         if self.checkpoint:
             # self.fct *= 2
-            self.bct += self.fct * 0.5
-            self.tp_message_size *= 1.5
+            self.bct += self.fct #  * 0.5
+            self.tp_message_size *= 2 # 1.5
 
         if mixed_precision:
             self.dp_message_size = self.dp_message_size/2

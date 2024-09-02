@@ -8,6 +8,7 @@ path_dict =  {
     'llama-7b': 'llama-7b.json',
     'llama-13b': 'llama-13b.json',
     'llama-30b': 'llama-30b.json',
+    'llama2-70b': 'llama2-70b.json',
 }
 
 def config_from_meta(model_type) -> LlamaConfig:
@@ -15,11 +16,17 @@ def config_from_meta(model_type) -> LlamaConfig:
     path_dict = dict_join_dirname(path_dict, os.path.dirname(__file__))
     with open(path_dict[model_type]) as f:
         params = json.load(f)
+    if "n_kv_heads" not in params:
+        params['n_kv_heads'] = None
+    if 'ffn_dim' not in params:
+        params['ffn_dim'] = params['dim'] * 8 // 3 + params['multiple_of'] - 1
     return LlamaConfig(
-        hidden_size=params['dim'], intermediate_size= (params['dim'] * 8 // 3 + params['multiple_of'] - 1) // params['multiple_of'] * params['multiple_of'],
+        hidden_size=params['dim'], intermediate_size= params['ffn_dim'],
         num_attention_heads=params['n_heads'],
         num_hidden_layers=params['n_layers'],
-        rms_norm_eps=params['norm_eps']
+        rms_norm_eps=params['norm_eps'],
+        num_key_value_heads=params['n_kv_heads'],
+        max_position_embeddings=params['n_positions'],
     )
     
 # ============= Set Model Config and Arguments =============
@@ -29,7 +36,7 @@ def set_model_config(config, args, overwrite_args=True):
     if args.set_model_config_manually:
         config.vocab_size = args.vocab_size
         config.hidden_size = args.hidden_size
-        config.intermediate_size = (args.hidden_size * 8 // 3 + 256 - 1) // 256 * 256
+        config.intermediate_size = args.hidden_size * 8 // 3
         config.num_hidden_layers = args.num_hidden_layers
         config.num_attention_heads = args.num_attention_heads
         config.max_position_embeddings = args.seq_length
@@ -66,8 +73,11 @@ def overwrite_model_args(config, args):
     args.add_bias_linear = False
     args.swiglu = True
     if getattr(args, "padded_vocab_size", None) is None:
-        args.padded_vocab_size = (config.vocab_size + args.make_vocab_size_divisible_by - 1) // args.make_vocab_size_divisible_by * args.make_vocab_size_divisible_by
-
+        args.padded_vocab_size = config.vocab_size
+        # args.padded_vocab_size = (config.vocab_size + args.make_vocab_size_divisible_by - 1 // args.make_vocab_size_divisible_by * args.make_vocab_size_divisible_by)
+    if config.num_key_value_heads != config.num_attention_heads:
+        args.group_query_attention = True
+        args.num_query_groups = config.num_key_value_heads
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):

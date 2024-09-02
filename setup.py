@@ -51,7 +51,10 @@ _deps = [
     "attrs>=21.4.0",
     "yacs>=0.1.8",
     "six>=1.15.0",
-    "sentencepiece>=0.1.95"
+    "sentencepiece>=0.1.95",
+    "pybind11>=2.9.1",
+    "scipy>=1.10.1",
+
 ]
 
 if FLASH_ATTN_INSTALL:

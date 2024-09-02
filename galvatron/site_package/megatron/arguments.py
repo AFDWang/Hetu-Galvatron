@@ -415,7 +415,7 @@ def validate_args(args, defaults={}):
                 "When using expert parallelism and tensor parallelism, sequence parallelism must be used."
 
     # Print arguments.
-    _print_args("arguments", args)
+    # _print_args("arguments", args)
     retro_args = get_retro_args()
     if retro_args and args != retro_args:
         _print_args("retro arguments", types.SimpleNamespace(**{k:v for k,v in vars(retro_args).items() if k.startswith("retro")}, rank=args.rank))
@@ -429,8 +429,46 @@ def _print_args(title, args):
         print(f'------------------------ {title} ------------------------',
               flush=True)
         str_list = []
+        no_used_args = [
+            'accumulate_allreduce_grads_in_fp32',
+            'attention_softmax_in_fp32',
+            'bf16',
+            'bias_gelu_fusion',
+            'data_parallel_size',
+            'data_path', # DONE
+            'dropout_prob',
+            'encoder_num_layers',
+            'encoder_seq_length',
+            'init_method_std', # TODO
+            'initial_loss_scale',
+            'lr_decay_style', # TODO
+            'lr_warmup_fraction', # TODO
+            'masked_softmax_fusion',
+            'max_position_embeddings',
+            'min_lr', #TODO?
+            'no_load_optim',
+            'no_load_rng',
+            'num_layers',
+            'params_dtype',
+            'pipeline_model_parallel_size',
+            'position_embedding_type',
+            'recompute_granularity',
+            'recompute_method',
+            'recompute_num_layers',
+            'save',
+            'save_interval',
+            'tensor_model_parallel_size',
+            'tokenizer_model', # DONE
+            'tokenizer_type', # DONE
+            'train_iters', # DONE
+            'transformer_pipeline_model_parallel_size',
+            'untie_embeddings_and_output_weights', # DONE
+            'use_cpu_initialization'
+        ]
         for arg in vars(args):
             dots = '.' * (48 - len(arg))
+            if arg in no_used_args:
+                continue
             str_list.append('  {} {} {}'.format(arg, dots, getattr(args, arg)))
         for arg in sorted(str_list, key=lambda x: x.lower()):
             print(arg, flush=True)

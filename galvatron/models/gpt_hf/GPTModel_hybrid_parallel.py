@@ -24,6 +24,7 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
         wrap_checkpoint_block_name=wrap_checkpoint_block_name,
         wrap_other_block_name=['wte','wpe','lm_head'],
         tied_wte_attr_names=['wte', 'lm_head'],
+        sp_layernorm_attr_names=['layer.attention.LayerNorm', 'layer.mlp.LayerNorm'],
     )
     return hp_model
 

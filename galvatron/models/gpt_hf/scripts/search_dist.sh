@@ -1,4 +1,4 @@
-export NUM_NODES=2
+export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
 
 MODEL_SIZE="gpt-6.7b"
@@ -29,7 +29,7 @@ SEARCH_SPACE_ARGS="
     --disable_tp_consec 1 \
     --max_tp_deg 8 \
     --max_pp_deg 8 \
-    --fine_grained_mode 1 \
+    --fine_grained_mode 0 \
     --computation_mode curve \
 "
 
@@ -51,7 +51,7 @@ BACKGROUND=1
 
 if [ $BACKGROUND -eq 1 ]; then
     echo "Search in background..."
-    OUTPUT_FILE="Search_${MODEL_SIZE}_${MEMORY}GB_640bs_${NUM_NODES}Nodes_${NUM_GPUS_PER_NODE}GPUs_per_node.log"
+    OUTPUT_FILE="Search_${MODEL_SIZE}_${MEMORY}GB_${NUM_NODES}Nodes_${NUM_GPUS_PER_NODE}GPUs_per_node.log"
     nohup python3 search_dist.py ${SEARCH_ARGS} 1> ${OUTPUT_FILE} 2>&1 &
 else
     echo "Search in foreground..."

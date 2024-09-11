@@ -4,6 +4,7 @@ export MASTER_ADDR=$MASTER_ADDR
 export MASTER_PORT=$MASTER_PORT
 # export NCCL_SOCKET_IFNAME=ib0
 export NODE_RANK=$RANK
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 LAUNCHER="python3 -m torch.distributed.launch"
 LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"

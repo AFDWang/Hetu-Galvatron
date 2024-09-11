@@ -164,6 +164,7 @@ class DpOnModel:
                     timecost_model, 
                     memcost_model_args,
                     timecost_model_args,
+                    other_time_profiled_list,
                     max_mem=8192, 
                     layer_num=24,
                     multi_layer_type=False,
@@ -180,6 +181,7 @@ class DpOnModel:
         self.timecost_model = timecost_model
         self.memcost_model_args = memcost_model_args
         self.timecost_model_args = timecost_model_args
+        self.other_time_profiled_list = other_time_profiled_list
         self.max_mem = max_mem
         self.layer_num = layer_num
         self.n_gpu = strategies_set[0][0] * strategies_set[0][1] * strategies_set[0][2]
@@ -390,15 +392,29 @@ class DpOnModel:
                 for k, v in mem_cost_list[0]['other'].items():
                     other_mem_cost[k] = np.ceil(v).astype(int)
                     other_time_cost[k] = [0] * pp_deg
+                    comm_factor = 2 * (k - 1) / k * (mbsz / min_tp * k)
+                    data_size = (self.timecost_model_args[0]["sequence_length"] * 
+                                self.timecost_model_args[0]["hidden_size"] * 2 * 4 / 1024 / 1024 / 1024)
+
                     if k == 1 or k == self.n_gpu:
-                        other_time_cost[k][0] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["hidden_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d'%k])
-                        other_time_cost[k][-1] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["vocab_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d'%k])
+                        comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d' % k]
+                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
                     else:
-                        other_time_cost[k][0] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["hidden_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d_0'%k])
-                        other_time_cost[k][-1] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["vocab_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d_0'%k])
+                        comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d_0' % k]
+                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
+                        
                     if self.config.mixed_precision:
                         for t in range(pp_deg):
                             other_time_cost[k][t] /= 2 # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
+                    if isinstance(self.other_time_profiled_list[i],np.ndarray):
+                        def linear_func(x, m, c):
+                            return m * x + c
+                        other_time_cost[k][0] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
+                        other_time_cost[k][-1] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
+                    else:
+                        other_time_cost[k][0] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
+                        other_time_cost[k][-1] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
+                    
                 v = [cost['enc_total'] for cost in mem_cost_list]
                 v = np.ceil(np.array(v)).astype(np.int32)
                 v = v.reshape(1, -1).repeat(self.layer_num[i], axis=0)
@@ -413,15 +429,30 @@ class DpOnModel:
                     for k, v in mem_cost_list[0]['other'].items():
                         other_mem_cost[k] = np.ceil(v).astype(int)
                         other_time_cost[k] = [0] * pp_deg
+                        
+                        comm_factor = 2 * (k - 1) / k * (mbsz / min_tp * k)
+                        data_size = (self.timecost_model_args[0]["sequence_length"] * 
+                                    self.timecost_model_args[0]["hidden_size"] * 2 * 4 / 1024 / 1024 / 1024)
+
                         if k == 1 or k == self.n_gpu:
-                            other_time_cost[k][0] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["hidden_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d'%k])
-                            other_time_cost[k][-1] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["vocab_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d'%k])
+                            comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d' % k]
+                            other_time_cost[k][0] += comm_factor * data_size * comm_coe
                         else:
-                            other_time_cost[k][0] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["hidden_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d_0'%k])
-                            other_time_cost[k][-1] += 2*(k-1)/k*(mbsz*k*self.timecost_model_args[0]["sequence_length"]*(self.timecost_model_args[0]["vocab_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args[0]['comm_coe_dict']['%d_0'%k])
+                            comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d_0' % k]
+                            other_time_cost[k][0] += comm_factor * data_size * comm_coe
+                            
                         if self.config.mixed_precision:
                             for t in range(pp_deg):
                                 other_time_cost[k][t] /= 2
+                        if isinstance(self.other_time_profiled_list[i],np.ndarray):
+                            def linear_func(x, m, c):
+                                return m * x + c
+                            other_time_cost[k][0] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
+                            other_time_cost[k][-1] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
+                        else:
+                            other_time_cost[k][0] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
+                            other_time_cost[k][-1] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
+                        
                     # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
                     v = [cost['enc_total'] for cost in mem_cost_list]
                     v = np.ceil(np.array(v)).astype(np.int32)
@@ -550,7 +581,7 @@ class DpOnModel:
                             res_list = []
                             for res in nw_res_list_list:
                                 res_list += res
-                            pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.timecost_model_args, res_list, pp_stage_list, chunks, bsz, min_tp)
+                            pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.timecost_model_args, res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[k])
                             # print(sum(comm_cost_list),pipeline_cost)
                             # print(pp_stage_list, res_list_list)
                             if final_comm_cost > pipeline_cost:
@@ -601,7 +632,7 @@ class DpOnModel:
                     res_list = []
                     for res in nw_res_list_list:
                         res_list += res
-                    pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.timecost_model_args, res_list, pp_stage_list, chunks, bsz, min_tp)
+                    pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.timecost_model_args, res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[k])
                     # print(sum(comm_cost_list),pipeline_cost)
                     # print(pp_stage_list, res_list_list)
                     if comm_cost > pipeline_cost:

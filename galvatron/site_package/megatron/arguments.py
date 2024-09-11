@@ -353,10 +353,12 @@ def validate_args(args, defaults={}):
     args.async_tensor_model_parallel_allreduce = False
 
     if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') != "1":
-        if args.sequence_parallel:
-            raise RuntimeError(
-                "Using sequence parallelism requires setting the environment variable "
-                "CUDA_DEVICE_MAX_CONNECTIONS to 1")
+        # --------- lxy add ----------
+        # Support comm compute overlap in FSDP
+        # if args.sequence_parallel:
+        #     raise RuntimeError(
+        #         "Using sequence parallelism requires setting the environment variable "
+        #         "CUDA_DEVICE_MAX_CONNECTIONS to 1")
         if args.async_tensor_model_parallel_allreduce:
             raise RuntimeError(
                 "Using async gradient all reduce requires setting the environment "

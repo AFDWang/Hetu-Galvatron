@@ -13,6 +13,7 @@ from galvatron.utils import (
 )
 from galvatron.core import MemoryCostModel, TimeCostModel, DpOnModel
 from scipy.optimize import curve_fit
+from galvatron.core.cost_model import pipeline_costmodel
 
 class GalvatronSearchEngine():
     def __init__(self, args):
@@ -105,6 +106,7 @@ class GalvatronSearchEngine():
         self.memory_config = self.convert_keys_to_int(self.memory_config)
         if self.args.computation_mode=='linear':
             self.time_profiled_list = [self.time_config['layertype_%d'%i] for i in range(self.num_layertype)]
+            self.other_time_profiled_list = [self.time_config['layertype_%d_other'%i] for i in range(self.num_layertype)]
         else:
             self.time_profiled_list = []
             for i in range(self.num_layertype):
@@ -113,15 +115,31 @@ class GalvatronSearchEngine():
                 for s,t in self.time_config.items():
                     if s.startswith('layertype_%d_'%i):
                         x_data.append(int(s.split('bsz')[-1]))
-                        y_data.append(t)
+                        y_data.append(t * x_data[-1])
                 assert len(x_data) >= 8, "Different bsz in computation profile of layertype_%d should not be lower than 8."%i
                 
-                def exp_decay(x, a, b, c):
-                    return a * np.exp(-b * x) + c
-                popt, pcov = curve_fit(exp_decay, x_data, y_data)
+                def linear_func(x, m, c):
+                    return m * x + c
+                popt, pcov = curve_fit(linear_func, x_data, y_data)
                 
                 print("Fitted parameters:", popt)
                 self.time_profiled_list.append(popt)
+            self.other_time_profiled_list = []
+            for i in range(self.num_layertype):
+                x_data = []
+                y_data = []
+                for s,t in self.time_config.items():
+                    if s.startswith('layertype_other_%d_'%i):
+                        x_data.append(int(s.split('bsz')[-1]))
+                        y_data.append(t * x_data[-1])
+                assert len(x_data) >= 8, "Different bsz in computation profile of layertype_other_%d should not be lower than 8."%i
+                
+                def linear_func(x, m, c):
+                    return m * x + c
+                popt, pcov = curve_fit(linear_func, x_data, y_data)
+                
+                print("Fitted parameters other:", popt)
+                self.other_time_profiled_list.append(popt)
                 
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
@@ -361,6 +379,7 @@ class GalvatronSearchEngine():
                                 TimeCostModel, 
                                 memcost_model_args=self.memcost_model_args_list,
                                 timecost_model_args=self.timecost_model_args_list,
+                                other_time_profiled_list=self.other_time_profiled_list,
                                 max_mem=self.memory_constraint,
                                 layer_num=self.layernum_list,
                                 multi_layer_type = True,
@@ -451,7 +470,7 @@ class GalvatronSearchEngine():
             for strategy in self.strategies:
                 re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz = mbsz_dict[strategy[0]], min_tp = min_tp, **memcost_model_args).get_memory_cost()
                 re_total = re['enc_total']*layer_num/strategy[0]
-                print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other']])
+                print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other'][min_tp]])
                 memory[i].append(re['enc_total'])
                 memory_total[i].append(re['enc_total']*layer_num)
                 if i == 0:
@@ -466,20 +485,56 @@ class GalvatronSearchEngine():
                 pp_division = pp_division_even(self.layernum_list, strategy[0])
                 mem_cost_stages = get_cost_all_stages(layer_memcosts, pp_division)
                 print(form_strategy(strategy), mem_cost_stages[0]+other[i][min_tp][0], mem_cost_stages[-1]+other[i][min_tp][-1])
-            
+        
         print()
-        timecost = [[] for _ in range(self.num_layertype)]
-        timecost_total = [[] for _ in range(self.num_layertype)]
-        for i in range(self.num_layertype):
+        if self.num_layertype == 1:
             for strategy in self.strategies:
-                re = TimeCostModel(strategy, global_batch_size=bsz, **timecost_model_args).gen_result()
-                print(form_strategy(strategy), re*layer_num)
-                timecost[i].append(re)
-                timecost_total[i].append(re*layer_num)
-            print()
-        if self.num_layertype > 1:
-            for i, strategy in enumerate(self.strategies):
-                print(form_strategy(strategy), np.sum([timecost_total[j][i] for j in range(self.num_layertype)]))
+                other_time_cost = {}
+                n_gpu = self.strategies[0][0] * self.strategies[0][1] * self.strategies[0][2]
+                for k, v in other[0].items():
+                    other_time_cost[k] = [0] * strategy[0]
+                    
+                    comm_factor = 2 * (k - 1) / k * (mbsz_dict[strategy[0]] / min_tp * k)
+                    data_size = (self.timecost_model_args_list[0]["sequence_length"] * 
+                                self.timecost_model_args_list[0]["hidden_size"] * 2 * 4 / 1024 / 1024 / 1024)
+
+                    if k == 1 or k == n_gpu:
+                        comm_coe = self.timecost_model_args_list[0]['comm_coe_dict']['%d' % k]
+                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
+                    else:
+                        comm_coe = self.timecost_model_args_list[0]['comm_coe_dict']['%d_0' % k]
+                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
+                    if self.args.mixed_precision:
+                        for t in range(strategy[0]):
+                            other_time_cost[k][t] /= 2
+                    if isinstance(self.other_time_profiled_list[0],np.ndarray):
+                        def linear_func(x, m, c):
+                            return m * x + c
+                        other_time_cost[k][0] += linear_func(mbsz_dict[strategy[0]] / min_tp, *self.other_time_profiled_list[0]) * 0.001 * 3 / 2
+                        other_time_cost[k][-1] += linear_func(mbsz_dict[strategy[0]] / min_tp, *self.other_time_profiled_list[0]) * 0.001 * 3 / 2
+                    else:
+                        other_time_cost[k][0] += mbsz_dict[strategy[0]] / min_tp * self.other_time_profiled_list[0] * 0.001 * 3 / 2
+                        other_time_cost[k][-1] += mbsz_dict[strategy[0]] / min_tp * self.other_time_profiled_list[0] * 0.001 * 3 / 2
+                    
+                res = []
+                for i in self.layernum_list:
+                    res += [strategy for _ in range(i)]
+                
+                # print(other_time_cost[1])
+                pipeline_cost = pipeline_costmodel(TimeCostModel,
+                                                    self.layernum_list,
+                                                    [timecost_model_args],
+                                                    res,
+                                                    pp_division_even(self.layernum_list, strategy[0]),
+                                                    [chunk],
+                                                    bsz,
+                                                    min_tp,
+                                                    other_time_cost[min_tp])
+                print(form_strategy(strategy), pipeline_cost)
+        else:
+            if self.num_layertype > 1:
+                for i, strategy in enumerate(self.strategies):
+                    print(form_strategy(strategy), np.sum([timecost_total[j][i] for j in range(self.num_layertype)]))
         
     # =============== Strategies & Search Space Utils ===============
     def generate_strategies(self):

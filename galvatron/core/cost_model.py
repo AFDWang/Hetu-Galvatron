@@ -127,9 +127,9 @@ class MemoryCostModel:
                         else:
                             tp_other_memcosts[-1] -= peak_reduction_with_chunks * other_layers_bsz_last * (1 - 1 / chunks)
 
-            if checkpoint:
-                for i in range(len(tp_other_memcosts)):
-                    tp_other_memcosts[i] += tp_activation_per_bsz_dict[1] * self.bsz // self.tp_size
+            # if checkpoint:
+            #     for i in range(len(tp_other_memcosts)):
+            #         tp_other_memcosts[i] += tp_activation_per_bsz_dict[self.tp_size] * mbsz
 
             for i in range(len(tp_other_memcosts)):
                 tp_other_memcosts[i] += pytorch_context_mem
@@ -213,9 +213,9 @@ class TimeCostModel:
 
         # forward & backward computation time of whole model (depending on dummy layer_num)
         if isinstance(forward_computation_time,np.ndarray):
-            def exp_decay(x, a, b, c):
-                return (a * np.exp(-b * x) + c) * x
-            self.fct = exp_decay(self.bs / self.tp_size, *forward_computation_time) * self.layer_num
+            def linear_func(x, m, c):
+                return m * x + c
+            self.fct = linear_func(self.bs / self.tp_size, *forward_computation_time) * self.layer_num
         else:
             self.fct = forward_computation_time * self.bs / self.tp_size * self.layer_num 
         self.bct = self.fct * bct_fct_coe
@@ -246,7 +246,7 @@ class TimeCostModel:
         if self.checkpoint:
             # self.fct *= 2
             self.bct += self.fct #  * 0.5
-            self.tp_message_size *= 2 # 1.5
+            self.tp_message_size *= 1.5
 
         if mixed_precision:
             self.dp_message_size = self.dp_message_size/2
@@ -399,7 +399,7 @@ def get_time_cost_all_stages(layer_timecosts, pp_stage_division):
         stage_timecosts.append(np.sum(layer_timecosts[layer_start_id:layer_end_id]))
     return stage_timecosts
 
-def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, strategies, partition, chunks, bsz, min_tp, return_stage_cost=False):
+def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, strategies, partition, chunks, bsz, min_tp, other_time_cost, return_stage_cost=False):
     if strategies is None:
         if return_stage_cost:
             return [np.inf] * len(partition), np.inf
@@ -434,6 +434,9 @@ def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, s
     timecosts_bsz_compute = [timecosts_dict_compute[layer_type_ids[i]][form_strategy(strategies[i])] for i in range(layer_num)]
     stage_costs_bsz_chunked = get_time_cost_all_stages(timecosts_bsz_chunked, partition)
     stage_costs_compute = get_time_cost_all_stages(timecosts_bsz_compute, partition)
+    assert(len(other_time_cost) == len(stage_costs_compute))
+    for i in range(len(other_time_cost)):
+        stage_costs_compute[i] += other_time_cost[i]
     # print(timecosts_bsz_chunked, stage_costs_bsz_chunked, np.sum(stage_costs_bsz_chunked))
     # print(stage_costs_compute, np.max(stage_costs_compute))
     # print(np.sum(stage_costs_bsz_chunked), np.max(stage_costs_compute), np.max(stage_costs_compute) * (max_chunk-1))
@@ -444,7 +447,10 @@ def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, s
     # p2p & reduce async
     stage_costs_reduce = [total for total in stage_costs_bsz_chunked]
     # print(stage_costs_compute, stage_costs_reduce, stage_costs_bsz_chunked)
-    result = np.max(stage_costs_compute) * (max_chunk-1+pp_deg)
+    result = np.sum(stage_costs_compute)
+    # assume t_rank0 > t_rank1 > ... , cool down bubble can be overlapped
+    result += max(np.max(stage_costs_compute) * 2/3 * (max_chunk - 1), stage_costs_compute[-1] * (max_chunk - 1))
+    # result = np.max(stage_costs_compute) * (max_chunk-1+pp_deg)
     for i in range(pp_deg):
         stage_costs_reduce[i] -= np.sum(stage_costs_compute[:i+1])
     reduce_time = np.max(stage_costs_reduce)

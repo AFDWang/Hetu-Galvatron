@@ -426,19 +426,21 @@ class PipelineParallel(nn.Module):
                     raise NotImplementedError('Already use uniform implementations for sync/async gradient reduction. Please set async_grad_reduce=True.')
                     pre_pipeline_backward(num_microbatches, bwd_num, self.model_cur_stage, self.checkpoint_flags_stage)
 
-                if version_major > 1:
-                    if version_minor > 0:
-                        for m in model.modules():
-                            if isinstance(m, FSDP):
-                                if hasattr(m, "_handle"):
-                                    _register_post_backward_hook(m, m._handle)
-                                    if m._handle != None:
-                                        m._handle._needs_pre_backward_unshard = True
-                    else:
-                        for m in model.modules():
-                            if isinstance(m, FSDP):
-                                if hasattr(m, "_handles"):
-                                    _register_post_backward_hooks(m, m._handles)
+                # Add to unshard param in backward (for zero3 with no sync context)
+                if num_microbatches > 1:
+                    if version_major > 1:
+                        if version_minor > 0:
+                            for m in model.modules():
+                                if isinstance(m, FSDP):
+                                    if hasattr(m, "_handle"):
+                                        _register_post_backward_hook(m, m._handle)
+                                        if m._handle != None:
+                                            m._handle._needs_pre_backward_unshard = True
+                        else:
+                            for m in model.modules():
+                                if isinstance(m, FSDP):
+                                    if hasattr(m, "_handles"):
+                                        _register_post_backward_hooks(m, m._handles)
                     
                 input_tensor_grad = self.backward_step(
                     input_tensor,
@@ -483,19 +485,21 @@ class PipelineParallel(nn.Module):
                     raise NotImplementedError('Already use uniform implementations for sync/async gradient reduction. Please set async_grad_reduce=True.')
                     pre_pipeline_backward(num_microbatches, bwd_num, self.model_cur_stage, self.checkpoint_flags_stage)
                 
-                if version_major > 1:
-                    if version_minor > 0:
-                        for m in model.modules():
-                            if isinstance(m, FSDP):
-                                if hasattr(m, "_handle"):
-                                    _register_post_backward_hook(m, m._handle)
-                                    if m._handle != None:
-                                        m._handle._needs_pre_backward_unshard = True
-                    else:
-                        for m in model.modules():
-                            if isinstance(m, FSDP):
-                                if hasattr(m, "_handles"):
-                                    _register_post_backward_hooks(m, m._handles)
+                # Add to unshard param in backward (for zero3 with no sync context)
+                if num_microbatches > 1:
+                    if version_major > 1:
+                        if version_minor > 0:
+                            for m in model.modules():
+                                if isinstance(m, FSDP):
+                                    if hasattr(m, "_handle"):
+                                        _register_post_backward_hook(m, m._handle)
+                                        if m._handle != None:
+                                            m._handle._needs_pre_backward_unshard = True
+                        else:
+                            for m in model.modules():
+                                if isinstance(m, FSDP):
+                                    if hasattr(m, "_handles"):
+                                        _register_post_backward_hooks(m, m._handles)
                     
                 input_tensor_grad = self.backward_step(
                     input_tensor,

@@ -295,6 +295,11 @@ class GalvatronProfiler():
                         avg_time = avg_time / i / (args.layernum_max-args.layernum_min)
                         write_key = 'layertype_%d_bsz%d'%(idx,i)
                         config[write_key] = avg_time
+                        write_key = 'layertype_other_%d_bsz%d'%(idx,i)
+                        other_time = (val_base - layernum_lists[0][0] * avg_time * i) / i
+                        other_time += (val - layernum[0] * avg_time * i) / i
+                        other_time /= 2
+                        config[write_key] = max(other_time,0)
                     write_json_config(config, time_config_path)
                     print('Already written processed computation time into env config file %s!\n'%(time_config_path))    
             else:

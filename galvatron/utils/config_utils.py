@@ -19,7 +19,10 @@ def write_json_config(config, path):
 
 def config2strategy(config):
     pp_deg = config['pp_deg']
-    vtp = config['vtp']
+    if 'vtp' in config:
+        vtp = config['vtp']
+    else:
+        vtp = 1
     tp_sizes_enc = str2array(config['tp_sizes_enc'])
     tp_consecutive_flags = str2array(config['tp_consecutive_flags'])
     dp_types_enc = str2array(config['dp_types_enc'])

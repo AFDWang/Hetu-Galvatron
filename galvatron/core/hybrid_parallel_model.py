@@ -88,9 +88,13 @@ def construct_hybrid_parallel_model_api(
     construct_sequential_model,
     construct_tensor_parallel_model,
     wrap_block_name=None,
+    wrap_checkpoint_block_name=None,
+    wrap_other_block_name=None,
     tied_wte_attr_names=None,
     sp_layernorm_attr_names=None,
 ):
+    if wrap_checkpoint_block_name == None:
+        wrap_checkpoint_block_name = wrap_block_name
     config, args, hp_configs = model_config, training_args, hybrid_parallel_configs
 
     # Get model-specific model info: module_types, layernum_list, layer_shapes_list, layer_dtypes_list
@@ -163,7 +167,7 @@ def construct_hybrid_parallel_model_api(
     )
     
     # [Step 6] Wrap checkpoint based on checkpoint_flags
-    hp_model.wrap_pipeline_modules_checkpoint(hp_configs_whole['checkpoint_flags_whole'], wrap_block_name=wrap_block_name)
+    hp_model.wrap_pipeline_modules_checkpoint(hp_configs_whole['checkpoint_flags_whole'], wrap_block_name=wrap_checkpoint_block_name)
     
     model = GalvatronModel(hp_model)
     

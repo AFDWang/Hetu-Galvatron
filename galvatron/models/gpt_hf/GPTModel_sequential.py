@@ -28,7 +28,7 @@ class GPTEmbeddings_(nn.Module):
         super().__init__()
         model = model.transformer
         self.wte = model.wte
-        self.wps = model.wpe
+        self.wpe = model.wpe
         args = get_args()
         self.drop = torch.nn.Dropout(args.hidden_dropout)# model.drop
         self.sequence_parallel = args.sequence_parallel
@@ -43,7 +43,7 @@ class GPTEmbeddings_(nn.Module):
         position_ids = torch.arange(0, tokens.size(-1), dtype=torch.long, device=tokens.device)
         position_ids = position_ids.unsqueeze(0)
         inputs_embeds = self.wte(tokens)
-        position_embeds = self.wps(position_ids)
+        position_embeds = self.wpe(position_ids)
         hidden_states = inputs_embeds + position_embeds
         # hidden_states = self.drop(hidden_states)
         # [b, s, h] -> [s, b, h]

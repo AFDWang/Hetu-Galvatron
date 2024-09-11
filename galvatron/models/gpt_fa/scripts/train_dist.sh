@@ -18,15 +18,15 @@ TRAINER="train_dist.py"
 MODEL_ARGS="
     --model_size gpt-6.7b \
     --set_model_config_manually 0 \
-    --set_layernum_manually 0 \
+    --set_layernum_manually 1 \
     --vocab_size 50257 \
     --hidden_size 1600 \
-    --num_hidden_layers 48 \
+    --num_hidden_layers 16 \
     --num_attention_heads 32 \
     --seq_length 1024"
 
 TRAIN_ARGS="
-    --global_train_batch_size 8 \
+    --global_train_batch_size 48 \
     --epochs 10 \
     --lr 1e-4 \
     --adam_weight_decay 0.01 \
@@ -36,7 +36,7 @@ TRAIN_ARGS="
     --save_profiled_memory 0"
 
 PARALLEL_ARGS="
-    --pp_deg 2 \
+    --pp_deg 1 \
     --global_tp_deg 2 \
     --global_tp_consec 1 \
     --sdp 1 \
@@ -47,7 +47,7 @@ PARALLEL_ARGS="
     --mixed_precision bf16 \
     --use-flash-attn \
     --shape_order BSH \
-    --initialize_on_meta 1 \
-    --galvatron_config_path ./configs/galvatron_config_gpt-6.7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
+    --initialize_on_meta 1" # \
+    # --galvatron_config_path ./configs/galvatron_config_gpt-6.7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
 
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS}

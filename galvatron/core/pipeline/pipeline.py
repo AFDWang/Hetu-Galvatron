@@ -22,7 +22,7 @@ else:
 
 from .utils import *
 from .grad_reduce import *
-from .grad_reduce import _send_backward_hook, _allreduce_word_embedding_grads, _gen_sp_group_module_dict, _allreduce_sp_layernorm_grads
+from .grad_reduce import _send_backward_hook, _allreduce_word_embedding_grads
 
 Shape = Union[List[int], torch.Size]
 
@@ -108,7 +108,6 @@ class PipelineParallel(nn.Module):
         self.embedding_group = embedding_group
         self.tied_wte_attr_names = tied_wte_attr_names
         self.finalize_wte_grads = tied_wte_attr_names is not None and self.total_model_len > len(self.model_cur_stage)
-        self.finalize_model_grads = False
 
     def check_tensor_dtype(self, layer_output_tensor_shapes, layer_output_tensor_dtypes):
         assert(len(layer_output_tensor_shapes) == len(layer_output_tensor_dtypes))
@@ -154,20 +153,26 @@ class PipelineParallel(nn.Module):
             if wrap_block_name is not None: # in this way, checkpoint will be warpped inside FSDP
                 self.checkpoint_flags_stage = [0] * (self.stage_end_idx-self.stage_start_idx)
     
-    def gen_sp_layernorm_info(self, layer_module_types, layer_tp_groups, sp_layernorm_attr_names):
-        self.sp_layernorm_attr_names, self.sp_group_module_dict = None, None
-        self.finalize_sp_layernorm_grads = False
+    def gen_sp_layernorm_info(self, layer_module_types, layer_tp_groups, ln_offset, ln_size, all_block_name):
         if self.sequence_parallel:
-            self.layer_module_types = layer_module_types[self.stage_start_idx:self.stage_end_idx]
             self.layer_tp_groups = layer_tp_groups[self.stage_start_idx:self.stage_end_idx]
-            self.sp_layernorm_attr_names = sp_layernorm_attr_names
-            self.sp_group_module_dict = _gen_sp_group_module_dict(self.layer_module_types, self.model_cur_stage, self.layer_tp_groups, self.sp_layernorm_attr_names)
-            if len(self.sp_group_module_dict) > 0:
-                self.finalize_sp_layernorm_grads = True
-        
-        self.finalize_model_grads = self.finalize_wte_grads or self.finalize_sp_layernorm_grads
-        self.finalize_model_grads_info = True
-
+            self.ln_offset = ln_offset[self.stage_start_idx:self.stage_end_idx]
+            self.ln_size = ln_size[self.stage_start_idx:self.stage_end_idx]
+            idx = 0
+            for block in self.model_cur_stage:
+                for m in block.modules():
+                    if isinstance(m, FSDP):
+                        is_block = False
+                        for submodule in m.modules():
+                            if isinstance(submodule, tuple(all_block_name)):
+                                is_block = True
+                        if not is_block:
+                            continue
+                        m.ln_offset = self.ln_offset[idx]
+                        m.ln_size = self.ln_size[idx]
+                        m.sp_group = self.layer_tp_groups[idx]
+                        idx += 1
+                        
     def update_tensor_shape(self, microbatches, dp_size_input, dp_size, tp_size, template_tensor_shape):
         # Update tensor_shape with correct microbatch_size
         tensor_shape, tensor_shape_last = copy.deepcopy(template_tensor_shape), copy.deepcopy(template_tensor_shape)
@@ -260,9 +265,9 @@ class PipelineParallel(nn.Module):
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
             
-        if self.finalize_model_grads:
+        if self.finalize_wte_grads:
             torch.distributed.barrier()
-            self.finalize_model_grads_func()
+            self.finalize_wte_grads_func()
 
         return losses_reduced
     
@@ -519,9 +524,9 @@ class PipelineParallel(nn.Module):
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
         
-        if self.finalize_model_grads and not forward_only:
+        if self.finalize_wte_grads and not forward_only:
             torch.distributed.barrier()
-            self.finalize_model_grads_func()
+            self.finalize_wte_grads_func()
         
         return losses_reduced
 
@@ -675,9 +680,9 @@ class PipelineParallel(nn.Module):
             exit_no_sync_context(model)
             fsdp_reduce_gradients(model)
         
-        if self.finalize_model_grads:
+        if self.finalize_wte_grads:
             torch.distributed.barrier()
-            self.finalize_model_grads_func()
+            self.finalize_wte_grads_func()
         
     def to_list(self, tensor):
         if isinstance(tensor, list):
@@ -825,23 +830,11 @@ class PipelineParallel(nn.Module):
 
         # return input_tensor_grad[0] if unwrap_input_tensor_grad else input_tensor_grad
     
-    def finalize_model_grads_func(self):
-        # if dist.get_rank() in [0, 7] and self.finalize_model_grads_info:
-        #     self.finalize_model_grads_info = False
-        #     print(f"Rank {dist.get_rank()}, Finalize Model Grads, wte: {self.finalize_wte_grads}, sp_ln: {self.finalize_sp_layernorm_grads}")
-        #     for sp_group, module_list in self.sp_group_module_dict.items():
-        #         print("SP group {sp_group.ranks}")
-        #         for module in module_list:
-        #             print(module)
-            
-        if self.finalize_wte_grads:
-            if self.is_pipeline_first_stage():
-                _allreduce_word_embedding_grads(self.model_cur_stage[0], self.tied_wte_attr_names[0], self.embedding_group.group)
-            elif self.is_pipeline_last_stage():
-                _allreduce_word_embedding_grads(self.model_cur_stage[-1], self.tied_wte_attr_names[-1], self.embedding_group.group)
-        
-        if self.finalize_sp_layernorm_grads:
-            _allreduce_sp_layernorm_grads(self.sp_group_module_dict)
+    def finalize_wte_grads_func(self):
+        if self.is_pipeline_first_stage():
+            _allreduce_word_embedding_grads(self.model_cur_stage[0], self.tied_wte_attr_names[0], self.embedding_group.group)
+        elif self.is_pipeline_last_stage():
+            _allreduce_word_embedding_grads(self.model_cur_stage[-1], self.tied_wte_attr_names[-1], self.embedding_group.group)
 
     # pipeline rank utils
     # ---------------------------------------

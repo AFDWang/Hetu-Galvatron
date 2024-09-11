@@ -4,6 +4,7 @@ import numpy as np
 from galvatron.core import check_hp_config, hp_config_whole_model, get_enc_groups, mixed_precision_dtype, layer_shapes_dtypes_whole_model, get_chunks
 from galvatron.core import gen_comm_groups, wrap_modules_relocation
 from galvatron.core.initialize import init_empty_weights
+from .utils import get_layernorm_offset
 
 class GalvatronModel(nn.Module):
     def __init__(self, hp_model):
@@ -92,6 +93,8 @@ def construct_hybrid_parallel_model_api(
     wrap_other_block_name=None,
     tied_wte_attr_names=None,
     sp_layernorm_attr_names=None,
+    layernorm_name = [],
+    all_block_name = None,
 ):
     if wrap_checkpoint_block_name == None:
         wrap_checkpoint_block_name = wrap_block_name
@@ -133,6 +136,8 @@ def construct_hybrid_parallel_model_api(
     # [Step 3] Wrap Relocation modules if necessary
     model = wrap_modules_relocation(model, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole)
 
+    ln_offset, ln_size = get_layernorm_offset(model, layernorm_name)
+    assert(len(ln_offset) == len(dp_groups_whole))
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
     from galvatron.core.pipeline import PipelineParallel
     hp_model = PipelineParallel(
@@ -163,7 +168,9 @@ def construct_hybrid_parallel_model_api(
     hp_model.gen_sp_layernorm_info(
         layer_module_types=module_types,
         layer_tp_groups=tp_groups_whole,
-        sp_layernorm_attr_names=sp_layernorm_attr_names,
+        ln_offset=ln_offset,
+        ln_size=ln_size,
+        all_block_name=all_block_name,
     )
     
     # [Step 6] Wrap checkpoint based on checkpoint_flags

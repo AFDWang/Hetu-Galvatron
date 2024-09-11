@@ -255,7 +255,7 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
         fused_split_groups.append(fused_split_group)
         fused_allgather_groups.append(fused_allgather_group)
     
-    show_rank = 5
+    show_rank = 0
     if show_rank >= 0 and torch.distributed.get_rank() == show_rank:
         print('====================== Galvatron Communication Group ===========================')
         print("Embedding group for rank %d:"%show_rank)

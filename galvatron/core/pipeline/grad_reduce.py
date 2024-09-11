@@ -63,45 +63,6 @@ def _allreduce_word_embedding_grads(module, tied_wte_attr_name, group):
         assert word_embedding._handle.flat_param.grad is not None
         dist.all_reduce(word_embedding._handle.flat_param.grad, group=group)
 
-def _gen_sp_group_module_dict(layer_module_types, model_layer_list, layer_tp_groups, sp_layernorm_attr_names):
-    if sp_layernorm_attr_names is None:
-        return dict()
-    
-    sp_group_module_dict = dict()
-    for module_type, module, tp_group in zip(layer_module_types, model_layer_list, layer_tp_groups):
-        if 'enc' not in module_type and 'dec' not in module_type:
-            continue
-        if tp_group.size == 1:
-            continue
-        for attr_name in sp_layernorm_attr_names:
-            if rhasattr(module.module, attr_name):
-                if tp_group not in sp_group_module_dict:
-                    sp_group_module_dict[tp_group] = [rgetattr(module.module, attr_name)]
-                else:
-                    sp_group_module_dict[tp_group].append(rgetattr(module.module, attr_name))
-    return sp_group_module_dict
-    
-def _allreduce_sp_layernorm_grads(sp_group_module_dict):
-    for sp_group, module_list in sp_group_module_dict.items():
-        grads = list()
-        for module in module_list:
-            if hasattr(module, "_handles"):
-                for handle in module._handles:
-                    if handle.flat_param.requires_grad:
-                        assert handle.flat_param.grad is not None
-                        grads.append(handle.flat_param.grad)
-            else:
-                if module._handle.flat_param.requires_grad:
-                    assert module._handle.flat_param.grad is not None
-                    # dist.all_reduce(module._handle.flat_param.grad, group=sp_group.group)
-                    grads.append(module._handle.flat_param.grad)
-        
-        if grads:
-            coalesced = _flatten_dense_tensors(grads)
-            dist.all_reduce(coalesced, group=sp_group.group)
-            for buf, synced in zip(grads, _unflatten_dense_tensors(coalesced, grads)):
-                buf.copy_(synced)
-
 # ================ FSDP Async Reduce Gradient Utils ================
 # Only Available on PyTorch 2.0
 # from torch import nn

@@ -7,6 +7,7 @@ import torch.distributed
 import megatron
 from megatron.core import mpu
 from functools import partial
+from torch.distributed.fsdp._common_utils import _named_parameters_with_duplicates
 
 # utility functions, support on nested attributes for getattr, setattr, and setattr
 # https://stackoverflow.com/questions/31174295/getattr-and-setattr-on-nested-subobjects-chained-properties
@@ -71,3 +72,30 @@ def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_gro
     # mpu.get_data_parallel_world_size = partial(get_vtp_data_parallel_world_size, vtp_data_group)
     # mpu.get_tensor_model_parallel_src_rank = partial(get_vtp_tensor_model_parallel_src_rank, vtp_tensor_group)
     # mpu.get_tensor_model_parallel_group = partial(get_vtp_tensor_model_parallel_group, vtp_tensor_group)
+    
+
+def get_layernorm_offset(model, layernorm_name=[]):
+    total_ln_offset = []
+    total_ln_size = []
+    for module in model:
+        ln_offset = []
+        ln_size = []
+        offset = 0
+        for submodule_name, submodule in module.named_modules(remove_duplicate=False):
+            is_ln = False
+            for ln_name in layernorm_name:
+                if ln_name in submodule_name:
+                    is_ln = True
+                    break
+            for param_name, param in _named_parameters_with_duplicates(
+                submodule, recurse=False
+            ):
+                if is_ln:
+                    ln_offset.append(offset)
+                    ln_size.append(param.numel())
+                offset += param.numel()
+        total_ln_offset.append(ln_offset)
+        total_ln_size.append(ln_size)
+    
+    return total_ln_offset, total_ln_size
+    

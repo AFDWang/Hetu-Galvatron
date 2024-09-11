@@ -45,6 +45,7 @@ def train(args):
 
     if local_rank == 0:
         print("Creating Dataset...")
+
     trainloader = distributed_dataloader(
         dataset=DataLoaderForGPT(args, device),
         global_bsz=args.global_train_batch_size,
@@ -62,6 +63,8 @@ def train(args):
     profiler.profile_memory(0, "After creating model")
     if local_rank == 0:
         print("Start training...")
+    t = 0
+    torch.cuda.cudart().cudaProfilerStart()
     for ep in range(args.epochs):
         if not args.check_loss and not args.profile:
             trainloader = tqdm(trainloader)
@@ -88,6 +91,9 @@ def train(args):
             profiler.profile_time_end(iter)
 
             torch.distributed.barrier()
+            t += 1
+            if t == 10:
+                torch.cuda.cudart().cudaProfilerStop()
 
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='train_dist')

@@ -38,7 +38,7 @@ TRAIN_ARGS="
 
 PARALLEL_ARGS="
     --pp_deg 1 \
-    --global_tp_deg 1 \
+    --global_tp_deg 2 \
     --global_tp_consec 1 \
     --sdp 1 \
     --global_checkpoint 0 \

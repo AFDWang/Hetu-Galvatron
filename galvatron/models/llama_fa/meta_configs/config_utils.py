@@ -14,22 +14,28 @@ def config_from_meta(model_type) -> LlamaConfig:
     path_dict = dict_join_dirname(path_dict, os.path.dirname(__file__))
     with open(path_dict[model_type]) as f:
         params = json.load(f)
+    if "n_kv_heads" not in params:
+        params['n_kv_heads'] = None
+    if 'ffn_dim' not in params:
+        params['ffn_dim'] = (params['dim'] * 8 // 3 + params['multiple_of'] - 1) // params['multiple_of'] * params['multiple_of']
     return LlamaConfig(
-        hidden_size=params['dim'], intermediate_size=None,
+        hidden_size=params['dim'], intermediate_size= params['ffn_dim'],
         num_attention_heads=params['n_heads'],
         num_hidden_layers=params['n_layers'],
-        rms_norm_eps=params['norm_eps']
+        rms_norm_eps=params['norm_eps'],
+        num_key_value_heads=params['n_kv_heads'],
+        max_position_embeddings=params['n_positions'],
     )
 
-def llama_config_to_gpt2_config(llama_config: LlamaConfig) -> GPT2Config:
+def llama_config_to_gpt2_config(llama_config, args) -> GPT2Config:
     return GPT2Config(
         vocab_size=llama_config.vocab_size,
-        n_positions=llama_config.max_position_embeddings,
+        n_positions=0,  # No absolute position embedding
         n_embd=llama_config.hidden_size,
         n_layer=llama_config.num_hidden_layers,
         n_head=llama_config.num_attention_heads,
         n_inner=llama_config.intermediate_size,
-        activation_function='swiglu',  # Hardcode since HF calls it 'silu'
+        activation_function="swiglu",  # Hardcode since HF calls it 'silu'
         # Llama doesn't have dropout, idk if it's because they only release the inference code
         resid_pdrop=0.0,
         embd_pdrop=0.0,
@@ -48,15 +54,23 @@ def llama_config_to_gpt2_config(llama_config: LlamaConfig) -> GPT2Config:
         out_proj_bias=False,
         mlp_fc1_bias=False,
         mlp_fc2_bias=False,
+        rotary_emb_base=getattr(llama_config, "rotary_emb_base", 10000.0),
+        n_head_kv=llama_config.num_key_value_heads,
+        use_cache = False,
+        fused_bias_fc = True,
+        sequence_parallel = hasattr(args, 'sequence_parallel') and args.sequence_parallel,
+        use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn
     )
 
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
     config.use_cache = False
     config.fused_bias_fc = True
-    config.sequence_parallel = False
+    config.sequence_parallel = hasattr(args, 'sequence_parallel') and args.sequence_parallel
     config.use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn
-    
+    config.resid_pdrop = 0.0
+    config.embd_pdrop = 0.0
+    config.attn_pdrop = 0.0
     # ======= Arguments --> Model Config ======
     # Overwrite all model configs by manually set arguments
     if args.set_model_config_manually:
@@ -82,16 +96,25 @@ def overwrite_megatron_args(config, args):
     args.hidden_size = config.hidden_size
     args.num_layers = config.num_hidden_layers
     args.num_attention_heads = config.num_attention_heads
+    args.ffn_hidden_size = config.intermediate_size
     args.max_position_embeddings = config.max_position_embeddings
     args.use_cpu_initialization = True
 
 # Need to overwrite the arguments with the model config
 def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
+    args.ffn_hidden_size = config.intermediate_size
     args.seq_length = config.max_position_embeddings
     args.num_hidden_layers = config.num_hidden_layers
     args.vocab_size = config.vocab_size
     args.num_attention_heads = config.num_attention_heads
+    args.kv_channels = args.hidden_size // args.num_attention_heads
+    assert abs(config.resid_pdrop - config.embd_pdrop) <= 1e-3, "resid_pdrop should be equal to embd_pdrop"
+    args.hidden_dropout = config.resid_pdrop
+    args.attention_dropout = config.attn_pdrop
+    if getattr(args, "padded_vocab_size", None) is None:
+        args.padded_vocab_size = (config.vocab_size + args.make_vocab_size_divisible_by - 1) // args.make_vocab_size_divisible_by * args.make_vocab_size_divisible_by
+
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):

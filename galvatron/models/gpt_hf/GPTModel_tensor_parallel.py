@@ -1,7 +1,5 @@
 import torch
 from torch import nn
-from transformers.models.llama.modeling_llama import LlamaRMSNorm
-from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding
 from megatron.core.tensor_parallel import VocabParallelEmbedding, ColumnParallelLinear
 from megatron.arguments import core_transformer_config_from_args
 from galvatron.core import get_args

@@ -33,6 +33,8 @@ from torch.distributed.fsdp._runtime_utils import (
     _low_precision_hook_enabled
 )
 
+from megatron.core import parallel_state
+
 log = logging.getLogger(__name__)
 
 @no_type_check
@@ -96,13 +98,16 @@ def _post_backward_hook_sp(
             ):
                 flat_param.grad.data = flat_param.grad.to(handle._reduce_dtype)
             
-            if hasattr(state, "sp_group") and len(state.ln_offset) > 0:
-                all_ln_data = torch.cat([flat_param.grad.data[offset:offset+size] 
-                                        for offset, size in zip(state.ln_offset, state.ln_size)])
+            if hasattr(state, "sp_group") and len(state.ln_offset) > 0 and len(state.sp_group.ranks) > 1:
+                all_ln_data = parallel_state.get_global_memory_buffer().get_tensor([sum(state.ln_size)],flat_param.grad.data.dtype,"reduce_grad")
+                idx = 0
+                for offset, size in zip(state.ln_offset, state.ln_size):
+                    all_ln_data[idx:idx+size].copy_(flat_param.grad.data[offset:offset+size])
+                    idx += size
                 dist.all_reduce(all_ln_data, group=state.sp_group.group)
                 idx = 0
                 for offset, size in zip(state.ln_offset, state.ln_size):
-                    flat_param.grad.data[offset:offset+size] = all_ln_data[idx:idx+size]
+                    flat_param.grad.data[offset:offset+size].copy_(all_ln_data[idx:idx+size])
                     idx += size
                 
             if handle.uses_sharded_strategy:

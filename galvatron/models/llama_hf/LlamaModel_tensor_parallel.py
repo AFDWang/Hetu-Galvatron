@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+# from torch.nn import LayerNorm as LlamaRMSNorm
 from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
 from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding
 from megatron.core.tensor_parallel import VocabParallelEmbedding, ColumnParallelLinear

@@ -28,6 +28,7 @@ PROFILE_ARGS_BF16="
     --max_tp_deg 8 \
     --profile_dp_type zero3 \
     --mixed_precision bf16 \
+    --sequence_parallel \
     --use-flash-attn"
 
 # PROFILE_ARGS_FP32="

@@ -19,7 +19,7 @@ def config_from_meta(model_type) -> LlamaConfig:
     if "n_kv_heads" not in params:
         params['n_kv_heads'] = None
     if 'ffn_dim' not in params:
-        params['ffn_dim'] = params['dim'] * 8 // 3 + params['multiple_of'] - 1
+        params['ffn_dim'] = (params['dim'] * 8 // 3 + params['multiple_of'] - 1) // params['multiple_of'] * params['multiple_of']
     return LlamaConfig(
         hidden_size=params['dim'], intermediate_size= params['ffn_dim'],
         num_attention_heads=params['n_heads'],
@@ -31,6 +31,11 @@ def config_from_meta(model_type) -> LlamaConfig:
     
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
+    config.use_cache = False
+    config.fused_bias_fc = True
+    config.sequence_parallel = False
+    config.use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn
+    
     # ======= Arguments --> Model Config ======
     # Overwrite all model configs by manually set arguments
     if args.set_model_config_manually:
@@ -55,6 +60,7 @@ def set_model_config(config, args, overwrite_args=True):
 
 def overwrite_megatron_args(config, args):
     args.hidden_size = config.hidden_size
+    args.ffn_hidden_size = config.intermediate_size
     args.num_layers = config.num_hidden_layers
     args.num_attention_heads = config.num_attention_heads
     args.max_position_embeddings = config.max_position_embeddings

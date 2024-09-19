@@ -1,10 +1,9 @@
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
-export MASTER_ADDR=localhost
+export MASTER_ADDR=$MASTER_ADDR
 export MASTER_PORT=$MASTER_PORT
-export NODE_RANK=0
-# export CUDA_DEVICE_MAX_CONNECTIONS=1
-export NCCL_IB_HCA=mlx5_2,mlx5_5
+# export NCCL_SOCKET_IFNAME=ib0
+export NODE_RANK=$RANK
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 
 LAUNCHER="python3 -m torch.distributed.launch"
@@ -32,24 +31,23 @@ TRAIN_ARGS="
     --lr 1e-4 \
     --adam_weight_decay 0.01 \
     --dropout_prob 0.1 \
-    --check_loss 1 \
+    --check_loss 0 \
     --profile 1 \
     --save_profiled_memory 0"
 
 PARALLEL_ARGS="
     --pp_deg 1 \
-    --global_tp_deg 1 \
+    --global_tp_deg 8 \
     --global_tp_consec 1 \
     --sdp 0 \
     --global_checkpoint 0 \
-    --vocab_tp 1 \
     --chunks 1 \
+    --vocab_tp 1 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \
-    --sequence-parallel \
-    --use-flash-attn \
-    --initialize_on_meta 1" #  \
+    --shape_order BSH \
+    --initialize_on_meta 1" # \
     # --galvatron_config_path ./configs/galvatron_config_gpt-6.7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
 
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS}

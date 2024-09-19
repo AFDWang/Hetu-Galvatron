@@ -1,9 +1,9 @@
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=1
-export MASTER_ADDR=localhost # $MASTER_ADDR
+export MASTER_ADDR=$MASTER_ADDR
 export MASTER_PORT=$MASTER_PORT
 # export NCCL_SOCKET_IFNAME=ib0
-export NODE_RANK=0 # $RANK
+export NODE_RANK=$RANK
 
 LAUNCHER="python3 -m torch.distributed.launch"
 LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"

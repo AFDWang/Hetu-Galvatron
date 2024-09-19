@@ -45,7 +45,7 @@ def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_grou
     fsdp_args = dict(process_group = comm_group, 
                     sharding_strategy = sharding_strategy, 
                     mixed_precision=mixed_precision_policy, 
-                    backward_prefetch=backward_prefetch,
+                    # backward_prefetch=backward_prefetch,
                     device_id=pp_device,
                     param_init_fn=param_init_fn if 'initialize_on_meta' in args and args.initialize_on_meta else None,
                     limit_all_gathers=True)
@@ -220,7 +220,7 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
     fsdp_args = dict(process_group=process_group.group,
                     sharding_strategy=sharding_strategy, 
                     mixed_precision=mixed_precision_policy, 
-                    backward_prefetch=backward_prefetch,
+                    # backward_prefetch=backward_prefetch,
                     device_id=pp_devices[0],
                     param_init_fn=param_init_fn if 'initialize_on_meta' in args and args.initialize_on_meta else None,
                     limit_all_gathers=True)
@@ -243,7 +243,7 @@ def wrap_model_data_parallel(model, device, wrap_block_names=[], dp_type='ddp', 
     fsdp_args = dict(process_group = comm_group, 
                     sharding_strategy = sharding_strategy, 
                     mixed_precision=mixed_precision_policy, 
-                    backward_prefetch=backward_prefetch,
+                    # backward_prefetch=backward_prefetch,
                     device_id=device,
                     param_init_fn=param_init_fn if initialize_on_meta else None,
                     limit_all_gathers=True)

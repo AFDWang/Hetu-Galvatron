@@ -68,9 +68,9 @@ def _gather_along_first_dim_with_sequence_parallel(input_, group):
     
     if args.shape_order == "SBH": # [s, b, h] -> [b, s, h]
         output = rearrange(output, "b s h -> s b h")
-    else:
-        if args.sequence_parallel:
-            output = rearrange(output, "b s h -> (b s) h")
+    # else:
+    #     if args.sequence_parallel:
+    #         output = rearrange(output, "b s h -> (b s) h")
     if args.sequence_parallel:
         dim_size = output.size()[0]
         assert dim_size % world_size == 0, \
@@ -263,9 +263,9 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(input_, allgat
         
     if args.shape_order == "SBH": # [b, s, h] -> [s, b, h]
         output = rearrange(output, "b s h -> s b h")
-    else:
-        if args.sequence_parallel:
-            output = rearrange(output, "b s h -> (b s) h")
+    # else:
+    #     if args.sequence_parallel:
+    #         output = rearrange(output, "b s h -> (b s) h")
     world_size = torch.distributed.get_world_size(group=allgather_group)
     if args.sequence_parallel:
         dim_size = output.size()[0]

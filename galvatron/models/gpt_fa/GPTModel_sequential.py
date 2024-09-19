@@ -2,6 +2,7 @@ import torch.nn as nn
 import torch
 from galvatron.core.pipeline import PipeSequential
 from galvatron.core import mixed_precision_dtype, ModelInfo
+from einops import rearrange
 
 try:
     from flash_attn.ops.layer_norm import dropout_add_layer_norm
@@ -28,45 +29,45 @@ class GPTEmbeddings_(nn.Module):
     def __init__(self, model):
         super().__init__()
         model = model.transformer
-        attrs = ['embeddings', 'process_group', 'sequence_parallel']
+        attrs = ['embeddings', 'sequence_parallel']
         for key in attrs:
             setattr(self, key, getattr(model, key))
+        setattr(self, 'process_group', getattr(self.embeddings, "process_group"))
+
     def forward(self, input_ids, position_ids=None):
+        tokens = input_ids[:, :-1].contiguous()
+        labels = input_ids[:, 1:].contiguous()
         embedding_kwargs = ({'combine_batch_seqlen_dim': True}
                             if self.process_group is not None and self.sequence_parallel else {})
-        hidden_states = self.embeddings(input_ids, position_ids=position_ids, **embedding_kwargs)
-        # if self.parallel_block:
-        #     hidden_states2 = None
-        input_ids = input_ids.clone()
-        return hidden_states, input_ids
+        hidden_states = self.embeddings(tokens, position_ids=position_ids, **embedding_kwargs)
+        labels = labels.clone()
+        return hidden_states, labels
 
 class GPTLayers_(nn.Module):
-    def __init__(self, model, layer_idx_start, layer_idx_end):
+    def __init__(self, model, layer_idx):
         super().__init__()
         model = model.transformer
-        self.layers = model.layers[layer_idx_start:layer_idx_end]
-        attrs = ['prenorm', 'parallel_block', 'process_group']
+        self.layer = model.layers[layer_idx]
+        
+        attrs = ['prenorm', 'parallel_block', 'sequence_parallel']
         for key in attrs:
             setattr(self, key, getattr(model, key))
+        setattr(self, 'process_group', getattr(self.layer, "process_group"))
+        if self.prenorm:
+            self.dropout1 = self.layer.dropout1
+            self.layer.dropout1 = nn.Identity()
         
     def forward(self, hidden_states, input_ids):
-        residual = None
-        mixer_kwargs = ({'seqlen': hidden_states.shape[1]}
+        mixer_kwargs = ({'seqlen': input_ids.shape[1]}
                         if self.process_group is not None and self.sequence_parallel else {})
-        # if inference_params is not None:
-        #     mixer_kwargs['inference_params'] = inference_params
-
-        for layer in self.layers:
-            if self.prenorm:
-                if not self.parallel_block:
-                    hidden_states, residual = layer(hidden_states, residual,
-                                                    mixer_kwargs=mixer_kwargs)
-                # else:
-                #     hidden_states, hidden_states2, residual = layer(
-                #         hidden_states, hidden_states2, residual, mixer_kwargs=mixer_kwargs
-                #     )
-            else:
-                hidden_states = layer(hidden_states, mixer_kwargs=mixer_kwargs)
+        if self.prenorm:
+            assert(not self.parallel_block)
+            hidden_states, residual = self.layer(hidden_states,
+                                            mixer_kwargs=mixer_kwargs)
+            hidden_states = self.dropout1(hidden_states)
+            hidden_states = hidden_states + residual
+        else:
+            hidden_states = layer(hidden_states, mixer_kwargs=mixer_kwargs)
         input_ids = input_ids.clone()
         return hidden_states, input_ids
 
@@ -74,41 +75,13 @@ class GPTPreNorm_(nn.Module):
     def __init__(self, model):
         super().__init__()
         model = model.transformer
-        attrs = ['fused_dropout_add_ln', 'drop_f', 'parallel_block', 'ln_f', 'prenorm']
+        attrs = ['ln_f', 'prenorm']
         for key in attrs:
             setattr(self, key, getattr(model, key))
 
     def forward(self, hidden_states, input_ids):
-        residual = None
         if self.prenorm:
-            if not self.fused_dropout_add_ln:
-                dropped = self.drop_f(hidden_states)
-                if not self.parallel_block:
-                    residual = (dropped + residual) if residual is not None else dropped
-                # else:
-                #     dropped2 = self.drop_f(hidden_states2)
-                #     residual = ((residual + dropped + dropped2)
-                #                 if residual is not None else dropped + dropped2)
-                hidden_states = self.ln_f(residual.to(dtype=self.ln_f.weight.dtype))
-            else:
-                # Set prenorm=False here since we don't need the residual
-                if not self.parallel_block:
-                    fused_add_norm_fn = (dropout_add_rms_norm if isinstance(self.ln_f, RMSNorm)
-                                         else dropout_add_layer_norm)
-                    hidden_states = fused_add_norm_fn(
-                        hidden_states, residual, self.ln_f.weight, self.ln_f.bias,
-                        self.drop_f.p if self.training else 0.0, self.ln_f.eps, prenorm=False,
-                        residual_in_fp32=self.residual_in_fp32
-                    )
-                # else:
-                #     fused_add_norm_fn = (dropout_add_rms_norm_parallel_residual
-                #                          if isinstance(self.ln_f, RMSNorm)
-                #                          else dropout_add_layer_norm_parallel_residual)
-                #     hidden_states, _ = fused_add_norm_fn(
-                #         hidden_states, hidden_states2, residual, self.ln_f.weight, self.ln_f.bias,
-                #         None, None, self.drop_f.p if self.training else 0.0, self.ln_f.eps,
-                #         prenorm=False, residual_in_fp32=self.residual_in_fp32
-                #     )
+            hidden_states = self.ln_f(hidden_states)
         input_ids = input_ids.clone()
         return hidden_states, input_ids
 
@@ -118,27 +91,25 @@ class GPTCls_(nn.Module):
         attrs = ['lm_head', 'config', 'project_out']
         for key in attrs:
             setattr(self, key, getattr(model, key))
+        self.sequence_parallel = self.lm_head.sequence_parallel
+        self.process_group = self.lm_head.process_group
 
     def forward(self, hidden_states, input_ids):
         if self.project_out is not None:
             hidden_states = self.project_out(hidden_states)
         lm_logits = self.lm_head(hidden_states)
-        # # During inference, we want the full logit for sampling
-        # if isinstance(self.lm_head, ColumnParallelLinear) and inference_params is not None:
-        #     lm_logits, _ = all_gather_raw(lm_logits, self.lm_head.process_group)
-        #     lm_logits = rearrange(lm_logits, '(n b) s d -> b s (n d)', b=hidden_states.shape[0])
-        shift_logits = lm_logits[..., :-1, :].contiguous()
-        shift_labels = input_ids[..., 1:].contiguous()
+        if not self.sequence_parallel:
+            lm_logits = rearrange(lm_logits, "b s d -> (b s) d")
         from flash_attn.losses.cross_entropy import CrossEntropyLoss
-        loss_fn = CrossEntropyLoss()
-        loss = loss_fn(shift_logits.view(-1, self.config.vocab_size), shift_labels.view(-1).long())
+        loss_fn = CrossEntropyLoss(inplace_backward=True, process_group = self.process_group)
+        loss = loss_fn(lm_logits, input_ids.view(-1).long())
         return loss
 
 def construct_sequential_model(model, config):
     model_ = PipeSequential()
     model_.add_module('embeddings', GPTEmbeddings_(model))
     for i in range(config.num_hidden_layers):
-        enc = GPTLayers_(model, i, i + 1)
+        enc = GPTLayers_(model, i)
         model_.add_module('layer_%d'%i, enc)
     model_.add_module('prenorm', GPTPreNorm_(model))
     model_.add_module('cls', GPTCls_(model))

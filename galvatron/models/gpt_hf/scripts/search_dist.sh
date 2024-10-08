@@ -7,7 +7,12 @@ MEMORY=34
 MODEL_ARGS="
     --model_size ${MODEL_SIZE} \
     --set_model_config_manually 0 \
-    --set_layernum_manually 0"
+    --set_layernum_manually 0 \
+    --vocab_size 50257 \
+    --hidden_size 1600 \
+    --num_hidden_layers 12 \
+    --num_attention_heads 32 \
+    --seq_length 2048"
 
 BSZ_ARGS="
     --min_bsz 16 \
@@ -29,7 +34,7 @@ SEARCH_SPACE_ARGS="
     --disable_tp_consec 1 \
     --max_tp_deg 8 \
     --max_pp_deg 8 \
-    --fine_grained_mode 0 \
+    --fine_grained_mode 1 \
     --computation_mode curve \
 "
 

@@ -59,7 +59,8 @@ def llama_config_to_gpt2_config(llama_config, args) -> GPT2Config:
         use_cache = False,
         fused_bias_fc = True,
         sequence_parallel = hasattr(args, 'sequence_parallel') and args.sequence_parallel,
-        use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn
+        use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn,
+        max_position_embeddings_data=llama_config.max_position_embeddings,
     )
 
 # ============= Set Model Config and Arguments =============
@@ -78,7 +79,7 @@ def set_model_config(config, args, overwrite_args=True):
         config.hidden_size = args.hidden_size
         config.num_hidden_layers = args.num_hidden_layers
         config.num_attention_heads = args.num_attention_heads
-        config.max_position_embeddings = args.seq_length
+        config.max_position_embeddings_data = args.seq_length
     # Overwrite layer number only
     elif args.set_layernum_manually:
         config.num_hidden_layers = args.num_hidden_layers
@@ -96,15 +97,15 @@ def overwrite_megatron_args(config, args):
     args.hidden_size = config.hidden_size
     args.num_layers = config.num_hidden_layers
     args.num_attention_heads = config.num_attention_heads
-    args.ffn_hidden_size = config.intermediate_size
-    args.max_position_embeddings = config.max_position_embeddings
+    args.ffn_hidden_size = config.n_inner
+    args.max_position_embeddings = config.max_position_embeddings_data
     args.use_cpu_initialization = True
 
 # Need to overwrite the arguments with the model config
 def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
-    args.ffn_hidden_size = config.intermediate_size
-    args.seq_length = config.max_position_embeddings
+    args.ffn_hidden_size = config.n_inner
+    args.seq_length = config.max_position_embeddings_data
     args.num_hidden_layers = config.num_hidden_layers
     args.vocab_size = config.vocab_size
     args.num_attention_heads = config.num_attention_heads
@@ -118,13 +119,13 @@ def overwrite_model_args(config, args):
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):
-    return 'hidden%d_head%d_seqlen%d'%(config.hidden_size, config.num_attention_heads, config.max_position_embeddings)
+    return 'hidden%d_head%d_seqlen%d'%(config.hidden_size, config.num_attention_heads, config.max_position_embeddings_data)
 
 def model_layer_configs(config):
     return [
         {
             'hidden_size': config.hidden_size,
-            'seq_len': config.max_position_embeddings,
+            'seq_len': config.max_position_embeddings_data,
             'layer_num': config.num_hidden_layers
         }
     ]

@@ -450,11 +450,11 @@ def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, s
     result = np.sum(stage_costs_compute) + stage_costs_compute[-1] * (max_chunk - 1)
     # assume t_rank0 > t_rank1 > ... , warmup and cool down bubble can be overlapped
     result = max( result,
-            max( min(pp_deg - 1, max_chunk - 1) * stage_costs_compute[0] * 1/3, np.sum(stage_costs_compute[1:])) + 
-            max( min(pp_deg - 1, max_chunk - 1) * stage_costs_compute[0] * 2/3, np.sum(stage_costs_compute[1:])) + 
+            max( min(pp_deg - 1, max_chunk - 1) * stage_costs_compute[0] * 1/3, np.sum(stage_costs_compute[1:]) * 1/3) + 
+            max( min(pp_deg - 1, max_chunk - 1) * stage_costs_compute[0] * 2/3, np.sum(stage_costs_compute[1:]) * 2/3) + 
             stage_costs_compute[0] * max(0, max_chunk + 1 - pp_deg))
     
-    result += max(np.max(stage_costs_compute) * 2/3 * (max_chunk - 1), stage_costs_compute[-1] * (max_chunk - 1))
+    # result += max(np.max(stage_costs_compute) * 2/3 * (max_chunk - 1), stage_costs_compute[-1] * (max_chunk - 1))
     # result = np.max(stage_costs_compute) * (max_chunk-1+pp_deg)
     for i in range(pp_deg):
         stage_costs_reduce[i] -= np.sum(stage_costs_compute[:i+1])

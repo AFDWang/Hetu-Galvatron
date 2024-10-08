@@ -95,6 +95,7 @@ def construct_hybrid_parallel_model_api(
     sp_layernorm_attr_names=None,
     layernorm_name = [],
     all_block_name = None,
+    load_module_func = None,
 ):
     if wrap_checkpoint_block_name == None:
         wrap_checkpoint_block_name = wrap_block_name
@@ -163,6 +164,9 @@ def construct_hybrid_parallel_model_api(
         mixed_precision=mixed_precision_dtype(args.mixed_precision),
         wrap_block_name=wrap_block_name,
         tied_wte_attr_names=tied_wte_attr_names,
+        tp_groups=tp_groups_whole,
+        all_block_name=all_block_name,
+        load_module_func=load_module_func,
     )
     
     hp_model.gen_sp_layernorm_info(

@@ -22,7 +22,9 @@ MODEL_ARGS="
 
 PROFILE_ARGS="
     --profile_type computation \
-    --profile_batch_size 8 \
+    --profile_min_batch_size 1 \
+    --profile_max_batch_size 12 \
+    --profile_batch_size_step 1 \
     --layernum_min 2 \
     --layernum_max 4 \
     --mixed_precision bf16 \

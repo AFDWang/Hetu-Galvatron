@@ -22,12 +22,13 @@ MODEL_ARGS="
 
 PROFILE_ARGS="
     --profile_type computation \
-    --profile_batch_size 2 \
-    --layernum_min 6 \
-    --layernum_max 12 \
+    --profile_min_batch_size 1 \
+    --profile_max_batch_size 12 \
+    --profile_batch_size_step 1 \
+    --layernum_min 2 \
+    --layernum_max 4 \
     --mixed_precision bf16 \
-    --use-flash-attn \
-    --shape_order BSH"
+    --use-flash-attn"
 
 # models in flash_attn cannot use fp32 without flash_attn
 # PROFILE_ARGS="

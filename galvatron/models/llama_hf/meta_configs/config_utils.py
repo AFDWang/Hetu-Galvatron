@@ -32,10 +32,6 @@ def config_from_meta(model_type) -> LlamaConfig:
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
     config.use_cache = False
-    config.fused_bias_fc = True
-    config.sequence_parallel = False
-    config.use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn
-    
     # ======= Arguments --> Model Config ======
     # Overwrite all model configs by manually set arguments
     if args.set_model_config_manually:

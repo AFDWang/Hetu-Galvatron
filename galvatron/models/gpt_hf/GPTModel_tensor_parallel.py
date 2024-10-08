@@ -52,6 +52,7 @@ class GPTLayer_tp(nn.Module):
         super().__init__()
         self.attention = GPTAttention_tp(config, layer_number, tp_group)
         self.mlp = GPTMLP_tp(config, tp_group)
+        self.idx = layer_number
 
     def forward(
         self,

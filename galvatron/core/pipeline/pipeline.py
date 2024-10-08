@@ -124,7 +124,7 @@ class PipelineParallel(nn.Module):
                 layer_output_tensor_dtypes.append([torch.float] * len(tensor_shape))
         return layer_output_tensor_dtypes
 
-    def wrap_pipeline_modules_data_parallel(self, dp_types, dp_groups, module_types, mixed_precision=torch.bfloat16, wrap_block_name=None, tied_wte_attr_names=None):
+    def wrap_pipeline_modules_data_parallel(self, dp_types, dp_groups, module_types, mixed_precision=torch.bfloat16, wrap_block_name=None, tied_wte_attr_names=None, tp_groups=None, all_block_name=None, load_module_func=None):
         assert(self.total_model_len == len(dp_types))
         assert(self.total_model_len == len(dp_groups))
         assert(self.total_model_len == len(module_types))
@@ -132,6 +132,7 @@ class PipelineParallel(nn.Module):
         module_types_cur_stage = module_types[self.stage_start_idx:self.stage_end_idx]
         dp_groups_cur_stage = dp_groups[self.stage_start_idx:self.stage_end_idx]
         pp_devices_cur_stage = [self.local_rank]*(self.stage_end_idx-self.stage_start_idx)
+        tp_groups_cur_stage = tp_groups[self.stage_start_idx:self.stage_end_idx]
         default_process_group = dp_groups[0]
         self.model_cur_stage = wrap_modules_data_parallel(
             module_list=self.model_cur_stage,
@@ -142,7 +143,10 @@ class PipelineParallel(nn.Module):
             mixed_precision=mixed_precision,
             default_process_group=default_process_group,
             wrap_block_name=wrap_block_name,
-            tied_wte_attr_names=tied_wte_attr_names
+            tied_wte_attr_names=tied_wte_attr_names,
+            tp_groups=tp_groups_cur_stage,
+            all_block_name=all_block_name,
+            load_module_func=load_module_func,
         )
 
     def wrap_pipeline_modules_checkpoint(self, checkpoint_flags, wrap_block_name=None):

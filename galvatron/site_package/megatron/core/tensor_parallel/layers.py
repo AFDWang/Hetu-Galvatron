@@ -394,9 +394,14 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
             if ctx.tp_group is None:
                 ctx.tp_group = get_tensor_model_parallel_group()
             all_gather_buffer = get_global_memory_buffer().get_tensor(dim_size, input.dtype, "mpu")
-            handle = torch.distributed._all_gather_base(
-                all_gather_buffer, input, group=ctx.tp_group # , async_op=True
-            )
+            if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
+                handle = torch.distributed._all_gather_base(
+                    all_gather_buffer, input, group=ctx.tp_group, async_op=True
+                )
+            else:
+                handle = torch.distributed._all_gather_base(
+                    all_gather_buffer, input, group=ctx.tp_group # , async_op=True
+                )
 
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # gather is scheduled before the input gradient computation
@@ -404,9 +409,9 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         else:
             total_input = input
         grad_input = grad_output.matmul(weight)
-
-        # if ctx.sequence_parallel:
-        #     handle.wait()
+        
+        if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1" and ctx.sequence_parallel:
+            handle.wait()
 
         # Doing gather + slicing during the NeMo forward pass can make this tensor
         # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
@@ -437,9 +442,14 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
                 dim_size, dtype=input.dtype, device=torch.cuda.current_device(), requires_grad=False
             )
             # reduce_scatter
-            handle = torch.distributed._reduce_scatter_base(
-                sub_grad_input, grad_input, group=ctx.tp_group# , async_op=True
-            )
+            if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
+                handle = torch.distributed._reduce_scatter_base(
+                    sub_grad_input, grad_input, group=ctx.tp_group, async_op=True
+                )
+            else:
+                handle = torch.distributed._reduce_scatter_base(
+                    sub_grad_input, grad_input, group=ctx.tp_group# , async_op=True
+                )
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # reduce scatter is scheduled before the weight gradient computation
 
@@ -474,7 +484,8 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         grad_bias = grad_output.sum(dim=0) if use_bias else None
 
         if ctx.sequence_parallel:
-            # handle.wait()
+            if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
+                handle.wait()
             return sub_grad_input, grad_weight, grad_bias, None, None, None, None
 
         if ctx.async_grad_allreduce:

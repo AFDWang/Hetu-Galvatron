@@ -6,7 +6,7 @@ import os
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='profile')
     llama_config = config_from_meta(args.model_size)
-    config = llama_config_to_gpt2_config(llama_config)
+    config = llama_config_to_gpt2_config(llama_config, args)
     config = set_model_config(config, args, overwrite_args=False)
     
     profiler = GalvatronProfiler(args)

@@ -20,8 +20,9 @@ def train(args):
     world_size = torch.distributed.get_world_size()
 
     llama_config = config_from_meta(args.model_size)
-    config = set_model_config(llama_config, args)
-    config = llama_config_to_gpt2_config(config, args)
+    config = llama_config_to_gpt2_config(llama_config, args)
+    config = set_model_config(config, args)
+
     if local_rank == 0:
         print(config)
     

@@ -1,7 +1,7 @@
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
 export MASTER_ADDR=localhost
-export MASTER_PORT=$MASTER_PORT
+export MASTER_PORT=6000
 export NODE_RANK=0
 # export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NCCL_IB_HCA=mlx5_2,mlx5_5
@@ -22,7 +22,7 @@ MODEL_ARGS="
     --set_layernum_manually 1 \
     --vocab_size 50257 \
     --hidden_size 1600 \
-    --num_hidden_layers 8 \
+    --num_hidden_layers 4 \
     --num_attention_heads 32 \
     --seq_length 2048"
 
@@ -36,8 +36,11 @@ TRAIN_ARGS="
     --profile 1 \
     --save_profiled_memory 0"
 
+CKPT_ARGS="
+    --load /home/pkuhetu/lxy/checkpoints/Cerebras-GPT-6.7B-split"
+
 PARALLEL_ARGS="
-    --pp_deg 1 \
+    --pp_deg 2 \
     --global_tp_deg 1 \
     --global_tp_consec 1 \
     --sdp 0 \
@@ -52,4 +55,4 @@ PARALLEL_ARGS="
     --initialize_on_meta 1" #  \
     # --galvatron_config_path ./configs/galvatron_config_gpt-6.7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
 
-${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS}
+${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${CKPT_ARGS}

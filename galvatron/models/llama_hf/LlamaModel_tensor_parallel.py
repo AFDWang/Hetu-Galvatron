@@ -1,6 +1,7 @@
 import torch
 from torch import nn
-# from torch.nn import LayerNorm as LlamaRMSNorm
+# from flash_attn.ops.rms_norm import RMSNorm as LlamaRMSNorm
+# from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
 from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding
 from megatron.core.tensor_parallel import VocabParallelEmbedding, ColumnParallelLinear
@@ -62,6 +63,7 @@ class LlamaLayer_tp(nn.Module):
         super().__init__()
         self.attention = LlamaAttention_tp(config, layer_number, tp_group)
         self.mlp = LlamaMLP_tp(config, tp_group)
+        self.idx = layer_number
 
     def forward(
         self,

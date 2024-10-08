@@ -13,6 +13,7 @@ LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
 TRAINER="train_dist.py"
+DATA_PATH=/home/pkuhetu/lxy/dataset/gpt2/my-gpt2_text_document
 
 MODEL_ARGS="
     --model_size llama-7b \
@@ -39,6 +40,9 @@ DATA_ARGS="
     --split 949,50,1
 "
 
+CKPT_ARGS="
+    --load /home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf-split"
+
 PARALLEL_ARGS="
     --pp_deg 1 \
     --global_tp_deg 1 \
@@ -55,4 +59,4 @@ PARALLEL_ARGS="
     --initialize_on_meta 1" 
     # --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
 
-${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS}
+${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS} ${CKPT_ARGS}

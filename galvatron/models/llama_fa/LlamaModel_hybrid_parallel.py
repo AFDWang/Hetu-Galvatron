@@ -21,7 +21,7 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
         construct_tensor_parallel_model,
         wrap_block_name = wrap_block_name,
         all_block_name = all_block_name,
-        tied_wte_attr_names = ["embeddings.word_embeddings", "lm_head"],
+        # tied_wte_attr_names = ["embeddings.word_embeddings", "lm_head"],
         layernorm_name = ["norm1", "norm2", "ln_f"]
     )
     return hp_model

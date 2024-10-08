@@ -183,7 +183,7 @@ class GalvatronProfiler():
                     message = ''.join(log_parts)
                     print(message.format(
                         iter + 1,
-                        (iter + 1) * self.args.global_batch_size,
+                        (iter + 1) * self.args.global_train_batch_size,
                         iter_time * 1e3,
                         self.args.lr,
                         loss.item()

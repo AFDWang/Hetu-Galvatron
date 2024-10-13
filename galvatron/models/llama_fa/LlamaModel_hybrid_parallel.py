@@ -10,6 +10,8 @@ def get_hybrid_parallel_configs(model_config, training_args):
 
 def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_parallel_configs):
     wrap_block_name = [Block]
+    wrap_other_block_name = [LlamaEmbeddings_, LlamaPreNorm_, LlamaCls_]
+    wrap_checkpoint_block_name=[Block]
     all_block_name=[LlamaEmbeddings_, Block, LlamaPreNorm_, LlamaCls_]
     hp_model = construct_hybrid_parallel_model_api(
         model,
@@ -19,10 +21,12 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
         LlamaModelInfo,
         construct_sequential_model,
         construct_tensor_parallel_model,
-        wrap_block_name = wrap_block_name,
-        all_block_name = all_block_name,
+        wrap_block_name=wrap_block_name,
+        wrap_checkpoint_block_name=wrap_checkpoint_block_name,
+        wrap_other_block_name=wrap_other_block_name,
         # tied_wte_attr_names = ["embeddings.word_embeddings", "lm_head"],
-        layernorm_name = ["norm1", "norm2", "ln_f"]
+        layernorm_name = ["norm1", "norm2", "ln_f"],
+        all_block_name = all_block_name,
     )
     return hp_model
 

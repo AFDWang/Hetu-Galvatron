@@ -22,18 +22,31 @@ def get_ltor_masks_and_position_ids(data):
 
     return attention_mask# , position_ids
 
+class GPTVocabEmbedding_(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.wte = model.wte
+    def forward(self, tokens):
+        return self.wte(tokens)
+
+class GPTPositionEmbedding_(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.wpe = model.wpe
+    def forward(self, position_ids):
+        return self.wpe(position_ids)
 
 class GPTEmbeddings_(nn.Module):
     def __init__(self, model):
         super().__init__()
         model = model.transformer
-        self.wte = model.wte
-        self.wpe = model.wpe
+        self.wte = GPTVocabEmbedding_(model)
+        self.wpe = GPTPositionEmbedding_(model)
         args = get_args()
         self.drop = torch.nn.Dropout(args.hidden_dropout)# model.drop
         self.sequence_parallel = args.sequence_parallel
         self.clone_scatter_output_in_embedding = args.clone_scatter_output_in_embedding
-        self.tp_group = self.wte.tp_group
+        self.tp_group = self.wte.wte.tp_group
         
     def forward(self, input_ids):
 

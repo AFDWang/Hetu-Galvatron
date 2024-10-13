@@ -51,10 +51,55 @@ def fsdp_reduce_gradients(model):
     for m in model.modules():
         if isinstance(m, FSDP) and m._is_root:
             _post_backward_final_callback(m, m)
-
+            
+@torch.no_grad()
+def _allreduce_word_embedding_no_pipeline(wte_model, wte_attr_name, lmhead_model, lmhead_attr_name):
+    wte = rgetattr(wte_model.module, wte_attr_name)
+    lmhead = rgetattr(lmhead_model.module, lmhead_attr_name)
+    if hasattr(wte, "_handles"):
+        for wte_handle, lmhead_handle in zip(wte._handles, lmhead._handles):
+            assert wte_handle.flat_param.data is not None
+            assert lmhead_handle.flat_param.data is not None
+            wte_handle.flat_param.data.copy_((wte_handle.flat_param.data + lmhead_handle.flat_param.data) / 2)
+            lmhead_handle.flat_param.data.copy_((wte_handle.flat_param.data + lmhead_handle.flat_param.data) / 2)
+    else:
+        assert wte._handle.flat_param.data is not None
+        assert lmhead._handle.flat_param.data is not None
+        wte._handle.flat_param.data.copy_((wte._handle.flat_param.data + lmhead._handle.flat_param.data) / 2)
+        lmhead._handle.flat_param.data.copy_((wte._handle.flat_param.data + lmhead._handle.flat_param.data) / 2)
+        
 # For Finalization of Model Gradients
+@torch.no_grad()
+def _allreduce_word_embedding(module, tied_wte_attr_name, group):
+    word_embedding = rgetattr(module.module, tied_wte_attr_name)
+    if hasattr(word_embedding, "_handles"):
+        for handle in word_embedding._handles:
+            assert handle.flat_param.data is not None
+            dist.all_reduce(handle.flat_param.data, group=group)
+    else:
+        assert word_embedding._handle.flat_param.data is not None
+        dist.all_reduce(word_embedding._handle.flat_param.data, group=group)
+        
+@torch.no_grad()
+def _allreduce_word_embedding_grads_no_pipeline(wte_model, wte_attr_name, lmhead_model, lmhead_attr_name):
+    wte = rgetattr(wte_model.module, wte_attr_name)
+    lmhead = rgetattr(lmhead_model.module, lmhead_attr_name)
+    if hasattr(wte, "_handles"):
+        for wte_handle, lmhead_handle in zip(wte._handles, lmhead._handles):
+            assert wte_handle.flat_param.grad is not None
+            assert lmhead_handle.flat_param.grad is not None
+            wte_handle.flat_param.grad.copy_((wte_handle.flat_param.grad + lmhead_handle.flat_param.grad) / 2)
+            lmhead_handle.flat_param.grad.copy_((wte_handle.flat_param.grad + lmhead_handle.flat_param.grad) / 2)
+    else:
+        assert wte._handle.flat_param.grad is not None
+        assert lmhead._handle.flat_param.grad is not None
+        wte._handle.flat_param.grad.copy_((wte._handle.flat_param.grad + lmhead._handle.flat_param.grad) / 2)
+        lmhead._handle.flat_param.grad.copy_((wte._handle.flat_param.grad + lmhead._handle.flat_param.grad) / 2)
+        
+# For Finalization of Model Gradients
+@torch.no_grad()
 def _allreduce_word_embedding_grads(module, tied_wte_attr_name, group):
-    word_embedding = rgetattr(module._fsdp_wrapped_module.module, tied_wte_attr_name)
+    word_embedding = rgetattr(module.module, tied_wte_attr_name)
     if hasattr(word_embedding, "_handles"):
         for handle in word_embedding._handles:
             assert handle.flat_param.grad is not None

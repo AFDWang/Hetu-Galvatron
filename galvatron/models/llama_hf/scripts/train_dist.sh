@@ -1,10 +1,10 @@
 export NUM_NODES=1
 export NUM_GPUS_PER_NODE=8
-export MASTER_ADDR=$MASTER_ADDR
+export MASTER_ADDR=localhost
 export MASTER_PORT=$MASTER_PORT
-export NODE_RANK=$RANK
+export NODE_RANK=0
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
-
+export CUDA_DEVICE_MAX_CONNECTIONS=1
 LAUNCHER="python3 -m torch.distributed.launch"
 LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"
 LAUNCHER="${LAUNCHER} --nproc_per_node ${NUM_GPUS_PER_NODE}"
@@ -13,12 +13,14 @@ LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
 TRAINER="train_dist.py"
-DATA_PATH=/home/pkuhetu/lxy/dataset/gpt2/my-gpt2_text_document
+DATA_PATH=/home/pkuhetu/lxy/dataset/llama/my-llama2_text_document
+VOCAB_FILE=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.json
+TOKENIZER_MODEL=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.model
 
 MODEL_ARGS="
     --model_size llama-7b \
     --set_model_config_manually 0 \
-    --set_layernum_manually 1 \
+    --set_layernum_manually 0 \
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_hidden_layers 8 \
@@ -26,8 +28,9 @@ MODEL_ARGS="
     --seq_length 2048"
 
 TRAIN_ARGS="
-    --global_train_batch_size 16 \
+    --global_train_batch_size 8 \
     --train-iters 25 \
+    --eval-iters 1 \
     --lr 1e-4 \
     --adam_weight_decay 0.01 \
     --dropout_prob 0.1 \
@@ -37,7 +40,9 @@ TRAIN_ARGS="
 
 DATA_ARGS="
     --data-path $DATA_PATH \
-    --split 949,50,1
+    --split 949,50,1 \
+    --tokenizer-type Llama2Tokenizer \
+    --tokenizer-model ${TOKENIZER_MODEL}
 "
 
 CKPT_ARGS="
@@ -45,11 +50,11 @@ CKPT_ARGS="
 
 PARALLEL_ARGS="
     --pp_deg 1 \
-    --global_tp_deg 1 \
+    --global_tp_deg 8 \
     --global_tp_consec 1 \
     --sdp 0 \
     --global_checkpoint 0 \
-    --vocab_tp 1 \
+    --vocab_tp 8 \
     --chunks 1 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \

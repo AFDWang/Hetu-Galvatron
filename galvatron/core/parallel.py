@@ -43,7 +43,7 @@ def _get_modules_to_materialize(root_module: nn.Module) -> List[nn.Module]:
 
     return module_names_to_materialize, modules_to_materialize
 
-def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='bert_enc', pp_device = None, mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None, tied_wte_attr_names=None, tp_groups=None, all_block_name=None, load_module_func=None):
+def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='bert_enc', pp_device = None, mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None, wrap_other_block_name=None, tp_groups=None, all_block_name=None, load_module_func=None):
     if dp_type is None:
         return module
     else:
@@ -51,7 +51,7 @@ def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='ber
         from .arguments import get_args
         fsdp_type_dict = {0:get_args().default_dp_type, 1:'zero3'}
         assert dp_type in fsdp_type_dict.keys()
-        return wrap_module_fsdp_manually(module, pp_device, module_type, dp_group, fsdp_type=fsdp_type_dict[dp_type], mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name, tied_wte_attr_names=tied_wte_attr_names, tp_groups=tp_groups, all_block_name=all_block_name, load_module_func=load_module_func)
+        return wrap_module_fsdp_manually(module, pp_device, module_type, dp_group, fsdp_type=fsdp_type_dict[dp_type], mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name, wrap_other_block_name=wrap_other_block_name, tp_groups=tp_groups, all_block_name=all_block_name, load_module_func=load_module_func)
 
 def param_init_fn(all_block_name, load, tp_groups, load_module_func, module):
     m = module
@@ -66,7 +66,7 @@ def param_init_fn(all_block_name, load, tp_groups, load_module_func, module):
                     load_module_func(load, tp_groups, name, submodule, m)
     
 
-def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_group=None, fsdp_type='zero3', mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None, tied_wte_attr_names=None, tp_groups=None, all_block_name=None, load_module_func=None):
+def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_group=None, fsdp_type='zero3', mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None, wrap_other_block_name=None, tp_groups=None, all_block_name=None, load_module_func=None):
     comm_group = None if dp_group is None else dp_group.group
     sharding_strategy = {'ddp': ShardingStrategy.NO_SHARD,
                            'zero2': ShardingStrategy.SHARD_GRAD_OP,
@@ -93,19 +93,20 @@ def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_grou
         if 'enc' in module_type or 'dec' in module_type:
             module = apply_fsdp(module, fsdp_args, wrap_block_name)
         else:
-            if not ('initialize_on_meta' in args and args.initialize_on_meta):
-                module = module.to(pp_device)
-            
-            if tied_wte_attr_names is not None:
-                if module_type == 'embed':
-                    assert rhasattr(module.module, tied_wte_attr_names[0])
-                    tied_module = rgetattr(module.module, tied_wte_attr_names[0])
-                    rsetattr(module.module, tied_wte_attr_names[0], FSDP(tied_module, **fsdp_args))
-                elif module_type == 'cls':
-                    assert rhasattr(module.module, tied_wte_attr_names[-1])
-                    tied_module = rgetattr(module.module, tied_wte_attr_names[-1])
-                    rsetattr(module.module, tied_wte_attr_names[-1], FSDP(tied_module, **fsdp_args))
-            module = FSDP(module, **fsdp_args)
+            module = apply_fsdp(module, fsdp_args, wrap_other_block_name)
+            # if not ('initialize_on_meta' in args and args.initialize_on_meta):
+            #     module = module.to(pp_device)
+
+            # if tied_wte_attr_names is not None:
+            #     if module_type == 'embed':
+            #         assert rhasattr(module.module, tied_wte_attr_names[0])
+            #         tied_module = rgetattr(module.module, tied_wte_attr_names[0])
+            #         rsetattr(module.module, tied_wte_attr_names[0], FSDP(tied_module, **fsdp_args))
+            #     elif module_type == 'cls':
+            #         assert rhasattr(module.module, tied_wte_attr_names[-1])
+            #         tied_module = rgetattr(module.module, tied_wte_attr_names[-1])
+            #         rsetattr(module.module, tied_wte_attr_names[-1], FSDP(tied_module, **fsdp_args))
+            # module = FSDP(module, **fsdp_args)
         return module
 
     # Wrap manually
@@ -207,19 +208,19 @@ class Module_with_relocation(nn.Module):
         if hasattr(module, 'get_extended_attention_mask'):
             self.get_extended_attention_mask = module.get_extended_attention_mask
 
-    def forward(self, *inputs):
+    def forward(self, *inputs, **kwargs):
         if isinstance(inputs, (Tuple, List)):
             inputs_relocated = []
             inputs_relocated.append(self.relocate_activations(inputs[0], True))
             for input in inputs[1:]:
                 inputs_relocated.append(self.relocate_activations(input, False))
             inputs_relocated = tuple(inputs_relocated)
-            return self.module(*inputs_relocated)
+            return self.module(*inputs_relocated, **kwargs)
         else:
             input_relocated = self.relocate_activations(inputs)
-            return self.module(input_relocated)
+            return self.module(input_relocated, **kwargs)
 
-def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, pp_devices=None, mixed_precision=torch.bfloat16, default_process_group=None, wrap_block_name=None, tied_wte_attr_names=None, tp_groups=None, all_block_name=None, load_module_func=None):
+def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, pp_devices=None, mixed_precision=torch.bfloat16, default_process_group=None, wrap_block_name=None, wrap_other_block_name=None, tp_groups=None, all_block_name=None, load_module_func=None):
     assert len(module_list) == len(dp_types)
     assert len(module_list) == len(dp_groups)
     
@@ -240,7 +241,7 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
             mixed_precision=mixed_precision,
             pp_on=pp_on,
             wrap_block_name=wrap_block_name,
-            tied_wte_attr_names=tied_wte_attr_names,
+            wrap_other_block_name=wrap_other_block_name,
             tp_groups=tp_groups[i],
             all_block_name=all_block_name,
             load_module_func=load_module_func

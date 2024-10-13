@@ -80,14 +80,15 @@ def load_llama_module(load, tp_groups, name, submodule, module):
                 weight = checkpoint["post_attention_layernorm.weight"].to(device = "cuda", dtype = torch.float32)
                 submodule.weight.copy_(weight)
             elif name.endswith("dense_h_to_4h"):
-                weight = (torch.cat([
-                    checkpoint["mlp.gate_proj.weight"],
-                    checkpoint["mlp.up_proj.weight"],
-                ], dim=0))
                 weight_start_index, weight_end_index = VocabUtility.vocab_range_from_global_vocab_size(
-                    weight.shape[0], rank, world_size
+                    checkpoint["mlp.gate_proj.weight"].shape[0], rank, world_size
                 )
-                submodule.weight.copy_(weight[weight_start_index:weight_end_index].contiguous())
+                weight = (torch.cat([
+                    checkpoint["mlp.gate_proj.weight"][weight_start_index:weight_end_index].contiguous(),
+                    checkpoint["mlp.up_proj.weight"][weight_start_index:weight_end_index].contiguous(),
+                ], dim=0))
+                
+                submodule.weight.copy_(weight.contiguous())
             elif name.endswith("dense_4h_to_h"):
                 weight = checkpoint["mlp.down_proj.weight"].to(device = "cuda", dtype = torch.float32)
                 weight_start_index, weight_end_index = VocabUtility.vocab_range_from_global_vocab_size(

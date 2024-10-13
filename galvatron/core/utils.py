@@ -8,11 +8,14 @@ import megatron
 from megatron.core import mpu
 from functools import partial
 from torch.distributed.fsdp._common_utils import _named_parameters_with_duplicates
+from megatron.global_vars import _build_tokenizer
 
 # utility functions, support on nested attributes for getattr, setattr, and setattr
 # https://stackoverflow.com/questions/31174295/getattr-and-setattr-on-nested-subobjects-chained-properties
 # https://stackoverflow.com/questions/24779483/hasattr-for-nested-attributes
 def rgetattr(obj, attr):
+    if attr == "":
+        return obj
     def _getattr_fsdp(obj, attr):
         if isinstance(obj, FSDP):
             return getattr(obj._fsdp_wrapped_module, attr)
@@ -72,7 +75,7 @@ def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_gro
     # mpu.get_data_parallel_world_size = partial(get_vtp_data_parallel_world_size, vtp_data_group)
     # mpu.get_tensor_model_parallel_src_rank = partial(get_vtp_tensor_model_parallel_src_rank, vtp_tensor_group)
     # mpu.get_tensor_model_parallel_group = partial(get_vtp_tensor_model_parallel_group, vtp_tensor_group)
-    
+    _build_tokenizer(args)
 
 def get_layernorm_offset(model, layernorm_name=[]):
     total_ln_offset = []

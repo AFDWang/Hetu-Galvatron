@@ -5,6 +5,8 @@ from megatron.arguments import core_transformer_config_from_args
 from galvatron.core import get_args
 from galvatron.core.tensor_parallel import ParallelMLP, ParallelAttention
 from galvatron.core.tensor_parallel import AttnMaskType, AttnType
+from torch.nn import LayerNorm
+# from megatron.model.fused_layer_norm import MixedFusedLayerNorm as LayerNorm
 
 class GPTAttention_tp(nn.Module):
     def __init__(self, config, layer_number, tp_group = None):
@@ -15,7 +17,7 @@ class GPTAttention_tp(nn.Module):
                                         attention_type=AttnType.self_attn,
                                         attn_mask_type=AttnMaskType.causal,
                                         tp_group = self.tp_group)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.hidden_dropout = megatron_config.attention_dropout
 
     def forward(self, hidden_states, attention_mask):
@@ -34,7 +36,7 @@ class GPTMLP_tp(nn.Module):
         megatron_config = core_transformer_config_from_args(get_args())
         self.tp_group = tp_group.group if tp_group is not None else None
         self.mlp = ParallelMLP(megatron_config, tp_group = self.tp_group)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+        self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.hidden_dropout = megatron_config.hidden_dropout
         
     def forward(self, hidden_states):

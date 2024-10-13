@@ -72,6 +72,8 @@ def overwrite_model_args(config, args):
     args.vocab_size = config.vocab_size
     args.num_attention_heads = config.num_attention_heads
     args.kv_channels = args.hidden_size // args.num_attention_heads
+    args.hidden_dropout = 0.0
+    args.attention_dropout = 0.0
     args.add_bias_linear = False
     args.swiglu = True
     if getattr(args, "padded_vocab_size", None) is None:

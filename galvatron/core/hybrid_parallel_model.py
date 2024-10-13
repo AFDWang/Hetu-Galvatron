@@ -5,6 +5,7 @@ from galvatron.core import check_hp_config, hp_config_whole_model, get_enc_group
 from galvatron.core import gen_comm_groups, wrap_modules_relocation
 from galvatron.core.initialize import init_empty_weights
 from .utils import get_layernorm_offset
+from torch import Tensor
 
 class GalvatronModel(nn.Module):
     def __init__(self, hp_model):
@@ -14,10 +15,12 @@ class GalvatronModel(nn.Module):
         self.model = hp_model
         self.iter = 0
         
-    def forward_backward(self, batch, iter=None, profiler=None, loss_func=None):
+    def forward_backward(self, batch, iter=None, profiler=None, loss_func=None, **kwargs):
         args, model = self.args, self.model
         self.iter = iter if iter is not None else self.iter
         if loss_func is not None:
+            if len(batch) == 1 and isinstance(batch[0], Tensor):
+                batch = [batch, [self.fake_tensor(batch[0])]]
             assert isinstance(batch, (tuple, list)) and isinstance(batch[0], (tuple, list)) and isinstance(batch[1], (tuple, list))
         else:
             loss_func = self.fake_loss_func
@@ -25,14 +28,18 @@ class GalvatronModel(nn.Module):
             batch = [batch, [self.fake_tensor(batch[0])]]
         if args.pp_deg > 1:
             if args.pipeline_type == "gpipe":
-                loss = model.gpipe_forward(batch, loss_func)
+                loss = model.gpipe_forward(batch, loss_func, **kwargs)
                 if profiler is not None:
                     profiler.profile_memory(self.iter, "After Forward")
                 model.gpipe_backward()
             elif args.pipeline_type == "pipedream_flush":
-                loss = model.pipedream_flush_forward_backward(batch, loss_func)
+                loss = model.pipedream_flush_forward_backward(batch, loss_func, **kwargs)
         else:
-            loss = model.no_pipeline_forward_backward(batch, loss_func, forward_only = args.profile_forward, profiler = profiler, iter = self.iter)
+            loss = model.no_pipeline_forward_backward(batch, loss_func, 
+                                                      forward_only = args.profile_forward, 
+                                                      profiler = profiler, 
+                                                      iter = self.iter,
+                                                      **kwargs)
         self.iter += 1
         return self.loss_to_cpu(loss)
     
@@ -40,7 +47,10 @@ class GalvatronModel(nn.Module):
         return torch.zeros([x.shape[0], 1], dtype=x.dtype, device=x.device)
     
     def fake_loss_func(self, labels, outputs):
-        return outputs[0]
+        if torch.numel(outputs[0]) > 1:
+            loss = outputs[0].mean()
+            return loss, loss 
+        return outputs[0], outputs[0]
     
     def loss_to_cpu(self, loss):
         if isinstance(loss, (list, tuple)): # Average loss of each microbatch
@@ -136,7 +146,6 @@ def construct_hybrid_parallel_model_api(
 
     # [Step 3] Wrap Relocation modules if necessary
     model = wrap_modules_relocation(model, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole)
-
     ln_offset, ln_size = get_layernorm_offset(model, layernorm_name)
     assert(len(ln_offset) == len(dp_groups_whole))
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
@@ -163,7 +172,7 @@ def construct_hybrid_parallel_model_api(
         module_types=module_types,
         mixed_precision=mixed_precision_dtype(args.mixed_precision),
         wrap_block_name=wrap_block_name,
-        tied_wte_attr_names=tied_wte_attr_names,
+        wrap_other_block_name=wrap_other_block_name,
         tp_groups=tp_groups_whole,
         all_block_name=all_block_name,
         load_module_func=load_module_func,

@@ -1,13 +1,14 @@
 import torch
 from torch import nn
-from torch.optim import Adam
+# from torch.optim import Adam
+from apex.optimizers import FusedAdam as Adam
 from transformers import LlamaConfig, LlamaForCausalLM
 from tqdm import tqdm
 import os
 from galvatron.utils import set_seed, distributed_dataloader, print_loss
 from galvatron.core import initialize_galvatron, GalvatronProfiler
 from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_hybrid_parallel_configs, construct_hybrid_parallel_model
-from galvatron.models.llama_hf.dataloader import DataLoaderForLlama, get_batch, get_train_valid_test_data_iterators
+from galvatron.models.llama_hf.dataloader import DataLoaderForLlama, get_batch, get_train_valid_test_data_iterators, loss_func
 from galvatron.models.llama_hf.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
 from galvatron.models.llama_hf.arguments import model_args
 from galvatron.core.initialize import init_empty_weights
@@ -64,17 +65,22 @@ def train(args):
         print("Start training...")
         
     for iter in range(args.train_iters):
-        batch = get_batch(train_data_iterator)
+        tokens, kwargs, loss_func = get_batch(train_data_iterator)
         profiler.profile_time_start(iter)
         profiler.profile_memory(iter, "Before Forward")
 
-        input_ids = batch
+        input_ids = tokens
         batch = [input_ids]
         
-        loss = model.forward_backward(batch, iter, profiler)
+        loss = model.forward_backward(batch, iter, profiler, 
+                                      loss_func=loss_func,
+                                      **kwargs)
         
         profiler.profile_memory(iter, "After Backward")
         
+        # for name, weight in model.named_parameters():
+        #     if torch.cuda.current_device() == 0:
+        #         print(f"final grad {name},{weight.grad}")
         optimizer.step()
         
         profiler.profile_memory(iter, "After optimizer_step")

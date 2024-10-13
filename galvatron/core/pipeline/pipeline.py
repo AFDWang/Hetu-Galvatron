@@ -22,16 +22,16 @@ else:
 
 from .utils import *
 from .grad_reduce import *
-from .grad_reduce import _send_backward_hook, _allreduce_word_embedding_grads
+from .grad_reduce import _send_backward_hook, _allreduce_word_embedding_grads, _allreduce_word_embedding_grads_no_pipeline, _allreduce_word_embedding, _allreduce_word_embedding_no_pipeline
 
 Shape = Union[List[int], torch.Size]
 
-def forward_step_function(loss_func):
+def forward_step_function(loss_func,**kwargs):
     def forward_step(inputs, model):
         if isinstance(inputs, (Tuple, List)):
-            outputs = model(*inputs)
+            outputs = model(*inputs,**kwargs)
         else:
-            outputs = model(inputs)
+            outputs = model(inputs,**kwargs)
         return outputs, loss_func
     return forward_step
 
@@ -107,7 +107,7 @@ class PipelineParallel(nn.Module):
         
         self.embedding_group = embedding_group
         self.tied_wte_attr_names = tied_wte_attr_names
-        self.finalize_wte_grads = tied_wte_attr_names is not None and self.total_model_len > len(self.model_cur_stage)
+        self.finalize_wte_grads = tied_wte_attr_names is not None #  and self.total_model_len > len(self.model_cur_stage)
 
     def check_tensor_dtype(self, layer_output_tensor_shapes, layer_output_tensor_dtypes):
         assert(len(layer_output_tensor_shapes) == len(layer_output_tensor_dtypes))
@@ -124,7 +124,7 @@ class PipelineParallel(nn.Module):
                 layer_output_tensor_dtypes.append([torch.float] * len(tensor_shape))
         return layer_output_tensor_dtypes
 
-    def wrap_pipeline_modules_data_parallel(self, dp_types, dp_groups, module_types, mixed_precision=torch.bfloat16, wrap_block_name=None, tied_wte_attr_names=None, tp_groups=None, all_block_name=None, load_module_func=None):
+    def wrap_pipeline_modules_data_parallel(self, dp_types, dp_groups, module_types, mixed_precision=torch.bfloat16, wrap_block_name=None, wrap_other_block_name=None, tp_groups=None, all_block_name=None, load_module_func=None):
         assert(self.total_model_len == len(dp_types))
         assert(self.total_model_len == len(dp_groups))
         assert(self.total_model_len == len(module_types))
@@ -143,11 +143,14 @@ class PipelineParallel(nn.Module):
             mixed_precision=mixed_precision,
             default_process_group=default_process_group,
             wrap_block_name=wrap_block_name,
-            tied_wte_attr_names=tied_wte_attr_names,
+            wrap_other_block_name=wrap_other_block_name,
             tp_groups=tp_groups_cur_stage,
             all_block_name=all_block_name,
             load_module_func=load_module_func,
         )
+        
+        if self.finalize_wte_grads:
+            self.sync_embedding()
 
     def wrap_pipeline_modules_checkpoint(self, checkpoint_flags, wrap_block_name=None):
         self.checkpoint_flags_stage = checkpoint_flags[self.stage_start_idx:self.stage_end_idx]
@@ -156,6 +159,15 @@ class PipelineParallel(nn.Module):
             self.model_cur_stage = wrap_modules_checkpoint(self.model_cur_stage, self.checkpoint_flags_stage, wrap_block_name=wrap_block_name)
             if wrap_block_name is not None: # in this way, checkpoint will be warpped inside FSDP
                 self.checkpoint_flags_stage = [0] * (self.stage_end_idx-self.stage_start_idx)
+    
+    def sync_embedding(self):
+        if self.group_size == 1:
+            _allreduce_word_embedding_no_pipeline(self.model_cur_stage[0], self.tied_wte_attr_names[0], self.model_cur_stage[-1], self.tied_wte_attr_names[-1])
+        else:
+            if self.is_pipeline_first_stage():
+                _allreduce_word_embedding(self.model_cur_stage[0], self.tied_wte_attr_names[0], self.embedding_group.group)
+            elif self.is_pipeline_last_stage():
+                _allreduce_word_embedding(self.model_cur_stage[-1], self.tied_wte_attr_names[-1], self.embedding_group.group)
     
     def gen_sp_layernorm_info(self, layer_module_types, layer_tp_groups, ln_offset, ln_size, all_block_name):
         if self.sequence_parallel:
@@ -166,16 +178,10 @@ class PipelineParallel(nn.Module):
             for block in self.model_cur_stage:
                 for m in block.modules():
                     if isinstance(m, FSDP):
-                        is_block = False
-                        for submodule in m.modules():
-                            if isinstance(submodule, tuple(all_block_name)):
-                                is_block = True
-                        if not is_block:
-                            continue
                         m.ln_offset = self.ln_offset[idx]
                         m.ln_size = self.ln_size[idx]
                         m.sp_group = self.layer_tp_groups[idx]
-                        idx += 1
+                idx += 1
                         
     def update_tensor_shape(self, microbatches, dp_size_input, dp_size, tp_size, template_tensor_shape):
         # Update tensor_shape with correct microbatch_size
@@ -211,6 +217,7 @@ class PipelineParallel(nn.Module):
         forward_only=False,
         profiler=None,
         iter=0,
+        **kwargs,
         ):
         """Run no pipeline method.
         
@@ -218,7 +225,7 @@ class PipelineParallel(nn.Module):
         """
         model = self.model_cur_stage
         
-        forward_step_func = forward_step_function(loss_func)
+        forward_step_func = forward_step_function(loss_func,**kwargs)
         # Chunk input batch into microbatches
         if batch[0][0].shape[0] % self.chunks != 0:
             if self.global_rank == 0:
@@ -280,6 +287,7 @@ class PipelineParallel(nn.Module):
         batch, 
         loss_func, 
         forward_only=False,
+        **kwargs,
         ):
         """Run non-interleaved 1F1B schedule, with communication between pipeline
         stages.
@@ -288,7 +296,7 @@ class PipelineParallel(nn.Module):
         assert(self.group_size > 1)
         model = self.model_cur_stage
         
-        forward_step_func = forward_step_function(loss_func)
+        forward_step_func = forward_step_function(loss_func,**kwargs)
 
         # Chunk input batch into microbatches
         microbatches = [chunk_batch(batch[0], self.chunks), chunk_batch(batch[1], self.chunks)]
@@ -553,12 +561,12 @@ class PipelineParallel(nn.Module):
         self,
         batch,
         loss_func, 
-        forward_only=False,
+        **kwargs,
         ):
         assert(self.group_size > 1)
         model = self.model_cur_stage
         
-        forward_step_func = forward_step_function(loss_func)
+        forward_step_func = forward_step_function(loss_func,**kwargs)
 
         # Chunk input batch into microbatches
         microbatches = [chunk_batch(batch[0], self.chunks), chunk_batch(batch[1], self.chunks)]
@@ -720,11 +728,11 @@ class PipelineParallel(nn.Module):
         if self.is_pipeline_last_stage():
             output_tensor = self.to_list(output_tensor)
             if self.require_loss:
-                output_tensor = loss_func(batch[1], output_tensor)
+                output_tensor, loss_reduced = loss_func(batch[1], output_tensor)
             loss = output_tensor
             if self.require_loss:
                 output_tensor = loss / self.real_chunks
-            losses_reduced.append(loss)
+            losses_reduced.append(loss_reduced)
             return output_tensor
 
         output_tensor = self.to_list(output_tensor)
@@ -835,10 +843,13 @@ class PipelineParallel(nn.Module):
         # return input_tensor_grad[0] if unwrap_input_tensor_grad else input_tensor_grad
     
     def finalize_wte_grads_func(self):
-        if self.is_pipeline_first_stage():
-            _allreduce_word_embedding_grads(self.model_cur_stage[0], self.tied_wte_attr_names[0], self.embedding_group.group)
-        elif self.is_pipeline_last_stage():
-            _allreduce_word_embedding_grads(self.model_cur_stage[-1], self.tied_wte_attr_names[-1], self.embedding_group.group)
+        if self.group_size == 1:
+            _allreduce_word_embedding_grads_no_pipeline(self.model_cur_stage[0], self.tied_wte_attr_names[0], self.model_cur_stage[-1], self.tied_wte_attr_names[-1])
+        else:
+            if self.is_pipeline_first_stage():
+                _allreduce_word_embedding_grads(self.model_cur_stage[0], self.tied_wte_attr_names[0], self.embedding_group.group)
+            elif self.is_pipeline_last_stage():
+                _allreduce_word_embedding_grads(self.model_cur_stage[-1], self.tied_wte_attr_names[-1], self.embedding_group.group)
 
     # pipeline rank utils
     # ---------------------------------------
@@ -1396,11 +1407,11 @@ class PipeSequential(nn.Sequential):
     Pipe variant of ``nn.Sequential`` which supports multiple inputs.
     """
 
-    def forward(self, *inputs):
+    def forward(self, *inputs, **kwargs):
         for module in self:
             if isinstance(inputs, Tuple):  # type: ignore[arg-type]
-                inputs = module(*inputs)
+                inputs = module(*inputs, **kwargs)
             else:
                 # Don't expand single variables (ex: lists/Tensor)
-                inputs = module(inputs)
+                inputs = module(inputs, **kwargs)
         return inputs

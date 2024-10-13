@@ -5,13 +5,13 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 def set_seed():
-    seed = 123
+    seed = 1234
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
-def distributed_dataloader(dataset, global_bsz, shuffle = True, args = None, group = None):
+def distributed_dataloader(dataset, global_bsz, shuffle = True, args = None, group = None, collate_fn=None):
     rank = torch.distributed.get_rank(group)
     world_size = torch.distributed.get_world_size(group)
     # pp_deg = args.pp_deg if args is not None and 'pp_deg' in args else 1
@@ -19,7 +19,8 @@ def distributed_dataloader(dataset, global_bsz, shuffle = True, args = None, gro
     train_batch_size_input = global_bsz // world_size
     trainloader = DataLoader(dataset=dataset,
                             batch_size=train_batch_size_input,
-                            sampler=DistributedSampler(dataset,shuffle=shuffle,num_replicas=world_size,rank=rank))
+                            sampler=DistributedSampler(dataset,shuffle=shuffle,num_replicas=world_size,rank=rank),
+                            collate_fn=collate_fn)
     return trainloader
 
 def print_loss(args, loss, ep, iter):

@@ -31,7 +31,7 @@ TRAIN_ARGS="
     --global_train_batch_size 8 \
     --train-iters 25 \
     --eval-iters 1 \
-    --lr 1e-4 \
+    --lr 1e-5 \
     --adam_weight_decay 0.01 \
     --dropout_prob 0.1 \
     --check_loss 0 \
@@ -46,13 +46,14 @@ DATA_ARGS="
 "
 
 CKPT_ARGS="
-    --load /home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf-split"
+    --load /home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf-split
+"
 
 PARALLEL_ARGS="
     --pp_deg 1 \
     --global_tp_deg 8 \
     --global_tp_consec 1 \
-    --sdp 0 \
+    --sdp 1 \
     --global_checkpoint 0 \
     --vocab_tp 8 \
     --chunks 1 \
@@ -60,6 +61,7 @@ PARALLEL_ARGS="
     --default_dp_type zero2 \
     --mixed_precision bf16 \
     --sequence-parallel \
+    --use-ulysses \
     --use-flash-attn \
     --initialize_on_meta 1" 
     # --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"

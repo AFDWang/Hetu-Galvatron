@@ -8,6 +8,7 @@ from megatron.core import tensor_parallel
 from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
 # from flash_attn.ops.rms_norm import RMSNorm as LlamaRMSNorm
 from galvatron.core.tensor_parallel import colummn_row_reset_parameters
+from megatron.core.tensor_parallel.utils import VocabUtility
 
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
@@ -34,10 +35,19 @@ class LlamaEmbeddings_(nn.Module):
         self.sequence_parallel = args.sequence_parallel
         self.clone_scatter_output_in_embedding = args.clone_scatter_output_in_embedding
         self.tp_group = self.embed_tokens.tp_group
+        self.sp_group = self.embed_tokens.sp_group
+        self.use_ulysses = args.use_ulysses
+        if self.use_ulysses:
+            self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
+                    args.seq_length, torch.distributed.get_rank(self.sp_group), torch.distributed.get_world_size(self.sp_group)
+                )
+            
         
     def forward(self, tokens, position_ids=None, attention_mask=None, labels=None):
         # tokens = input_ids[:, :-1].contiguous()
         # labels = input_ids[:, 1:].contiguous()
+        if self.use_ulysses:
+            tokens = tokens[:, self.seq_start_index:self.seq_end_index].contiguous()
         hidden_states = self.embed_tokens(tokens)
         # [b, s, h] -> [s, b, h]
         hidden_states = hidden_states.transpose(0, 1).contiguous()
@@ -96,12 +106,22 @@ class LlamaCls_(nn.Module):
         super().__init__()
         self.sequence_parallel = get_args().sequence_parallel
         self.tp_group = model.lm_head.tp_group
+        self.sp_group = model.lm_head.sp_group
         self.lm_head = LlamaLoss_(model.lm_head.weight, self.sequence_parallel, self.tp_group)
         self.clone_scatter_output_in_embedding = get_args().clone_scatter_output_in_embedding
         self.parallel_loss = parallel_loss
         self.half_entorpy = half_entorpy
-
+        args = get_args()
+        self.seq_length = args.seq_length
+        self.use_ulysses = args.use_ulysses
+        if self.use_ulysses:
+            self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
+                    self.seq_length, torch.distributed.get_rank(self.sp_group), torch.distributed.get_world_size(self.sp_group)
+                )
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
+        if self.use_ulysses:
+            labels = labels[:, self.seq_start_index:self.seq_end_index].contiguous()
+            
         if not self.sequence_parallel:
             hidden_states = tensor_parallel.copy_to_tensor_model_parallel_region_group(hidden_states, self.tp_group)
         
@@ -130,12 +150,18 @@ class LlamaCls_(nn.Module):
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
         else:
-            if not self.half_entorpy:
-                loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), labels, tp_group = self.tp_group)
+            if not self.use_ulysses:
+                if not self.half_entorpy:
+                    loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), labels, tp_group = self.tp_group)
+                else:
+                    loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, labels, tp_group = self.tp_group)
             else:
-                loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, labels, tp_group = self.tp_group)
+                if not self.half_entorpy:
+                    loss = tensor_parallel.vocab_sequence_parallel_cross_entropy(logits_parallel.float(), labels, self.sp_group)
+                else:
+                    loss = tensor_parallel.vocab_sequence_parallel_cross_entropy(logits_parallel, labels, self.sp_group)
             # loss = loss.mean()
-            loss = loss.transpose(0,1).contiguous()
+        loss = loss.transpose(0,1).contiguous()
         return loss
 
 def construct_sequential_model(model, config):

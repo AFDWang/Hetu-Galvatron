@@ -48,7 +48,7 @@ def train(args):
     if local_rank == 0:
         print("Creating Dataset...")
         
-    set_megatron_args_for_dataset(args, model, model.tp_groups_whole[0], model.dp_groups_whole[0])
+    set_megatron_args_for_dataset(args, model, model.sp_groups_whole[0] if args.use_ulysses else model.tp_groups_whole[0], model.dp_groups_whole[0])
     if local_rank == 0:
         _print_args("arguments", args)
 

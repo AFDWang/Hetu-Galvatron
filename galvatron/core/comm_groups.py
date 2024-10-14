@@ -121,6 +121,39 @@ def gen_dp_group_dist(tp_size, pp_size, to_print = True, consecutive = False, wo
         show_groups(all_dp_groups)
     return dp_group
 
+def gen_sp_group_dist(sp_size, pp_size, to_print = True, consecutive = True, world_ranks = None):
+    world_ranks = sort_ranks(world_ranks)
+    rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
+    all_sp_groups, sp_group = [], None
+    dp_size = world_size // sp_size // pp_size
+    num_pp_groups = world_size // pp_size
+    num_sp_groups = world_size // sp_size
+
+    if consecutive:
+        for i in range(num_sp_groups):
+            ranks = range(i * sp_size, (i+1) * sp_size)
+            ranks = index_ranks(ranks, world_ranks)
+            group = CommGroup(ranks)
+            all_sp_groups.append(group)
+            if group.has_rank(rank):
+                sp_group = group
+    else:
+        for i in range(pp_size):
+            start_rank = i * num_pp_groups
+            end_rank = (i + 1) * num_pp_groups
+            for j in range(dp_size):
+                ranks = range(start_rank + j, end_rank, dp_size)
+                ranks = index_ranks(ranks, world_ranks)
+                group = CommGroup(ranks)
+                all_sp_groups.append(group)
+                if group.has_rank(rank):
+                    sp_group = group
+    
+    if rank == 0 and to_print:
+        print("SP groups:", end = ' ')
+        show_groups(all_sp_groups)
+    return sp_group
+
 def gen_pp_group_dist(pp_size, to_print = True, world_ranks = None):
     world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
@@ -164,12 +197,22 @@ def get_tp_group_dict_dist(all_tp_sizes, pp_size, consecutive = True, world_rank
         tp_group_dict[tp_size] = gen_tp_group_dist(tp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks)
     return tp_group_dict
 
-def get_dp_group_dict_dist(all_tp_sizes, pp_size, consecutive = False, world_ranks = None):
-    tp_sizes_set = list(set(all_tp_sizes))
+def get_dp_group_dict_dist(all_tp_sizes, all_sp_sizes, pp_size, consecutive = False, world_ranks = None):
+    all_mul_sizes = []
+    for tp_size, sp_size in zip(all_tp_sizes, all_sp_sizes):
+        all_mul_sizes.append(tp_size * sp_size)
+    mul_sizes_set = list(set(all_mul_sizes))
     dp_group_dict={}
-    for tp_size in tp_sizes_set:
-        dp_group_dict[tp_size] = gen_dp_group_dist(tp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks)
+    for mul_size in mul_sizes_set:
+        dp_group_dict[mul_size] = gen_dp_group_dist(mul_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks)
     return dp_group_dict
+
+def get_sp_group_dict_dist(all_sp_sizes, pp_size, consecutive = True, world_ranks =  None):
+    sp_sizes_set = list(set(all_sp_sizes))
+    sp_group_dict={}
+    for sp_size in sp_sizes_set:
+        sp_group_dict[sp_size] = gen_sp_group_dist(sp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks)
+    return sp_group_dict
 
 def gen_redistributed_group(tp_size_old, tp_size_new, tp_consec_old, tp_consec_new, tp_group_old, tp_group_new):
     if tp_size_old == tp_size_new and tp_consec_old == tp_consec_new:
@@ -225,28 +268,50 @@ def merge_redistributed_group(split_group, allgather_group, world_ranks = None):
     
     assert False,"merge_redistributed_group error!"
 
-def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1, world_ranks = None):
+def gen_seq_data_group_dist(pp_size, to_print, world_ranks = None):
+    world_ranks = sort_ranks(world_ranks)
+    rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
+    all_seq_data_groups, seq_data_group_group = [], None
+    seq_data_world_size = world_size // pp_size
+    for i in range(pp_size):
+        ranks = range(i*seq_data_world_size, (i+1)*seq_data_world_size)
+        ranks = index_ranks(ranks, world_ranks)
+        group = CommGroup(ranks)
+        all_seq_data_groups.append(group)
+        if group.has_rank(rank):
+            seq_data_group = group
+
+    if rank == 0 and to_print:
+        print("seq_data groups:", end = ' ')
+        show_groups(all_seq_data_groups)
+    return seq_data_group
+
+def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, show_rank = -1, world_ranks = None):
     world_ranks = sort_ranks(world_ranks)
     world_size = get_world_size(world_ranks)
     world_size_per_stage = world_size // pp_size
+    for i in range(len(all_tp_sizes)):
+        assert all_tp_sizes[i] == 1 or all_sp_sizes[i] == 1, "DeepSpeed Ulysses is not compatible with Megatron Tensor Parallel!"
     for i in range(len(all_tp_sizes)):
         tp_consec = tp_consecutive_flags[i]
         assert tp_consec == 0 or tp_consec == 1
         if all_tp_sizes[i] in [1, world_size_per_stage]:
             tp_consecutive_flags[i] = 1
-    tp_groups, dp_groups = [], []
+    tp_groups, dp_groups, sp_groups = [], [], []
     dp_groups = []
     allgather_groups, split_groups = [None], [None]
     fused_split_groups, fused_allgather_groups = [None], [None]
     pp_group, all_pp_groups = gen_pp_group_dist(pp_size, to_print=False, world_ranks=world_ranks)
     embedding_group = gen_embedding_group_dist(pp_size, all_pp_groups, to_print=False)
-    tp_group_dict, dp_group_dict = {}, {}
+    tp_group_dict, dp_group_dict, sp_group_dict = {}, {}, {}
     for consec in [0, 1]:
         tp_group_dict[consec] = get_tp_group_dict_dist(all_tp_sizes, pp_size, consec, world_ranks=world_ranks)
-        dp_group_dict[consec] = get_dp_group_dict_dist(all_tp_sizes, pp_size, consec, world_ranks=world_ranks)
+        dp_group_dict[consec] = get_dp_group_dict_dist(all_tp_sizes, all_sp_sizes, pp_size, consec, world_ranks=world_ranks)
+        sp_group_dict[consec] = get_sp_group_dict_dist(all_sp_sizes, pp_size, consec, world_ranks=world_ranks)
     for i in range(len(all_tp_sizes)):
         tp_groups.append(tp_group_dict[tp_consecutive_flags[i]][all_tp_sizes[i]])
-        dp_groups.append(dp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i]])
+        dp_groups.append(dp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i] * all_sp_sizes[i]])
+        sp_groups.append(sp_group_dict[tp_consecutive_flags[i]][all_sp_sizes[i]])
     for i in range(1, len(all_tp_sizes)):
         split_group, allgather_group = gen_redistributed_group(all_tp_sizes[i-1], all_tp_sizes[i], tp_consecutive_flags[i-1], tp_consecutive_flags[i], tp_groups[i-1], tp_groups[i])
         fused_split_group, fused_allgather_group = merge_redistributed_group(split_group, allgather_group, world_ranks=world_ranks)
@@ -255,6 +320,8 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
         fused_split_groups.append(fused_split_group)
         fused_allgather_groups.append(fused_allgather_group)
     
+    seq_data_group = gen_seq_data_group_dist(pp_size, to_print= True, world_ranks= world_ranks)
+    seq_data_groups = [seq_data_group if all_tp_sizes[i] == 1 else dp_groups[i] for i in range(len(all_tp_sizes))]
     show_rank = 0
     if show_rank >= 0 and torch.distributed.get_rank() == show_rank:
         print('====================== Galvatron Communication Group ===========================')
@@ -262,8 +329,12 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
         show_groups([embedding_group])
         print("TP groups for rank %d (all layers):"%show_rank)
         show_groups(tp_groups)
+        print("SP groups for rank %d (all layers):"%show_rank)
+        show_groups(sp_groups)
         print("DP groups for rank %d (all layers):"%show_rank)
         show_groups(dp_groups)
+        print("SDP groups for rank %d (all layers):"%show_rank)
+        show_groups(seq_data_groups)
         print("Split groups for rank %d:"%show_rank)
         show_groups(split_groups)
         print("AllGather groups for rank %d:"%show_rank)
@@ -273,4 +344,4 @@ def gen_comm_groups(all_tp_sizes, pp_size, tp_consecutive_flags, show_rank = -1,
         print("Fused allgather groups for rank %d:"%show_rank)
         show_groups(fused_allgather_groups)
         print('================================================================================')
-    return pp_group, tp_groups, dp_groups, allgather_groups, split_groups, fused_allgather_groups, fused_split_groups, embedding_group
+    return pp_group, tp_groups, sp_groups, dp_groups, seq_data_groups, allgather_groups, split_groups, fused_allgather_groups, fused_split_groups, embedding_group

@@ -11,15 +11,18 @@ from galvatron.core.tensor_parallel import ParallelMLP, ParallelAttention
 from galvatron.core.tensor_parallel import AttnMaskType, AttnType
 
 class LlamaAttention_tp(nn.Module):
-    def __init__(self, config, layer_number, tp_group = None):
+    def __init__(self, config, layer_number, tp_group = None, sp_group = None):
         super().__init__()
         args = get_args()
+        self.use_ulysses = args.use_ulysses
         megatron_config = core_transformer_config_from_args(args)
         self.tp_group = tp_group.group if tp_group is not None else None
+        self.sp_group = sp_group.group if sp_group is not None else None
         self.attention = ParallelAttention(megatron_config, layer_number,
                                         attention_type=AttnType.self_attn,
                                         attn_mask_type=AttnMaskType.causal,
-                                        tp_group = self.tp_group)
+                                        tp_group = self.tp_group,
+                                        sp_group = self.sp_group)
         
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
@@ -38,7 +41,10 @@ class LlamaAttention_tp(nn.Module):
     def forward(self, hidden_states, attention_mask):
         input_tensor = hidden_states
         hidden_states = self.LayerNorm(hidden_states)
-        rotary_pos_emb = self.rotary_pos_emb(self.max_position_embeddings)
+        if self.use_ulysses:
+            rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0], offset = hidden_states.shape[0] * torch.distributed.get_rank(self.sp_group))
+        else:
+            rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group))
         hidden_states, bias = self.attention(hidden_states, attention_mask,rotary_pos_emb=rotary_pos_emb)
         hidden_states = hidden_states + input_tensor
         return hidden_states
@@ -59,9 +65,9 @@ class LlamaMLP_tp(nn.Module):
         return hidden_states
 
 class LlamaLayer_tp(nn.Module):
-    def __init__(self, config, layer_number, tp_group = None):
+    def __init__(self, config, layer_number, tp_group = None, sp_group = None):
         super().__init__()
-        self.attention = LlamaAttention_tp(config, layer_number, tp_group)
+        self.attention = LlamaAttention_tp(config, layer_number, tp_group, sp_group)
         self.mlp = LlamaMLP_tp(config, tp_group)
         self.idx = layer_number
 
@@ -78,14 +84,14 @@ class LlamaLayer_tp(nn.Module):
         # outputs = (layer_output
         return layer_output
     
-def construct_tensor_parallel_model(model, config, tp_groups_enc):
-    layers_tp = nn.ModuleList([LlamaLayer_tp(config, i, tp_group = tp_groups_enc[i + 1]) for i in range(config.num_hidden_layers)])
+def construct_tensor_parallel_model(model, config, tp_groups_enc, sp_groups_enc):
+    layers_tp = nn.ModuleList([LlamaLayer_tp(config, i, tp_group = tp_groups_enc[i + 1], sp_group = sp_groups_enc[i + 1]) for i in range(config.num_hidden_layers)])
     setattr(model.model, 'layers', layers_tp)
     args = get_args()
     megatron_config = core_transformer_config_from_args(get_args())
     setattr(model.model, 'embed_tokens', VocabParallelEmbedding(
-            args.padded_vocab_size, megatron_config.hidden_size, config = megatron_config, init_method = megatron_config.init_method, tp_group = tp_groups_enc[0].group))
+            args.padded_vocab_size, megatron_config.hidden_size, config = megatron_config, init_method = megatron_config.init_method, tp_group = tp_groups_enc[0].group, sp_group = sp_groups_enc[0].group))
     setattr(model, 'lm_head', ColumnParallelLinear(
-            megatron_config.hidden_size, args.padded_vocab_size, config = megatron_config, init_method = megatron_config.init_method, bias=False, tp_group = tp_groups_enc[-1].group))
+            megatron_config.hidden_size, args.padded_vocab_size, config = megatron_config, init_method = megatron_config.init_method, bias=False, tp_group = tp_groups_enc[-1].group, sp_group = sp_groups_enc[-1].group))
     
     return model

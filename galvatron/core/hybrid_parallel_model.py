@@ -7,6 +7,19 @@ from galvatron.core.initialize import init_empty_weights
 from .utils import get_layernorm_offset
 from torch import Tensor
 
+from torch.distributed import fsdp
+from galvatron.core.pipeline.grad_reduce import _register_post_backward_hook_bf16, _finalize_params_bf16
+version_str = torch.__version__
+version_major, version_minor, _ = version_str.split('.')
+version_major, version_minor = int(version_major), int(version_minor)
+if version_major > 1:
+    if version_minor > 0:
+       from torch.distributed.fsdp._runtime_utils import _register_post_backward_hook
+
+    else:
+       from torch.distributed.fsdp._runtime_utils import _register_post_backward_hooks
+else:
+    assert False, f"PyTorch version must be greater than 2.0, but found {torch.__version__}"
 class GalvatronModel(nn.Module):
     def __init__(self, hp_model):
         super().__init__()
@@ -111,6 +124,10 @@ def construct_hybrid_parallel_model_api(
         wrap_checkpoint_block_name = wrap_block_name
     config, args, hp_configs = model_config, training_args, hybrid_parallel_configs
 
+    if args.mixed_precision == 'bf16':
+        assert version_major > 1 and version_minor > 0, "Mixed precision training is only supported for torch > 2.0.1"
+        fsdp._runtime_utils._register_post_backward_hook = _register_post_backward_hook_bf16
+        fsdp._runtime_utils._finalize_params = _finalize_params_bf16
     # Get model-specific model info: module_types, layernum_list, layer_shapes_list, layer_dtypes_list
     model_info = model_info(config, args)
     module_types = model_info.module_types()
@@ -164,6 +181,7 @@ def construct_hybrid_parallel_model_api(
         layer_output_tensor_dtypes=dtypes_whole,
         layer_dp_sizes=hp_configs_whole['dp_sizes_whole'],
         layer_tp_sizes=hp_configs_whole['tp_sizes_whole'],
+        layer_sp_sizes=hp_configs_whole['sp_sizes_whole'],
         chunks=get_chunks(args),
         process_group=pp_group.ranks,
         embedding_group=embedding_group,

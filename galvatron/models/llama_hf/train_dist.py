@@ -1,7 +1,7 @@
 import torch
 from torch import nn
-# from torch.optim import Adam
-from apex.optimizers import FusedAdam as Adam
+from torch.optim import Adam
+# from apex.optimizers import FusedAdam as Adam
 from transformers import LlamaConfig, LlamaForCausalLM
 from tqdm import tqdm
 import os
@@ -58,7 +58,7 @@ def train(args):
 
     path = os.path.dirname(os.path.abspath(__file__))
     profiler = GalvatronProfiler(args)
-    profiler.set_profiler_dist(path, model_layer_configs(config), model_name(config))
+    profiler.set_profiler_dist(path, model_layer_configs(config), model_name(config),start_iter=0)
     
     profiler.profile_memory(0, "After creating model")
     if local_rank == 0:
@@ -93,7 +93,7 @@ def train(args):
         profiler.profile_time_end(iter, loss)
         
         torch.distributed.barrier()
-            
+
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='train_dist')
     set_seed()

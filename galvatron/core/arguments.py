@@ -126,10 +126,16 @@ def galvatron_training_args(parser, use_megatron=True):
         "--shape_order", type=str, default='SBH', help="Model shape order.", choices=['SBH', 'BSH'],
     )
     group.add_argument(
-        "--vocab_tp", type=int, default=1, help="Tensor parallel degree of vocab.", choices=[1,2,4,8],
+        "--vocab_tp", type=int, default=1, help="Tensor parallel degree of vocab.", choices=[1,2,4,8,16],
     )
     group.add_argument(
         "--use-ulysses", action="store_true", help="Whether to use DeepSpeed Ulysses or Megatron-TP",
+    )
+    group.add_argument(
+        "--no_async_grad_reduce", action="store_false",
+        help='Disable async grad reduce so that gradient will be reduce every micro batch. '
+        'Ensure Zero3 memory cost when chunk > 1.',
+        dest='async_grad_reduce'
     )
     if not use_megatron:
         group.add_argument("--lr", type=float, default=1e-4, help="Learning rate of adam")

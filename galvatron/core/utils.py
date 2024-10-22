@@ -8,7 +8,7 @@ import megatron
 from megatron.core import mpu
 from functools import partial
 from torch.distributed.fsdp._common_utils import _named_parameters_with_duplicates
-from megatron.global_vars import _build_tokenizer
+from megatron.global_vars import rebuild_tokenizer
 
 # utility functions, support on nested attributes for getattr, setattr, and setattr
 # https://stackoverflow.com/questions/31174295/getattr-and-setattr-on-nested-subobjects-chained-properties
@@ -64,6 +64,7 @@ def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_gro
     args.iteration = 0
     
     mpu.set_pipeline_model_parallel_rank(hp_model.model.group_rank)
+    mpu.set_pipeline_model_parallel_world_size(hp_model.model.group_size)
     mpu.set_tensor_model_parallel_group(vtp_tensor_group.group)
     mpu.set_tensor_model_parallel_rank(torch.distributed.get_rank(group=vtp_tensor_group.group))
     mpu.set_data_parallel_group(vtp_data_group.group)
@@ -75,7 +76,7 @@ def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_gro
     # mpu.get_data_parallel_world_size = partial(get_vtp_data_parallel_world_size, vtp_data_group)
     # mpu.get_tensor_model_parallel_src_rank = partial(get_vtp_tensor_model_parallel_src_rank, vtp_tensor_group)
     # mpu.get_tensor_model_parallel_group = partial(get_vtp_tensor_model_parallel_group, vtp_tensor_group)
-    _build_tokenizer(args)
+    rebuild_tokenizer(args)
 
 def get_layernorm_offset(model, layernorm_name=[]):
     total_ln_offset = []

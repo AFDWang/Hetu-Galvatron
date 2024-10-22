@@ -5,6 +5,7 @@ export MASTER_PORT=$MASTER_PORT
 export NODE_RANK=0
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
 export CUDA_DEVICE_MAX_CONNECTIONS=1
+export NCCL_IB_HCA=mlx5_2,mlx5_5
 LAUNCHER="python3 -m torch.distributed.launch"
 LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"
 LAUNCHER="${LAUNCHER} --nproc_per_node ${NUM_GPUS_PER_NODE}"
@@ -28,14 +29,16 @@ MODEL_ARGS="
     --seq_length 2048"
 
 TRAIN_ARGS="
-    --global_train_batch_size 8 \
-    --train-iters 25 \
+    --global_train_batch_size 32 \
+    --train-iters 20 \
     --eval-iters 1 \
     --lr 1e-5 \
     --adam_weight_decay 0.01 \
     --dropout_prob 0.1 \
     --check_loss 0 \
     --profile 1 \
+    --no_async_grad_reduce \
+    --use-ulysses \
     --save_profiled_memory 0"
 
 DATA_ARGS="
@@ -50,18 +53,17 @@ CKPT_ARGS="
 "
 
 PARALLEL_ARGS="
-    --pp_deg 1 \
-    --global_tp_deg 8 \
+    --pp_deg 2 \
+    --global_tp_deg 2 \
     --global_tp_consec 1 \
     --sdp 1 \
     --global_checkpoint 0 \
-    --vocab_tp 8 \
-    --chunks 1 \
+    --vocab_tp 2 \
+    --chunks 4 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \
     --sequence-parallel \
-    --use-ulysses \
     --use-flash-attn \
     --initialize_on_meta 1" 
     # --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"

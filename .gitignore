@@ -17,6 +17,7 @@ log/
 *.log
 *.json
 *.nsys-rep
+*.pickle
 galvatron/models/gpt_hf/eval
 galvatron/profile_hardware/hostfile
 galvatron/profile_hardware/profile_reducescatter.py

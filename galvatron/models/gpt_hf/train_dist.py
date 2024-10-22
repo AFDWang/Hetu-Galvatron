@@ -46,7 +46,7 @@ def train(args):
     if local_rank == 0:
         print("Creating Dataset...")
     
-    set_megatron_args_for_dataset(args, model, model.tp_groups_whole[0], model.dp_groups_whole[0])
+    set_megatron_args_for_dataset(args, model, model.sp_groups_whole[0] if args.use_ulysses else model.tp_groups_whole[0], model.dp_groups_whole[0])
     if local_rank == 0:
         _print_args("arguments", args)
 
@@ -56,7 +56,7 @@ def train(args):
 
     path = os.path.dirname(os.path.abspath(__file__))
     profiler = GalvatronProfiler(args)
-    profiler.set_profiler_dist(path, model_layer_configs(config), model_name(config))
+    profiler.set_profiler_dist(path, model_layer_configs(config), model_name(config),start_iter=0)
     
     profiler.profile_memory(0, "After creating model")
     if local_rank == 0:
@@ -64,17 +64,19 @@ def train(args):
     for iter in range(args.train_iters):
         # if not args.check_loss and not args.profile:
         #     trainloader = tqdm(trainloader)
-        batch = get_batch(train_data_iterator)
+        tokens, kwargs, loss_func = get_batch(train_data_iterator)
         
         # print(batch.shape)
         # print(batch)
         profiler.profile_time_start(iter)
         profiler.profile_memory(iter, "Before Forward")
 
-        input_ids = batch
+        input_ids = tokens
         batch = [input_ids]
         
-        loss = model.forward_backward(batch, iter, profiler)
+        loss = model.forward_backward(batch, iter, profiler, 
+                                      loss_func=loss_func,
+                                      **kwargs)
         
         profiler.profile_memory(iter, "After Backward")
         

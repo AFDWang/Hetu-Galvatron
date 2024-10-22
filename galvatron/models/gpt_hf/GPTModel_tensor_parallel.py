@@ -9,14 +9,18 @@ from torch.nn import LayerNorm
 # from megatron.model.fused_layer_norm import MixedFusedLayerNorm as LayerNorm
 
 class GPTAttention_tp(nn.Module):
-    def __init__(self, config, layer_number, tp_group = None):
+    def __init__(self, config, layer_number, tp_group = None, sp_group = None):
         super().__init__()
-        megatron_config = core_transformer_config_from_args(get_args())
+        args = get_args()
+        self.use_ulysses = args.use_ulysses
+        megatron_config = core_transformer_config_from_args(args)
         self.tp_group = tp_group.group if tp_group is not None else None
+        self.sp_group = sp_group.group if sp_group is not None else None
         self.attention = ParallelAttention(megatron_config, layer_number,
                                         attention_type=AttnType.self_attn,
                                         attn_mask_type=AttnMaskType.causal,
-                                        tp_group = self.tp_group)
+                                        tp_group = self.tp_group,
+                                        sp_group = self.sp_group)
         self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.hidden_dropout = megatron_config.attention_dropout
 
@@ -50,9 +54,9 @@ class GPTMLP_tp(nn.Module):
         return hidden_states
 
 class GPTLayer_tp(nn.Module):
-    def __init__(self, config, layer_number, tp_group = None):
+    def __init__(self, config, layer_number, tp_group = None, sp_group = None):
         super().__init__()
-        self.attention = GPTAttention_tp(config, layer_number, tp_group)
+        self.attention = GPTAttention_tp(config, layer_number, tp_group, sp_group)
         self.mlp = GPTMLP_tp(config, tp_group)
         self.idx = layer_number
 
@@ -68,14 +72,14 @@ class GPTLayer_tp(nn.Module):
         layer_output = self.mlp(attention_output)
         return layer_output
      
-def construct_tensor_parallel_model(model, config, tp_groups_enc):
-    layers_tp = nn.ModuleList([GPTLayer_tp(config, i, tp_group = tp_groups_enc[i + 1]) for i in range(config.num_hidden_layers)])
+def construct_tensor_parallel_model(model, config, tp_groups_enc, sp_groups_enc):
+    layers_tp = nn.ModuleList([GPTLayer_tp(config, i, tp_group = tp_groups_enc[i + 1], sp_group = sp_groups_enc[i + 1]) for i in range(config.num_hidden_layers)])
     setattr(model.transformer, 'h', layers_tp)
     args = get_args()
     megatron_config = core_transformer_config_from_args(get_args())
     setattr(model.transformer, 'wte', VocabParallelEmbedding(
-            args.padded_vocab_size, megatron_config.hidden_size, config = megatron_config, init_method = megatron_config.init_method, tp_group = tp_groups_enc[0].group))
+            args.padded_vocab_size, megatron_config.hidden_size, config = megatron_config, init_method = megatron_config.init_method, tp_group = tp_groups_enc[0].group, sp_group = sp_groups_enc[0].group))
     setattr(model, 'lm_head', ColumnParallelLinear(
-            megatron_config.hidden_size, args.padded_vocab_size, config = megatron_config, init_method = megatron_config.init_method, bias=False, tp_group = tp_groups_enc[-1].group))
+            megatron_config.hidden_size, args.padded_vocab_size, config = megatron_config, init_method = megatron_config.init_method, bias=False, tp_group = tp_groups_enc[-1].group, sp_group = sp_groups_enc[-1].group))
     
     return model

@@ -15,6 +15,8 @@ from megatron.utils import (
     get_ltor_masks_and_position_ids,
     average_losses_across_data_parallel_group
 )
+from galvatron.core.hybrid_parallel_config import get_chunks
+from galvatron.core.pipeline.utils import chunk_batch
 
 def test_get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
@@ -117,7 +119,7 @@ def get_batch(data_iterator):
 
     # TODO: this is pretty hacky, find a better way
     if (not mpu.is_pipeline_first_stage()) and (not mpu.is_pipeline_last_stage()):
-        return None, None, None, None, None
+        return None, {}, None
         # return torch.empty(args.micro_batch_size,args.seq_length+1).cuda().long()
     
     args = get_args()
@@ -155,21 +157,23 @@ def get_batch(data_iterator):
         'position_ids': position_ids
     }
 
+    micro_lossmask = chunk_batch([loss_mask], get_chunks(args))
     # print(f"Rank {torch.cuda.current_device()} with input {tokens}")
 
     return tokens, {
             "position_ids" : position_ids, 
             "attention_mask" : attention_mask, 
             "labels" : labels,
-            }, partial(loss_func, loss_mask)
+            }, partial(loss_func, micro_lossmask)
 
-def loss_func(loss_mask: Tensor, label: List, output_tensor: List):
+def loss_func(micro_lossmask: Tensor, label: List, output_tensor: List):
     """Loss function.
 
     Args:
         loss_mask (Tensor): Used to mask out some portions of the loss
         output_tensor (Tensor): The tensor with the losses
     """    
+    loss_mask = micro_lossmask[0][0]
     args = get_args()
     output_tensor = output_tensor[0]
     losses = output_tensor.float()
@@ -180,4 +184,5 @@ def loss_func(loss_mask: Tensor, label: List, output_tensor: List):
 
     averaged_loss = average_losses_across_data_parallel_group([loss])
 
+    micro_lossmask.pop(0)
     return loss, averaged_loss[0]

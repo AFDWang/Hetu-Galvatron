@@ -18,6 +18,9 @@ For models and configurations in the [Galvatron Model Zoo](.), the profiling ste
 sh scripts/profile_memory.sh
 ```
 
+### Other Profile Arguments
+
+By setting `profile_min_batch_size`, `profile_max_batch_size`, and `profile_batch_size_step`, users can control the batch sizes used during the time profiling . Specifically, the time profiling will be performed using batch sizes in `range(profile_min_batch_size, profile_max_batch_size + 1, profile_batch_size_step)`. Specifically, this feature is designed for curve fitting in the cost model of time calculation, which will be discussed later.
 
 ## Parallelism Optimizing with Galvatron
 
@@ -34,13 +37,21 @@ Users can set `model_size` and easily get a pre-defined model configuration. Use
 ### Cluster Size & Memory Constraint
 Galvatron can perform searching over multiple nodes with same number of GPUs. Users should set `num_nodes`, `num_gpus_per_node` and `memory_constraint` (memory budget for each GPU).
 
-### Batch Size
-For batch size controlling, the searching process starts from `min_bsz` and ends at `max_bsz`, with a scale of `bsz_scale`. Users can also set `settle_bsz` to find the optimal strategy when batch size is `settle_bsz`.
+### Batch Size & Chunk
+For batch size controlling, the searching process starts from `min_bsz` and ends at `max_bsz`, with a scale of `bsz_scale`. Users can also set `settle_bsz` to find the optimal strategy when batch size is `settle_bsz`. Additionally, users can configure `settle_chunk` to determine the optimal strategy for a chunk size of `settle_chunk`.
 
 ### Parallelism Search Space
-Galvatron incorporates five parallelism dimensions in search space (`dp` for data parallel, `sdp` for sharded data parallel, `tp` for tensor parallel, `pp` for pipeline parallel, and `ckpt` for activation checkpointing). Users can use pre-defined search space (`full` for layerwise optimization over all parallelism dimensions introduced in Galvatron, `3d` for model-wise optimization over `(dp,tp,pp)`, and other options for layerwise optimization over the corresponding combination of dimensions). Users can disable any parallelism dimension by set `disable_*` to `1`. 
+Galvatron incorporates five parallelism dimensions in search space (`dp` for data parallel, `sdp` for sharded data parallel, `tp&vtp` for tensor parallel, `pp` for pipeline parallel, and `ckpt` for activation checkpointing). Users can use pre-defined search space (`full` for layerwise optimization over all parallelism dimensions introduced in Galvatron, `3d` for model-wise optimization over `(dp,tp,pp)`, and other options for layerwise optimization over the corresponding combination of dimensions). Users can disable any parallelism dimension by set `disable_*` to `1`. 
 
 Please refer to ```galvatron_search_args``` in [arguments.py](../core/arguments.py) for the full list of searching arguments.
+
+### Other Searching Arguments
+
+Set `sequence-parallel` to account for the `Megatron-TP-SP` method when building the cost model.
+
+Set `fine_grained_mode` to `0` / `1`(default:`1`) to disable/enable fine-grained parallel strategy and search. For the former, the search engine will find a global parallel strategy, meaning the same parallel strategy is applied to all layers. For the latter, it refers to the standard fine-grained parallel strategy search.
+
+Set `computation_mode` to `linear` / `curve` (default:`linear`) to determine the estimation method for computation time when building a cost model, `linear` indicates that computation time increases proportionally with batch size. In contrast, `curve` suggests that computation time grows linearly with batch size. Specifically, we will use an $\alpha-\beta$ model to fit a linear function based on the profiled data. To ensure accuracy, when using `curve`, we require profile results for 8 different batch sizes for the same layer type.
 
 ## Training with Galvatron
 
@@ -51,8 +62,27 @@ sh scripts/train_dist.sh
 
 Users can customize multiple training options:
 
+### Checkpoint loading
+Galvatron supports loading Huggingface models and adapts to fine-grained parallelism strategies. With a simple weight conversion process, this can be achieved by executing the following command:
+```shell
+cd tools
+bash convert_{MODEL_TYPE}.sh
+```
+Users need to modify the script by setting INPUT_PATH and OUTPUT_PATH to the directories where the checkpoint files are stored before and after conversion, respectively.
+Please note that the weight conversion is independent of the parallelism strategy.
+
+Next, users can use the following arguments in their training script to load the checkpoint:
+```shell
+--initialize_on_meta 1 \
+--load ${OUTPUT_PATH}
+```
+
+### Training with datasets
+Galvatron supports the use of the Megatron dataset, with preprocessing and usage methods compatible with [Megatron](https://github.com/NVIDIA/Megatron-LM).
+
+
 ### Model Configuration
-Users can set `model_size` and easily get a pre-defined model configuration. Users can also customize model configuration: specify `set_model_config_manually` to `1` and specify model configs manually, or specify `set_layernum_manually` to `1` and specify layer numbers manually only.
+you can set `model_size` and easily get a pre-defined model configuration. Users can also customize model configuration: specify `set_model_config_manually` to `1` and specify model configs manually, or specify `set_layernum_manually` to `1` and specify layer numbers manually only.
 
 ### Cluster Environment
 Galvatron can perform training over multiple nodes with same number of GPUs. Users should set ```NUM_NODES, NUM_GPUS_PER_NODE, MASTER_ADDR, MASTER_PORT, NODE_RANK``` according to the environment.
@@ -79,8 +109,19 @@ GLOBAL config mode is a global hybrid parallel training mode, activated by assig
 - `chunks`: Integer, number of microbatches of PP.
 - `global_checkpoint`: `0`/`1`, whether to turn on activation checkpointing to the whole model.
 - `pipeline_type`: `gpipe` or `pipedream_flush`, choose the pipeline type to use.
+- `vocab_tp`: Interger, vocab embedding parallel degree.
+
 
 ### Other Training Optimizations
 Set `mixed_precision` to allow mixed precision training, e.g., `bf16`. Set `use-flash-attn` to allow [FlashAttention-2](https://github.com/Dao-AILab/flash-attention) features.
 
+Set `sequence-parallel` to enable `Megatron-TP-SP` method, which can further reduce memory usage.
+
+Set `use_ulysses` to enable [Ulysses-SP](https://github.com/microsoft/DeepSpeed/blob/master/blogs/deepspeed-ulysses/README.md) method, which will replace `Megatron-TP-SP`. Once activated, the TP (tensor parallel) dimension will automatically be converted to the SP (sequence parallel) dimension.
+
+
+Set `no_async_grad_reduce` to disable the asynchronous gradient synchronization method, which is enabled by default. In Galvatron, during each iteration of training, when gradient accumulation is required, the default behavior is to perform the gradient reduce scatter operation only after all  backward passes are completed. This approach reduces communication overhead but incurs additional memory usage: each device holds a full copy of the gradients until gradient synchronization, causing Zero-2 to degrade to Zero-1.When `no_async_grad_reduce` is set, Galvatron synchronizes gradients after every backward step, maintaining low memory usage. However, this introduces additional communication, though much of it can overlap with computation. The trade-off is increased complexity in the cost model, potentially reducing the accuracy of cost model. We plan to offer a more fine-grained and accurate cost model in the future.
+
 Please refer to function ```galvatron_training_args``` in [arguments.py](../core/arguments.py) for the full list of training arguments.
+
+**New features are only supported on llama_hf, gpt_hf.**

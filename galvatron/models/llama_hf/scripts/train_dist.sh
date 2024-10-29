@@ -29,7 +29,7 @@ MODEL_ARGS="
     --seq_length 2048"
 
 TRAIN_ARGS="
-    --global_train_batch_size 32 \
+    --global_train_batch_size 1 \
     --train-iters 20 \
     --eval-iters 1 \
     --lr 1e-5 \
@@ -38,7 +38,6 @@ TRAIN_ARGS="
     --check_loss 0 \
     --profile 1 \
     --no_async_grad_reduce \
-    --use-ulysses \
     --save_profiled_memory 0"
 
 DATA_ARGS="
@@ -53,13 +52,13 @@ CKPT_ARGS="
 "
 
 PARALLEL_ARGS="
-    --pp_deg 2 \
-    --global_tp_deg 2 \
+    --pp_deg 1 \
+    --global_tp_deg 8 \
     --global_tp_consec 1 \
     --sdp 1 \
-    --global_checkpoint 0 \
-    --vocab_tp 2 \
-    --chunks 4 \
+    --global_checkpoint 1 \
+    --vocab_tp 8 \
+    --chunks 1 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \

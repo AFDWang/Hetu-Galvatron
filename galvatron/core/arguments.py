@@ -51,6 +51,9 @@ def galvatron_training_args(parser, use_megatron=True):
         "--set_layernum_manually", type=int, default=0, help="Whether to set layernum config manually (doesn't overwrite other model configs)."
     )
     group.add_argument(
+        "--set_seqlen_manually", type=int, default=0, help="Whether to set sequence length config manually (doesn't overwrite other model configs)."
+    )
+    group.add_argument(
         "--initialize_on_meta", type=int, default=0, help="Whether to initialize parameters on meta device.", choices=[0, 1]
     )
     group.add_argument(
@@ -76,6 +79,9 @@ def galvatron_training_args(parser, use_megatron=True):
     group.add_argument(
         "--profile_type", type=str, default="allocated", help="Profile allocated memory or reserved memory.",
         choices = ["allocated", "reserved"],
+    )
+    group.add_argument(
+        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
     )
     group.add_argument(
         "--load_params", type=int, default=0, help="Whether to load saved init params."
@@ -158,6 +164,12 @@ def galvatron_profile_args(parser):
         "--set_layernum_manually", type=int, default=1, help="Whether to set layernum config manually (doesn't overwrite other model configs)."
     )
     group.add_argument(
+        "--set_seqlen_manually", type=int, default=0, help="Whether to set sequence length config manually (doesn't overwrite other model configs)."
+    )
+    group.add_argument(
+        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
+    )
+    group.add_argument(
         "--profile_batch_size", type=int, default=None, help="Galvatron profiling batch size"
     )
     group.add_argument(
@@ -168,6 +180,15 @@ def galvatron_profile_args(parser):
     )
     group.add_argument(
         "--profile_batch_size_step", type=int, default=1, help="Galvatron profiling batch size step"
+    )
+    group.add_argument(
+        "--profile_min_seq_length", type=int, default=None, help="Galvatron profiling max sequence length"
+    )
+    group.add_argument(
+        "--profile_max_seq_length", type=int, default=None, help="Galvatron profiling max sequence length"
+    )
+    group.add_argument(
+        "--profile_seq_length_step", type=int, default=128, help="Galvatron profiling sequence length step"
     )
     group.add_argument(
         "--layernum_min", type=int, default=1, help="Layernum min for profiling."
@@ -255,6 +276,9 @@ def galvatron_search_args(parser):
         "--set_layernum_manually", type=int, default=0, help="Whether to set layernum config manually (doesn't overwrite other model configs)."
     )
     group.add_argument(
+        "--set_seqlen_manually", type=int, default=0, help="Whether to set sequence length config manually (doesn't overwrite other model configs)."
+    )
+    group.add_argument(
         "--num_nodes", type=int, default=1, help="Number of Nodes.",
     )
     group.add_argument(
@@ -333,11 +357,19 @@ def galvatron_search_args(parser):
         "--sequence_parallel", action="store_true", help="Whether to use sequence parallel",
     )
     
+    group.add_argument(
+        "--no_async_grad_reduce", action="store_false",
+        help='Disable async grad reduce so that gradient will be reduce every micro batch. '
+        'Ensure Zero3 memory cost when chunk > 1.',
+        dest='async_grad_reduce'
+    )
+    
     group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
                        help='Pad the vocab size to be divisible by this value.'
                        'This is added for computational efficieny reasons.')
     
     group.add_argument("--fine_grained_mode", type=int, default=1, help="Enable fine-grained search.")
-    group.add_argument("--computation_mode", type=str, default="linear", help="Mode of computation cost model.", choices=["curve","linear"])
-    
+    group.add_argument(
+        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
+    )
     return parser

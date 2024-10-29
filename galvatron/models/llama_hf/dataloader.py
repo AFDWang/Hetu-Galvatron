@@ -37,7 +37,11 @@ def test_collate_fn(batch):
     tokens_ = torch.stack(batch, dim=0)
     labels = tokens_[:, 1:].contiguous()
     tokens = tokens_[:, :-1].contiguous()
-    attention_mask = test_get_ltor_masks_and_position_ids(tokens)
+    args = get_args()
+    if not args.use_flash_attn:
+        attention_mask = test_get_ltor_masks_and_position_ids(tokens)
+    else:
+        attention_mask = None
     return tokens, {"attention_mask":attention_mask, "labels" : labels}, None
 
 class DataLoaderForLlama(Dataset):

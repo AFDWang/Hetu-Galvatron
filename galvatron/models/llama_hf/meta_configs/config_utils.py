@@ -42,8 +42,11 @@ def set_model_config(config, args, overwrite_args=True):
         config.num_attention_heads = args.num_attention_heads
         config.max_position_embeddings = args.seq_length
     # Overwrite layer number only
-    elif args.set_layernum_manually:
-        config.num_hidden_layers = args.num_hidden_layers
+    else:
+        if args.set_layernum_manually:
+            config.num_hidden_layers = args.num_hidden_layers
+        if args.set_seqlen_manually:
+            config.max_position_embeddings = args.seq_length
     
     # ======= Model Config --> Arguments ======
     # This step is necessary that maintains the consistency of model config and arguments.
@@ -85,7 +88,10 @@ def overwrite_model_args(config, args):
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):
-    return 'hidden%d_head%d_seqlen%d'%(config.hidden_size, config.num_attention_heads, config.max_position_embeddings)
+    if hasattr(args,"profile_mode"):
+        if args.profile_mode is not "sequence":
+            return 'hidden%d_head%d_seqlen%d'%(config.hidden_size, config.num_attention_heads, config.max_position_embeddings)
+    return 'hidden%d_head%d'%(config.hidden_size, config.num_attention_heads)
 
 def model_layer_configs(config):
     return [

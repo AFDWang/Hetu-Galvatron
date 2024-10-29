@@ -25,7 +25,8 @@ class MemoryCostModel:
             mbsz=-1,
             min_tp = -1,
             gpu_num = 8,
-            chunks=None):
+            chunks=None,
+            async_grad_reduce=True):
         assert mbsz > -1
         assert min_tp > -1
         self.strategy = strategy
@@ -65,8 +66,13 @@ class MemoryCostModel:
             zero2_ratio = (lambda d: (7/8 * (1/d + 0.003) + 1/8)) if mixed_precision else (lambda d: (3/4 * (1/d + 0.003) + 1/4))
             zero3_ratio = lambda d: (1/d+0.003)
         else:
-            zero2_ratio = (lambda d: (6/8 * (1/d + 0.003) + 2/8)) if mixed_precision else (lambda d: (2/4 * (1/d + 0.003) + 2/4))
-            zero3_ratio = (lambda d: (7/8 * (1/d + 0.003) + 1/8)) if mixed_precision else (lambda d: (3/4 * (1/d + 0.003) + 1/4))
+            if async_grad_reduce:
+                zero2_ratio = (lambda d: (6/8 * (1/d + 0.003) + 2/8)) if mixed_precision else (lambda d: (2/4 * (1/d + 0.003) + 2/4))
+                zero3_ratio = (lambda d: (7/8 * (1/d + 0.003) + 1/8)) if mixed_precision else (lambda d: (3/4 * (1/d + 0.003) + 1/4))
+            else:
+                zero2_ratio = (lambda d: (7/8 * (1/d + 0.003) + 1/8) * 5/4) if mixed_precision else (lambda d: (3/4 * (1/d + 0.003) + 1/4))
+                zero3_ratio = lambda d: (1/d+0.003) * 5/4
+                # *5/4: for fp32 grad 
         
         if 'fsdp' in self.strategy[-1].keys() and self.strategy[-1]['fsdp']:
             # fsdp_model_states memory is slightly larger than dp_model_states/dp_size
@@ -168,7 +174,9 @@ class TimeCostModel:
             use_zero2_for_dp=0,
             mixed_precision=False,
             no_comm=False,
-            costmodel_coe=1.0):
+            costmodel_coe=1.0,
+            async_grad_reduce=True):
+        # TODO: align time cost model when async_grad_reduce is False
         self.s = strategy[:3]
         self.sl = sequence_length
         self.hs = hidden_size

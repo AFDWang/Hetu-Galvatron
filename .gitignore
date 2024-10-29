@@ -22,3 +22,4 @@ galvatron/models/gpt_hf/eval
 galvatron/profile_hardware/hostfile
 galvatron/profile_hardware/profile_reducescatter.py
 galvatron/profile_hardware/test.sh
+patches/

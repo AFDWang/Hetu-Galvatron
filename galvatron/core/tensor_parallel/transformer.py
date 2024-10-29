@@ -1853,7 +1853,8 @@ def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_he
         else:
             # s, b, n, h
             if scatter_idx < 2:
-                output = input.permute(1, 2, 0, 3, 4).contiguous()
+                output = input.transpose(0, 1).contiguous()
+                # output = input.permute(1, 2, 0, 3, 4).contiguous()
                 output = output.reshape(seq_len // seq_world_size, bs, seq_world_size * num_head,
                                         head_dim).contiguous()
             else:
@@ -1886,9 +1887,12 @@ def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, asyn
         else:
             local_seq_len, bs, num_total_head, head_dim = input.shape
             assert num_total_head % seq_world_size == 0, f"Number of heads ({num_total_head}) must be divisible by the sequence parallel size ({seq_world_size})!"
-            input_t = input.reshape([local_seq_len, bs, seq_world_size, num_total_head // seq_world_size,
+            input_t = input.reshape([local_seq_len * bs, seq_world_size, num_total_head // seq_world_size,
                                      head_dim]).contiguous()
-            input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+            input_t = input_t.transpose(0, 1).contiguous()
+            # input_t = input.reshape([local_seq_len, bs, seq_world_size, num_total_head // seq_world_size,
+            #                          head_dim]).contiguous()
+            # input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
 
     if scatter_idx < 2:
         post_all2all_fun = post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, global_seq_len, num_local_head,

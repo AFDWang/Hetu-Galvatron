@@ -65,6 +65,9 @@ def train(args):
     if local_rank == 0:
         print("Start training...")
 
+    if args.profile_forward:
+        torch.set_grad_enabled(False)
+        
     for ep in range(args.epochs):
         if not args.check_loss and not args.profile:
             trainloader = tqdm(trainloader)

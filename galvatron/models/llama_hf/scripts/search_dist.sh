@@ -8,6 +8,7 @@ MODEL_ARGS="
     --model_size ${MODEL_SIZE} \
     --set_model_config_manually 0 \
     --set_layernum_manually 0 \
+    --set_seqlen_manually 1 \
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_hidden_layers 32 \
@@ -18,7 +19,7 @@ BSZ_ARGS="
     --min_bsz 16 \
     --max_bsz 1024 \
     --bsz_scale 16 \
-    --settle_bsz -1 \
+    --settle_bsz 64 \
     --recommend_min_bsz 0
 "
 
@@ -34,7 +35,8 @@ SEARCH_SPACE_ARGS="
     --max_tp_deg 8 \
     --max_pp_deg 16 \
     --fine_grained_mode 1 \
-    --computation_mode linear
+    --profile_mode sequence \
+    --sequence_parallel
 "
 
 SEARCH_ARGS="

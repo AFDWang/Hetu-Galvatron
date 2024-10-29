@@ -20,9 +20,23 @@ MODEL_ARGS="
     --num_attention_heads 32 \
     --seq_length 2048"
 
+# PROFILE_ARGS_BF16="
+#     --profile_type memory \
+#     --profile_batch_size 8 \
+#     --layernum_min 1 \
+#     --layernum_max 2 \
+#     --max_tp_deg 8 \
+#     --profile_dp_type zero3 \
+#     --mixed_precision bf16 \
+#     --sequence_parallel \
+#     --use-flash-attn"
+
 PROFILE_ARGS_BF16="
+    --profile_mode sequence \
     --profile_type memory \
     --profile_batch_size 8 \
+    --profile_min_seq_length 512 \
+    --profile_max_seq_length 8192 \
     --layernum_min 1 \
     --layernum_max 2 \
     --max_tp_deg 8 \

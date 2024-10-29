@@ -104,10 +104,15 @@ class GalvatronSearchEngine():
         self.time_config = read_json_config(self.time_profiling_path())
         self.memory_config = read_json_config(self.memory_profiling_path())
         self.memory_config = self.convert_keys_to_int(self.memory_config)
-        if self.args.computation_mode=='linear':
-            self.time_profiled_list = [self.time_config['layertype_%d'%i] for i in range(self.num_layertype)]
-            self.other_time_profiled_list = [self.time_config['layertype_%d_other'%i] for i in range(self.num_layertype)]
-        else:
+        if self.args.profile_mode=='static':
+            self.time_profiled_list = []
+            self.other_time_profiled_list = []
+            for s,t in self.time_config.items():
+                if s.startswith('layertype_%d_'%i):
+                    self.time_profiled_list.append(t)
+                if s.startswith('layertype_other_%d_'%i):
+                    self.other_time_profiled_list.append(t)
+        elif self.args.profile_mode == "batch":
             self.time_profiled_list = []
             for i in range(self.num_layertype):
                 x_data = []
@@ -140,18 +145,61 @@ class GalvatronSearchEngine():
                 
                 print("Fitted parameters other:", popt)
                 self.other_time_profiled_list.append(popt)
+        elif self.args.profile_mode == "sequence":
+            self.time_profiled_list = []
+            for i in range(self.num_layertype):
+                x_data = []
+                y_data = []
+                for s,t in self.time_config.items():
+                    if s.startswith('layertype_%d_'%i):
+                        x_data.append(int(s.split('seq')[-1]))
+                        y_data.append(t)
+                # assert len(x_data) >= 8, "Different bsz in computation profile of layertype_%d should not be lower than 8."%i
                 
+                def quadratic_func(x, a, b, c):
+                    return a * x * x + b * x + c
+                popt, pcov = curve_fit(quadratic_func, x_data, y_data)
+                
+                print("Fitted parameters:", popt)
+                self.time_profiled_list.append(quadratic_func(self.seqlen_list[i],*popt))
+            self.other_time_profiled_list = []
+            for i in range(self.num_layertype):
+                x_data = []
+                y_data = []
+                for s,t in self.time_config.items():
+                    if s.startswith('layertype_other_%d_'%i):
+                        x_data.append(int(s.split('seq')[-1]))
+                        y_data.append(t)
+                # assert len(x_data) >= 8, "Different bsz in computation profile of layertype_other_%d should not be lower than 8."%i
+                
+                def linear_func(x, m, c):
+                    return m * x + c
+                popt, pcov = curve_fit(linear_func, x_data, y_data)
+                
+                print("Fitted parameters other:", popt)
+                self.other_time_profiled_list.append(linear_func(self.seqlen_list[i],*popt))
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
         if self.args.sequence_parallel:
+            maxseq_list = []
             for i in range(self.num_layertype):
                 layer_mem_config = self.memory_config['layertype_%d_sp'%i]
+                seqs = layer_mem_config.keys()
+                maxseq = max([int(seq) for seq in seqs])
+                layer_mem_config = layer_mem_config[maxseq]
+                maxseq_list.append(maxseq)
                 parameter_size = layer_mem_config['parameter_size']
                 tp_activation_per_bsz_dict = layer_mem_config['tp_activation_per_bsz_dict'].copy()
                 self.param_sizes[i] = parameter_size
                 self.act_sizes[i] = tp_activation_per_bsz_dict
-            self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp']
-            self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'], 'last_stage':self.memory_config['other_memory_pp_on_last_sp']}
+                for tp in self.act_sizes[i]:
+                    self.act_sizes[i][tp] = self.act_sizes[i][tp] / maxseq * self.seqlen_list[i]
+            self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][maxseq_list[0]]
+            self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][maxseq_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][maxseq_list[-1]]}
+            for tp in self.other_memory_pp_off['activation']:
+                self.other_memory_pp_off['activation'][tp] = self.other_memory_pp_off['activation'][tp] / maxseq_list[0] * self.seqlen_list[0] # TODO: reasonable scaling when len(seqlen_list) > 1
+                self.other_memory_pp_on['first_stage']['activation'][tp] = self.other_memory_pp_on['first_stage']['activation'][tp] / maxseq_list[0] * self.seqlen_list[0]
+                self.other_memory_pp_on['last_stage']['activation'][tp] = self.other_memory_pp_on['last_stage']['activation'][tp] / maxseq_list[-1] * self.seqlen_list[-1]
         else:
             for i in range(self.num_layertype):
                 layer_mem_config = self.memory_config['layertype_%d'%i]
@@ -200,6 +248,7 @@ class GalvatronSearchEngine():
                     'use_zero2_for_dp': 1 if self.args.default_dp_type == 'zero2' else 0,
                     'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
                     'costmodel_coe': self.args.costmodel_coe,
+                    'async_grad_reduce': self.async_grad_reduce,
                     })
     
     def set_memory_cost_models(self):
@@ -221,6 +270,7 @@ class GalvatronSearchEngine():
                     'disable_vtp': self.args.disable_vtp,
                     'max_tp_deg': self.args.max_tp_deg,
                     'gpu_num': self.args.gpu_num,
+                    'async_grad_reduce': self.async_grad_reduce,
                     })
     
     # =============== For Galvatron Search Engine Parallelism Optimization ===============

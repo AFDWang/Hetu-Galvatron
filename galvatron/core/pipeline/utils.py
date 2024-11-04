@@ -50,6 +50,7 @@ def chunk_dict(kwargs, chunks):
         else:
             for i in range(chunks):
                 batches[i][k] = v
-                
-    batches = batches[:num_chunks]
+    
+    if num_chunks >= 0:
+        batches = batches[:num_chunks]
     return batches

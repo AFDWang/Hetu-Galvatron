@@ -369,7 +369,10 @@ class GalvatronProfiler():
                     print('Already written processed computation time into env config file %s!\n'%(time_config_path))    
         elif args.profile_type == 'memory':
             assert (args.profile_mode == "static" or args.profile_mode == "sequence"), "Memory profiling only support sequence or static profile mode."
-            sequence_length_list = self.get_seq_list()
+            if args.profile_mode == "static":
+                sequence_length_list = [args.seq_length]
+            else:
+                sequence_length_list = [(1<<i) for i in range(args.profile_min_seq_length.bit_length()-1, args.profile_max_seq_length.bit_length())]
             memory_config_path = self.memory_profiling_path()
             config = read_json_config(memory_config_path)
             bsz = args.profile_batch_size
@@ -478,6 +481,9 @@ class GalvatronProfiler():
                                 layernum = pp_deg
                                 layernum_list = [layernum] * layertype
                             ms_cost, act_cost = [], []
+                            if self.key_format(layernum_list, bsz, seq, 0, 'ms') not in re:
+                                tp_deg *= 2
+                                continue
                             for l in range(layertype):
                                 ms_cost.append(param_result_list[l][tp_deg]*4)
                                 act_cost.append(act_result_list[l][tp_deg])
@@ -488,6 +494,8 @@ class GalvatronProfiler():
                             other_ms_first = re[self.key_format(layernum_list, bsz, seq, 0, 'ms')] - layer_ms_costs_first
                             if args.profile_dp_type == 'zero3':
                                 other_ms_first = (re[self.key_format(layernum_list, bsz, seq, 0, 'ms')] - layer_ms_costs_first / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
+                                # layer_ms_costs_first / (world_size//pp_deg//tp_deg) layer memory cost
+                                # (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1) real dp
                             other_ms_last = re[self.key_format(layernum_list, bsz, seq, world_size-1, 'ms')] - layer_ms_costs_last
                             if args.profile_dp_type == 'zero3':
                                 other_ms_last = (re[self.key_format(layernum_list, bsz, seq, world_size-1, 'ms')] - layer_ms_costs_last / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)

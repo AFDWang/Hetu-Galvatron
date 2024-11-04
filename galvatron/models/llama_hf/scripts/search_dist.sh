@@ -3,7 +3,7 @@ export NUM_GPUS_PER_NODE=8
 
 MODEL_SIZE="llama-7b"
 MEMORY=34
-
+SEQ=4096
 MODEL_ARGS="
     --model_size ${MODEL_SIZE} \
     --set_model_config_manually 0 \
@@ -13,7 +13,7 @@ MODEL_ARGS="
     --hidden_size 4096 \
     --num_hidden_layers 32 \
     --num_attention_heads 32 \
-    --seq_length 2048"
+    --seq_length ${SEQ}"
 
 BSZ_ARGS="
     --min_bsz 16 \
@@ -56,7 +56,7 @@ BACKGROUND=1
 
 if [ $BACKGROUND -eq 1 ]; then
     echo "Search in background..."
-    OUTPUT_FILE="Search_${MODEL_SIZE}_${MEMORY}GB_${NUM_NODES}Nodes_${NUM_GPUS_PER_NODE}GPUs_per_node.log"
+    OUTPUT_FILE="log/Search_${MODEL_SIZE}_${MEMORY}GB_${NUM_NODES}Nodes_${NUM_GPUS_PER_NODE}GPUs_per_node_${SEQ}.log"
     nohup python3 search_dist.py ${SEARCH_ARGS} 1> ${OUTPUT_FILE} 2>&1 &
 else
     echo "Search in foreground..."

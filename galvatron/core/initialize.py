@@ -3,7 +3,7 @@ import torch.nn as nn
 from contextlib import contextmanager
 
 @contextmanager
-def init_empty_weights(include_buffers: bool = False):
+def init_empty_weights(include_buffers: bool = True):
     """
     A context manager under which models are initialized with all parameters on the meta device, therefore creating an
     empty model. Useful when just initializing the model would blow the available RAM.
@@ -35,7 +35,7 @@ def init_empty_weights(include_buffers: bool = False):
 
 
 @contextmanager
-def init_on_device(device: torch.device, include_buffers: bool = False):
+def init_on_device(device: torch.device, include_buffers: bool = True):
     """
     A context manager under which models are initialized with all parameters on the specified device.
 

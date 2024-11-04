@@ -107,11 +107,12 @@ class GalvatronSearchEngine():
         if self.args.profile_mode=='static':
             self.time_profiled_list = []
             self.other_time_profiled_list = []
-            for s,t in self.time_config.items():
-                if s.startswith('layertype_%d_'%i):
-                    self.time_profiled_list.append(t)
-                if s.startswith('layertype_other_%d_'%i):
-                    self.other_time_profiled_list.append(t)
+            for i in range(self.num_layertype):
+                for s,t in self.time_config.items():
+                    if s.startswith('layertype_%d_'%i):
+                        self.time_profiled_list.append(t)
+                    if s.startswith('layertype_other_%d_'%i):
+                        self.other_time_profiled_list.append(t)
         elif self.args.profile_mode == "batch":
             self.time_profiled_list = []
             for i in range(self.num_layertype):
@@ -119,7 +120,7 @@ class GalvatronSearchEngine():
                 y_data = []
                 for s,t in self.time_config.items():
                     if s.startswith('layertype_%d_'%i):
-                        x_data.append(int(s.split('bsz')[-1]))
+                        x_data.append(int(s.split('bsz')[-2]))
                         y_data.append(t * x_data[-1])
                 assert len(x_data) >= 8, "Different bsz in computation profile of layertype_%d should not be lower than 8."%i
                 
@@ -180,7 +181,8 @@ class GalvatronSearchEngine():
                 self.other_time_profiled_list.append(linear_func(self.seqlen_list[i],*popt))
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
-        if self.args.sequence_parallel:
+        if self.args.profile_mode == "sequence":
+            assert self.args.sequence_parallel
             maxseq_list = []
             for i in range(self.num_layertype):
                 layer_mem_config = self.memory_config['layertype_%d_sp'%i]
@@ -201,15 +203,24 @@ class GalvatronSearchEngine():
                 self.other_memory_pp_on['first_stage']['activation'][tp] = self.other_memory_pp_on['first_stage']['activation'][tp] / maxseq_list[0] * self.seqlen_list[0]
                 self.other_memory_pp_on['last_stage']['activation'][tp] = self.other_memory_pp_on['last_stage']['activation'][tp] / maxseq_list[-1] * self.seqlen_list[-1]
         else:
-            # TODO: adapt to new format
-            for i in range(self.num_layertype):
-                layer_mem_config = self.memory_config['layertype_%d'%i]
-                parameter_size = layer_mem_config['parameter_size']
-                tp_activation_per_bsz_dict = layer_mem_config['tp_activation_per_bsz_dict'].copy()
-                self.param_sizes[i] = parameter_size
-                self.act_sizes[i] = tp_activation_per_bsz_dict
-            self.other_memory_pp_off = self.memory_config['other_memory_pp_off']
-            self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'], 'last_stage':self.memory_config['other_memory_pp_on_last']}
+            if self.args.sequence_parallel:
+                for i in range(self.num_layertype):
+                    layer_mem_config = self.memory_config['layertype_%d_sp'%i]
+                    parameter_size = layer_mem_config[self.seqlen_list[i]]['parameter_size']
+                    tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
+                    self.param_sizes[i] = parameter_size
+                    self.act_sizes[i] = tp_activation_per_bsz_dict
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][self.seqlen_list[0]]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][self.seqlen_list[-1]]}
+            else:
+                for i in range(self.num_layertype):
+                    layer_mem_config = self.memory_config['layertype_%d'%i]
+                    parameter_size = layer_mem_config[self.seqlen_list[i]]['parameter_size']
+                    tp_activation_per_bsz_dict = layer_mem_config[[self.seqlen_list[i]]]['tp_activation_per_bsz_dict'].copy()
+                    self.param_sizes[i] = parameter_size
+                    self.act_sizes[i] = tp_activation_per_bsz_dict
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][[self.seqlen_list[0]]]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][[self.seqlen_list[0]]], 'last_stage':self.memory_config['other_memory_pp_on_last'][[self.seqlen_list[-1]]]}
         
         return self.time_config, self.memory_config
         
@@ -293,6 +304,10 @@ class GalvatronSearchEngine():
             i *= 2
         if self.args.disable_vtp:
             total_min_tp = [1]
+        if not self.args.global_memory_buffer:
+            total_max_tp = [self.args.max_tp_deg]
+        else:
+            total_max_tp = total_min_tp
             
         for bsz in self.BSZs:
             pp_stage_dict = pp_stage_dict_for_bsz[bsz]
@@ -305,7 +320,7 @@ class GalvatronSearchEngine():
                 results[bsz][chunk] = dict()
                 for min_tp in total_min_tp:
                     results[bsz][chunk][min_tp] = dict()
-                    for max_tp in total_min_tp:
+                    for max_tp in total_max_tp:
                         if min_tp > max_tp:
                             continue
                         self.strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]

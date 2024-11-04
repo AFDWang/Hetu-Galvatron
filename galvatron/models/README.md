@@ -20,7 +20,7 @@ sh scripts/profile_memory.sh
 
 ### Other Profile Arguments
 
-By setting `profile_min_batch_size`, `profile_max_batch_size`, and `profile_batch_size_step`, users can control the batch sizes used during the time profiling . Specifically, the time profiling will be performed using batch sizes in `range(profile_min_batch_size, profile_max_batch_size + 1, profile_batch_size_step)`. Specifically, this feature is designed for curve fitting in the cost model of time calculation, which will be discussed later.
+By setting `profile_min_batch_size`, `profile_max_batch_size`, and `profile_batch_size_step`, users can control the batch sizes used during time profiling. Specifically, the time profiling will be performed using batch sizes in `range(profile_min_batch_size, profile_max_batch_size + 1, profile_batch_size_step)`. Similarly, by setting `profile_min_seq_length`, `profile_max_seq_length`, `profile_seq_length_step`, users can control the sequence lengths used during time and memory profiling. The former should be used with `profile_mode == 'batch'`, and the latter with `profile_mode == 'sequence'`. Further details about `profile_mode` will be discussed later. 
 
 ## Parallelism Optimizing with Galvatron
 
@@ -51,7 +51,9 @@ Set `sequence-parallel` to account for the `Megatron-TP-SP` method when building
 
 Set `fine_grained_mode` to `0` / `1`(default:`1`) to disable/enable fine-grained parallel strategy and search. For the former, the search engine will find a global parallel strategy, meaning the same parallel strategy is applied to all layers. For the latter, it refers to the standard fine-grained parallel strategy search.
 
-Set `computation_mode` to `linear` / `curve` (default:`linear`) to determine the estimation method for computation time when building a cost model, `linear` indicates that computation time increases proportionally with batch size. In contrast, `curve` suggests that computation time grows linearly with batch size. Specifically, we will use an $\alpha-\beta$ model to fit a linear function based on the profiled data. To ensure accuracy, when using `curve`, we require profile results for 8 different batch sizes for the same layer type.
+Set `profile_mode` to `static` / `batch` / `sequence` (default:`static`) to determine the estimation method for computation time and memory when building a cost model, `static` indicates that computation time increases proportionally with batch size. In contrast, `batch` suggests that computation time grows linearly with batch size. Specifically, we will use an $\alpha-\beta$ model to fit a linear function based on the profiled data. To ensure accuracy, when using `batch`, we require profile results for 8 different batch sizes for the same layer type. Additionally, `sequence` uses profiled data to model memory and time performance for other sequence lengths. In practice, `profile_mode` in the searching argument should typically match the profile argument. When using `static` or `batch` modes, user also need to ensure the sequence length is consistent. However, this is not necessary when using the `sequence` mode.
+
+Set `no_global_memory_buffer` to disable the estimation of global memory for all-gather buffer when using Megatron-SP. In Megatron-SP, a buffer is allocated to store the results of all-gather communication operations. This memory is not released, and as the sequence length increases, the memory usage of this buffer can become significant.
 
 ## Training with Galvatron
 
@@ -82,7 +84,7 @@ Galvatron supports the use of the Megatron dataset, with preprocessing and usage
 
 
 ### Model Configuration
-you can set `model_size` and easily get a pre-defined model configuration. Users can also customize model configuration: specify `set_model_config_manually` to `1` and specify model configs manually, or specify `set_layernum_manually` to `1` and specify layer numbers manually only.
+you can set `model_size` and easily get a pre-defined model configuration. Users can also customize model configuration: specify `set_model_config_manually` to `1` and specify model configs manually, specify `set_layernum_manually` to `1` and specify layer numbers manually, specify `set_seqlen_manually` to `1` and specify sequence length manually.
 
 ### Cluster Environment
 Galvatron can perform training over multiple nodes with same number of GPUs. Users should set ```NUM_NODES, NUM_GPUS_PER_NODE, MASTER_ADDR, MASTER_PORT, NODE_RANK``` according to the environment.

@@ -42,7 +42,7 @@ def train(args):
     
     if local_rank == 0:
         print("Creating Dataset...")
-    set_megatron_args_for_dataset(args, model, model.tp_groups_whole[0], model.dp_groups_whole[0])
+    set_megatron_args_for_dataset(args, model, model.sp_groups_whole[0] if args.use_ulysses else model.tp_groups_whole[0], model.dp_groups_whole[0])
     train_data_iterator, valid_data_iterator, test_data_iterator = get_train_valid_test_data_iterators()
 
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
@@ -55,19 +55,16 @@ def train(args):
     if local_rank == 0:
         print("Start training...")
     for iter in range(args.train_iters):
-        # if not args.check_loss and not args.profile:
-        #     trainloader = tqdm(trainloader)
-        batch = get_batch(train_data_iterator)
-        
-        # print(batch.shape)
-        # print(batch)
+        tokens, kwargs, loss_func = get_batch(train_data_iterator)
         profiler.profile_time_start(iter)
         profiler.profile_memory(iter, "Before Forward")
 
-        input_ids = batch
+        input_ids = tokens
         batch = [input_ids]
         
-        loss = model.forward_backward(batch, iter, profiler)
+        loss = model.forward_backward(batch, iter, profiler, 
+                                      loss_func=loss_func,
+                                      **kwargs)
         
         profiler.profile_memory(iter, "After Backward")
         
@@ -77,11 +74,11 @@ def train(args):
         
         optimizer.zero_grad()
         
-        # print_loss(args, loss, -1, iter)
+        # print_loss(args, loss, ep, iter)
 
         profiler.post_profile_memory(iter)
         profiler.profile_time_end(iter, loss)
-
+        
         torch.distributed.barrier()
 
 if __name__ == '__main__':

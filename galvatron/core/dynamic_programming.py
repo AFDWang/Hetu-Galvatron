@@ -604,7 +604,7 @@ class DpOnModel:
             return final_comm_cost, final_res_list_list, final_mem_remain_list, final_mem_cost_list, vtp, best_strategy_flag, from_history
         
         for i in range(pp_deg):
-            if self.config.sequence_parallel:
+            if self.config.sequence_parallel and self.config.global_memory_buffer:
                 global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_length * 4 / 1024 / 1024
                 if self.config.mixed_precision:
                     global_memory = global_memory / 2

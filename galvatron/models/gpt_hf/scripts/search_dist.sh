@@ -8,6 +8,7 @@ MODEL_ARGS="
     --model_size ${MODEL_SIZE} \
     --set_model_config_manually 0 \
     --set_layernum_manually 0 \
+    --set_seqlen_manually 0 \
     --vocab_size 50257 \
     --hidden_size 1600 \
     --num_hidden_layers 12 \
@@ -35,7 +36,8 @@ SEARCH_SPACE_ARGS="
     --max_tp_deg 8 \
     --max_pp_deg 8 \
     --fine_grained_mode 1 \
-    --computation_mode curve \
+    --profile_mode sequence \
+    --sequence_parallel
 "
 
 SEARCH_ARGS="

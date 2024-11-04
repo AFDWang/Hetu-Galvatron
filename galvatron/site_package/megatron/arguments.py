@@ -437,7 +437,7 @@ def _print_args(title, args):
             'bf16',
             'bias_gelu_fusion',
             'data_parallel_size',
-            'data_path', # DONE
+            # 'data_path', # DONE
             'dropout_prob',
             'encoder_num_layers',
             'encoder_seq_length',
@@ -460,11 +460,11 @@ def _print_args(title, args):
             'save',
             'save_interval',
             'tensor_model_parallel_size',
-            'tokenizer_model', # DONE
-            'tokenizer_type', # DONE
-            'train_iters', # DONE
+            # 'tokenizer_model', # DONE
+            # 'tokenizer_type', # DONE
+            # 'train_iters', # DONE
             'transformer_pipeline_model_parallel_size',
-            'untie_embeddings_and_output_weights', # DONE
+            # 'untie_embeddings_and_output_weights', # DONE
             'use_cpu_initialization'
         ]
         for arg in vars(args):

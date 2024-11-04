@@ -13,8 +13,11 @@ LAUNCHER="${LAUNCHER} --master_addr ${MASTER_ADDR}"
 LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
-TRAINER="train_dist_test.py"
-DATA_PATH=/home/pkuhetu/lxy/dataset/gpt2/my-gpt2_text_document
+TRAINER="train_dist.py"
+DATA_PATH=/home/pkuhetu/lxy/dataset/llama/my-llama2_text_document
+VOCAB_FILE=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.json
+TOKENIZER_MODEL=/home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf/tokenizer.model
+
 
 MODEL_ARGS="
     --model_size llama-7b \
@@ -38,7 +41,9 @@ TRAIN_ARGS="
 
 DATA_ARGS="
     --data-path $DATA_PATH \
-    --split 949,50,1
+    --split 949,50,1 \
+    --tokenizer-type Llama2Tokenizer \
+    --tokenizer-model ${TOKENIZER_MODEL}
 "
 
 PARALLEL_ARGS="

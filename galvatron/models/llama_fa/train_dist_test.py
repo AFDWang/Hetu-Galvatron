@@ -7,7 +7,7 @@ import os
 from galvatron.utils import set_seed, distributed_dataloader, print_loss
 from galvatron.core import initialize_galvatron, GalvatronProfiler
 from galvatron.models.llama_fa.LlamaModel_hybrid_parallel import get_hybrid_parallel_configs, construct_hybrid_parallel_model
-from galvatron.models.llama_fa.dataloader import DataLoaderForLlama
+from galvatron.models.llama_fa.dataloader import DataLoaderForLlama, test_collate_fn
 from galvatron.models.llama_fa.meta_configs import config_from_meta, llama_config_to_gpt2_config, set_model_config, model_name, model_layer_configs
 from galvatron.models.llama_fa.arguments import model_args
 
@@ -47,7 +47,8 @@ def train(args):
         global_bsz=args.global_train_batch_size,
         shuffle=True,
         args=args,
-        group = model.dp_groups_whole[0].group
+        group = model.dp_groups_whole[0].group,
+        collate_fn = test_collate_fn
     )
     
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
@@ -59,17 +60,24 @@ def train(args):
     profiler.profile_memory(0, "After creating model")
     if local_rank == 0:
         print("Start training...")
+    
+    if args.profile_forward:
+        torch.set_grad_enabled(False)
+        
     for ep in range(args.epochs):
         if not args.check_loss and not args.profile:
             trainloader = tqdm(trainloader)
         for iter, batch in enumerate(trainloader):
+            tokens, kwargs, loss_func = batch
             profiler.profile_time_start(iter)
             profiler.profile_memory(iter, "Before Forward")
 
-            input_ids = batch
+            input_ids = tokens
             batch = [input_ids]
             
-            loss = model.forward_backward(batch, iter, profiler)
+            loss = model.forward_backward(batch, iter, profiler, 
+                                      loss_func=loss_func,
+                                      **kwargs)
             
             profiler.profile_memory(iter, "After Backward")
             
@@ -83,6 +91,8 @@ def train(args):
 
             profiler.post_profile_memory(iter)
             profiler.profile_time_end(iter)
+
+            torch.distributed.barrier()
 
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='train_dist')

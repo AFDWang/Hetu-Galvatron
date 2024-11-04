@@ -37,7 +37,11 @@ def test_collate_fn(batch):
     tokens_ = torch.stack(batch, dim=0)
     labels = tokens_[:, 1:].contiguous()
     tokens = tokens_[:, :-1].contiguous()
-    attention_mask = test_get_ltor_masks_and_position_ids(tokens)
+    args = get_args()
+    if not args.use_flash_attn:
+        attention_mask = test_get_ltor_masks_and_position_ids(tokens)
+    else:
+        attention_mask = None
     return tokens, {"attention_mask":attention_mask, "labels" : labels}, None
 
 class DataLoaderForGPT(Dataset):
@@ -113,7 +117,6 @@ def get_train_valid_test_data_iterators():
     return train_data_iterator, valid_data_iterator, test_data_iterator
 
 
-# TODO: support tokenizer, reset_position_ids, reset_attention_mask, eod_mask_loss
 def get_batch(data_iterator):
     """Generate a batch."""
 

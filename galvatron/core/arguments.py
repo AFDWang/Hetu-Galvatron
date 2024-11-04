@@ -81,7 +81,7 @@ def galvatron_training_args(parser, use_megatron=True):
         choices = ["allocated", "reserved"],
     )
     group.add_argument(
-        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
+        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence"]
     )
     group.add_argument(
         "--load_params", type=int, default=0, help="Whether to load saved init params."
@@ -356,7 +356,11 @@ def galvatron_search_args(parser):
     group.add_argument(
         "--sequence_parallel", action="store_true", help="Whether to use sequence parallel",
     )
-    
+    group.add_argument(
+        "--no_global_memory_buffer", action="store_false",
+        help='Disable the estimation of global memory for all gather buffer when using Megatron-SP.',
+        dest='global_memory_buffer'
+    )
     group.add_argument(
         "--no_async_grad_reduce", action="store_false",
         help='Disable async grad reduce so that gradient will be reduce every micro batch. '

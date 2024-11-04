@@ -7,6 +7,7 @@ from galvatron.core import get_args
 from megatron.core import tensor_parallel
 from galvatron.core.tensor_parallel import colummn_row_reset_parameters
 from megatron.core.tensor_parallel.utils import VocabUtility
+from megatron.core.tensor_parallel.mappings_group import get_tensor_model_parallel_world_size_group
 
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
@@ -62,8 +63,9 @@ class GPTEmbeddings_(nn.Module):
         if self.use_ulysses:
             tokens = tokens[:, self.seq_start_index:self.seq_end_index].contiguous()
         
-        # position_ids = torch.arange(0, tokens.size(-1), dtype=torch.long, device=tokens.device)
-        # position_ids = position_ids.unsqueeze(0)
+        if position_ids == None:
+            position_ids = torch.arange(0, tokens.size(-1), dtype=torch.long, device=tokens.device)
+            position_ids = position_ids.unsqueeze(0)
         inputs_embeds = self.wte(tokens)
         position_embeds = self.wpe(position_ids)
         if self.use_ulysses:
@@ -115,6 +117,10 @@ class GPTLoss_(nn.Module):
         self.weight = nn.Parameter(weight.clone())
         self.sequence_parallel = sequence_parallel
         self.tp_group = tp_group
+        world_size = get_tensor_model_parallel_world_size_group(tp_group)
+        if self.sequence_parallel and world_size <= 1:
+            self.sequence_parallel = False
+            # disable sp to avoid global buffer
     
     def forward(self, hidden_states):
         logits_parallel = tensor_parallel.linear_with_grad_accumulation_and_async_allreduce(
@@ -211,7 +217,6 @@ class GPTModelInfo(ModelInfo):
         if args.shape_order == "SBH":
             layer_shapes_list = [[[seq_len,-1,hidden_size]]]
         else:
-            # TODO: fix fa tensor shape
             layer_shapes_list = [[[-1,seq_len,hidden_size]]]
         layer_dtypes_list = [[mixed_precision]]
         module_types = ['embed'] + ['gpt_dec']*config.num_hidden_layers + ['norm', 'cls']

@@ -190,7 +190,6 @@ class LlamaModelInfo(ModelInfo):
         if args.shape_order == "SBH":
             layer_shapes_list = [[[seq_len,-1,hidden_size]]]
         else:
-            # TODO: fix fa tensor shape
             layer_shapes_list = [[[-1,seq_len,hidden_size]]]
         layer_dtypes_list = [[mixed_precision]]
         module_types = ['embed'] + ['gpt_dec']*config.num_hidden_layers + ['norm', 'cls']

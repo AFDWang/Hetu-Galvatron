@@ -37,14 +37,26 @@ MODEL_ARGS_SIZE67B="
     --seq_length 2048"
 
 PROFILE_ARGS="
+    --profile_mode sequence \
     --profile_type computation \
-    --profile_min_batch_size 1 \
-    --profile_max_batch_size 16 \
-    --profile_batch_size_step 1 \
-    --layernum_min 2 \
-    --layernum_max 4 \
+    --profile_batch_size 1 \
+    --profile_min_seq_length 4096 \
+    --profile_max_seq_length 65536 \
+    --profile_seq_length_step 4096 \
+    --layernum_min 1 \
+    --layernum_max 2 \
     --mixed_precision bf16 \
     --use-flash-attn"
+
+# PROFILE_ARGS="
+#     --profile_type computation \
+#     --profile_min_batch_size 1 \
+#     --profile_max_batch_size 16 \
+#     --profile_batch_size_step 1 \
+#     --layernum_min 2 \
+#     --layernum_max 4 \
+#     --mixed_precision bf16 \
+#     --use-flash-attn"
 
 # python3 profiler.py ${MODEL_ARGS_SIZE15B} ${PROFILE_ARGS}
 # python3 profiler.py ${MODEL_ARGS_SIZE27B} ${PROFILE_ARGS}

@@ -34,15 +34,13 @@ class LlamaEmbeddings_(nn.Module):
             setattr(self, key, getattr(model, key))
         setattr(self, 'process_group', getattr(self.embeddings, "process_group"))
 
-    def forward(self, input_ids, position_ids=None):
-        tokens = input_ids[:, :-1].contiguous()
-        labels = input_ids[:, 1:].contiguous()
+    def forward(self, tokens, position_ids=None, attention_mask=None, labels=None):
+        # tokens = input_ids[:, :-1].contiguous()
+        # labels = input_ids[:, 1:].contiguous()
         embedding_kwargs = ({'combine_batch_seqlen_dim': True}
                             if self.process_group is not None and self.sequence_parallel else {})
         hidden_states = self.embeddings(tokens, position_ids=position_ids, **embedding_kwargs)
-        labels = labels.clone()
-        return hidden_states, labels
-
+        return hidden_states
 class LlamaLayers_(nn.Module):
     def __init__(self, model, layer_idx):
         super().__init__()
@@ -57,8 +55,8 @@ class LlamaLayers_(nn.Module):
             self.dropout1 = self.layer.dropout1
             self.layer.dropout1 = nn.Identity()
         
-    def forward(self, hidden_states, input_ids):
-        mixer_kwargs = ({'seqlen': input_ids.shape[1]}
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
+        mixer_kwargs = ({'seqlen': labels.shape[1]}
                         if self.process_group is not None and self.sequence_parallel else {})
         if self.prenorm:
             assert(not self.parallel_block)
@@ -68,8 +66,7 @@ class LlamaLayers_(nn.Module):
             hidden_states = hidden_states + residual
         else:
             hidden_states = layer(hidden_states, mixer_kwargs=mixer_kwargs)
-        input_ids = input_ids.clone()
-        return hidden_states, input_ids
+        return hidden_states
 
 class LlamaPreNorm_(nn.Module):
     def __init__(self, model):
@@ -79,11 +76,10 @@ class LlamaPreNorm_(nn.Module):
         for key in attrs:
             setattr(self, key, getattr(model, key))
 
-    def forward(self, hidden_states, input_ids):
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
         if self.prenorm:
             hidden_states = self.ln_f(hidden_states)
-        input_ids = input_ids.clone()
-        return hidden_states, input_ids
+        return hidden_states
 
 class LlamaCls_(nn.Module):
     def __init__(self, model):
@@ -94,7 +90,7 @@ class LlamaCls_(nn.Module):
         self.sequence_parallel = self.lm_head.sequence_parallel
         self.process_group = self.lm_head.process_group
 
-    def forward(self, hidden_states, input_ids):
+    def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
         if self.project_out is not None:
             hidden_states = self.project_out(hidden_states)
         lm_logits = self.lm_head(hidden_states)
@@ -102,7 +98,7 @@ class LlamaCls_(nn.Module):
             lm_logits = rearrange(lm_logits, "b s d -> (b s) d")
         from flash_attn.losses.cross_entropy import CrossEntropyLoss
         loss_fn = CrossEntropyLoss(inplace_backward=True, process_group = self.process_group)
-        loss = loss_fn(lm_logits, input_ids.view(-1).long())
+        loss = loss_fn(lm_logits, labels.view(-1).long())
         return loss
 
 def construct_sequential_model(model, config):
@@ -121,8 +117,8 @@ class LlamaModelInfo(ModelInfo):
         layernum_list = [config.num_hidden_layers]
         seq_len, hidden_size = args.seq_length, config.hidden_size
         mixed_precision = mixed_precision_dtype(args.mixed_precision)
-        layer_shapes_list = [[[-1,seq_len,hidden_size], [-1,seq_len]]]
-        layer_dtypes_list = [[mixed_precision, torch.long]]
+        layer_shapes_list = [[[-1,seq_len,hidden_size]]]
+        layer_dtypes_list = [[mixed_precision]]
         module_types = ['embed'] + ['gpt_dec']*config.num_hidden_layers + ['norm', 'cls']
         self.set_layernums(layernum_list)
         self.set_shapes(layer_shapes_list)

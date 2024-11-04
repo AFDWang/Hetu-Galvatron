@@ -15,6 +15,8 @@ LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
 TRAINER="train_dist.py"
 DATA_PATH=/home/pkuhetu/lxy/dataset/gpt2/my-gpt2_text_document
+VOCAB_FILE=/home/pkuhetu/lxy/dataset/gpt2/gpt2-vocab.json
+MERGE_FILE=/home/pkuhetu/lxy/dataset/gpt2/gpt2-merges.txt
 
 MODEL_ARGS="
     --model_size gpt-6.7b \
@@ -27,7 +29,7 @@ MODEL_ARGS="
     --seq_length 2048"
 
 TRAIN_ARGS="
-    --global_train_batch_size 64 \
+    --global_train_batch_size 32 \
     --train-iters 25 \
     --lr 1e-4 \
     --adam_weight_decay 0.01 \
@@ -38,7 +40,10 @@ TRAIN_ARGS="
 
 DATA_ARGS="
     --data-path $DATA_PATH \
-    --split 949,50,1
+    --split 949,50,1 \
+    --tokenizer-type GPT2BPETokenizer \
+    --vocab-file $VOCAB_FILE \
+    --merge-file $MERGE_FILE \
 "
 
 PARALLEL_ARGS="

@@ -117,7 +117,6 @@ def get_train_valid_test_data_iterators():
     return train_data_iterator, valid_data_iterator, test_data_iterator
 
 
-# TODO: support tokenizer, reset_position_ids, reset_attention_mask, eod_mask_loss
 def get_batch(data_iterator):
     """Generate a batch."""
 

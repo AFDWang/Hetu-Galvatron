@@ -230,14 +230,14 @@ class DpOnModel:
                     return False
         return True
 
-    def _build_dp_and_run(self, pp_deg, bsz, mbsz, min_tp):
+    def _build_dp_and_run(self, pp_deg, bsz, mbsz, min_tp, max_tp):
         if isinstance(self.timecost_model_args, list):
             self.timecost_model_args = self.timecost_model_args[0]
         if isinstance(self.memcost_model_args, list):
             self.memcost_model_args = self.memcost_model_args[0]
             
         # Look for results in search history
-        key = (bsz, mbsz, pp_deg, min_tp)
+        key = (bsz, mbsz, pp_deg, min_tp, max_tp)
         from_history = False
         if self.search_history is not None and key in self.search_history.keys() and self.search_history[key]['mem_cost'] <= self.max_mem:
             re = self.search_history[key]
@@ -350,10 +350,10 @@ class DpOnModel:
 
         # Write search result into history
         if self.search_history is not None and best_strategy_flag:
-            self.search_history[key]={'comm_cost': comm_cost, 'res_list': res_list, 'mem_cost': mem_cost, "min_tp": min_tp, "vtp": vtp}
+            self.search_history[key]={'comm_cost': comm_cost, 'res_list': res_list, 'mem_cost': mem_cost, "min_tp": min_tp, "max_tp": max_tp, "vtp": vtp}
         return comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history
 
-    def _build_dp_and_run_multi_layer_type(self, pp_deg, bsz, mbsz, min_tp):
+    def _build_dp_and_run_multi_layer_type(self, pp_deg, bsz, mbsz, min_tp, max_tp):
         # Look for results in search history
         # history_results = []
         # for i in range(pp_deg):
@@ -388,7 +388,7 @@ class DpOnModel:
         if self.pipeline_type == "gpipe":
             v_list = []
             for i in range(len(self.layer_num)):
-                mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
+                mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, max_tp = max_tp, sequence_parallel = self.config.sequence_parallel, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
                 for k, v in mem_cost_list[0]['other'].items():
                     other_mem_cost[k] = np.ceil(v).astype(int)
                     other_time_cost[k] = [0] * pp_deg
@@ -447,11 +447,11 @@ class DpOnModel:
                         if isinstance(self.other_time_profiled_list[i],np.ndarray):
                             def linear_func(x, m, c):
                                 return m * x + c
-                            other_time_cost[k][0] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
-                            other_time_cost[k][-1] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
+                            other_time_cost[k][0] += linear_func(mbsz / min_tp * k, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
+                            other_time_cost[k][-1] += linear_func(mbsz / min_tp * k, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
                         else:
-                            other_time_cost[k][0] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
-                            other_time_cost[k][-1] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
+                            other_time_cost[k][0] += mbsz / min_tp * k * self.other_time_profiled_list[i] * 0.001 * 3 / 2
+                            other_time_cost[k][-1] += mbsz / min_tp * k * self.other_time_profiled_list[i] * 0.001 * 3 / 2
                         
                     # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
                     v = [cost['enc_total'] for cost in mem_cost_list]
@@ -548,7 +548,13 @@ class DpOnModel:
                 start_layer = 0
                 comm_cost_list, res_list_list, mem_remain_list, mem_cost_list = [], [], [], []
                 for i in range(pp_deg):
-                    nw_other_mem_cost = {k:v[i] for k,v in other_mem_cost.items()}
+                    if self.config.sequence_parallel:
+                        global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_len * 4 / 1024 / 1024
+                        if self.config.mixed_precision:
+                            global_memory = global_memory / 2
+                    else:
+                        global_memory = 0
+                    nw_other_mem_cost = {k:v[i] + global_memory for k,v in other_mem_cost.items()}
                     nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
                     mem_cost = {k:0 for k,v in other_time_cost.items()}
                     dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], 1, local_strategy_set, self.config.fine_grained_mode)
@@ -598,7 +604,13 @@ class DpOnModel:
             return final_comm_cost, final_res_list_list, final_mem_remain_list, final_mem_cost_list, vtp, best_strategy_flag, from_history
         
         for i in range(pp_deg):
-            nw_other_mem_cost = {k:v[i] for k,v in other_mem_cost.items()}
+            if self.config.sequence_parallel:
+                global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_length * 4 / 1024 / 1024
+                if self.config.mixed_precision:
+                    global_memory = global_memory / 2
+            else:
+                global_memory = 0
+            nw_other_mem_cost = {k:v[i] + int(global_memory) for k,v in other_mem_cost.items()}
             nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
             mem_cost = {k:0 for k,v in other_time_cost.items()}
             dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], strategy_num, strategy_set, self.config.fine_grained_mode)
@@ -648,13 +660,14 @@ class DpOnModel:
             res_list_list, mem_remain_list, mem_cost_list = None, [-1 for v2 in mem_remain_list], [-1 for v2 in mem_cost_list]
         return comm_cost, res_list_list, mem_remain_list, mem_cost_list, vtp, best_strategy_flag, from_history
 
-    def fit(self, bsz, min_tp, print_=True, mbsz_dict=None):
+    def fit(self, bsz, min_tp, max_tp, print_=True, mbsz_dict=None):
         min_comm_cost = np.inf
         min_res_list = None
         min_pp_deg = -1
         min_mem_remain = -1
         min_mem_cost = -1
         min_min_tp = -1
+        min_max_tp = -1
         min_vtp = -1
         if mbsz_dict == None:
             mbsz_dict = {}
@@ -665,7 +678,7 @@ class DpOnModel:
             if pp_deg * min_tp > self.gpu_num:
                 continue
             if print_:
-                print(f'bsz={bsz}, pp_deg={pp_deg}, min_tp={min_tp}:', flush=True)
+                print(f'bsz={bsz}, pp_deg={pp_deg}, min_tp={min_tp}, max_tp={max_tp}:', flush=True)
             if bsz % (self.gpu_num//(pp_deg*min_tp)):
                 comm_cost, res_list, mem_remain, mem_cost, best_strategy_flag, from_history = np.inf, None, -1, np.inf, False, False
                 if min_res_list is None:
@@ -675,9 +688,9 @@ class DpOnModel:
                     print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
                 continue
             if self.multi_layer_type:
-                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp)
+                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp)
             else:
-                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run(pp_deg, bsz, mbsz_dict[pp_deg], min_tp)
+                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp)
             mem_cost = [m + self.mem_cache for m in mem_cost] if isinstance(mem_cost, list) else mem_cost + self.mem_cache
             if print_:
                 print('Best strategy:', best_strategy_flag, '\nFrom history:', from_history)
@@ -689,6 +702,7 @@ class DpOnModel:
                 min_mem_remain = mem_remain
                 min_mem_cost = mem_cost
                 min_min_tp = min_tp
+                min_max_tp = max_tp
                 min_vtp = vtp
 
-        return min_comm_cost, min_res_list, min_pp_deg, min_mem_remain, min_mem_cost, min_min_tp, min_vtp
+        return min_comm_cost, min_res_list, min_pp_deg, min_mem_remain, min_mem_cost, min_min_tp, min_max_tp, min_vtp

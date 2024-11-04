@@ -9,6 +9,7 @@ from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
 # from flash_attn.ops.rms_norm import RMSNorm as LlamaRMSNorm
 from galvatron.core.tensor_parallel import colummn_row_reset_parameters
 from megatron.core.tensor_parallel.utils import VocabUtility
+from megatron.core.tensor_parallel.mappings_group import get_tensor_model_parallel_world_size_group
 
 def get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
@@ -88,6 +89,11 @@ class LlamaLoss_(nn.Module):
         self.weight = nn.Parameter(weight.clone())
         self.sequence_parallel = sequence_parallel
         self.tp_group = tp_group
+        world_size = get_tensor_model_parallel_world_size_group(tp_group)
+        if self.sequence_parallel and world_size <= 1:
+            self.sequence_parallel = False
+            # disable sp to avoid global buffer
+            
     
     def forward(self, hidden_states):
         logits_parallel = tensor_parallel.linear_with_grad_accumulation_and_async_allreduce(
@@ -102,7 +108,7 @@ class LlamaLoss_(nn.Module):
 
 
 class LlamaCls_(nn.Module):
-    def __init__(self, model, parallel_loss = True, half_entorpy = False):
+    def __init__(self, model, parallel_loss = True, half_entorpy = True):
         super().__init__()
         self.sequence_parallel = get_args().sequence_parallel
         self.tp_group = model.lm_head.tp_group

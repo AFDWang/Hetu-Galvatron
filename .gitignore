@@ -14,6 +14,7 @@ log/
 *.so
 
 
+*.diff
 *.log
 *.json
 *.nsys-rep
@@ -23,3 +24,4 @@ galvatron/profile_hardware/hostfile
 galvatron/profile_hardware/profile_reducescatter.py
 galvatron/profile_hardware/test.sh
 patches/
+galvatron/site_package/megatron-old

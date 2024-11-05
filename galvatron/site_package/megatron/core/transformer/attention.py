@@ -1,13 +1,23 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from importlib.metadata import version
 from typing import Union
 
 import torch
+from pkg_resources import packaging
 
 from megatron.core import parallel_state, tensor_parallel
 from megatron.core.models.common.embeddings.rotary_pos_embedding import apply_rotary_pos_emb
+from megatron.core.parallel_state import (
+    get_data_parallel_group,
+    get_data_parallel_rank,
+    get_data_parallel_world_size,
+    get_tensor_model_parallel_group,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+)
+from megatron.core.transformer.custom_layers.transformer_engine import SplitAlongDim
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.identity_op import IdentityFuncOp, IdentityOp
 from megatron.core.transformer.module import MegatronModule
@@ -17,7 +27,6 @@ from megatron.core.utils import divide
 
 from .enums import AttnMaskType
 from .transformer_config import TransformerConfig
-from .utils import make_sharded_tensors_for_checkpoint
 
 
 @dataclass
@@ -25,6 +34,8 @@ class SelfAttentionSubmodules:
     linear_qkv: Union[ModuleSpec, type] = None
     core_attention: Union[ModuleSpec, type] = None
     linear_proj: Union[ModuleSpec, type] = None
+    q_layernorm: Union[ModuleSpec, type] = None
+    k_layernorm: Union[ModuleSpec, type] = None
 
 
 @dataclass
@@ -95,7 +106,14 @@ class Attention(MegatronModule, ABC):
         )
 
     def _checkpointed_attention_forward(
-        self, query, key, value, attention_mask, rotary_pos_emb=None, attn_mask_type=None
+        self,
+        query,
+        key,
+        value,
+        attention_mask,
+        rotary_pos_emb=None,
+        attn_mask_type=None,
+        packed_seq_params=None,
     ):
         """Forward method with selective activation checkpointing."""
 
@@ -107,7 +125,12 @@ class Attention(MegatronModule, ABC):
             attn_mask_type = inputs[5]
             attn_mask_type = AttnMaskType(attn_mask_type.item())
             output_ = self.core_attention(
-                query, key, value, attention_mask, attn_mask_type=attn_mask_type
+                query,
+                key,
+                value,
+                attention_mask,
+                attn_mask_type=attn_mask_type,
+                packed_seq_params=packed_seq_params,
             )
             return output_
 
@@ -115,7 +138,14 @@ class Attention(MegatronModule, ABC):
             attn_mask_type = self.attn_mask_type
         attn_mask_type = torch.tensor([attn_mask_type.value], dtype=torch.int)
         hidden_states = tensor_parallel.checkpoint(
-            custom_forward, False, query, key, value, attention_mask, rotary_pos_emb, attn_mask_type
+            custom_forward,
+            False,
+            query,
+            key,
+            value,
+            attention_mask,
+            rotary_pos_emb,
+            attn_mask_type,
         )
 
         return hidden_states
@@ -218,6 +248,7 @@ class Attention(MegatronModule, ABC):
         key_value_states=None,
         inference_params=None,
         rotary_pos_emb=None,
+        packed_seq_params=None,
     ):
         # hidden_states: [sq, b, h]
 
@@ -239,13 +270,29 @@ class Attention(MegatronModule, ABC):
             inference_params, key, value, rotary_pos_emb
         )
 
+        if packed_seq_params is not None:
+            query = query.squeeze(1)
+            key = key.squeeze(1)
+            value = value.squeeze(1)
+
         # ================================================
         # relative positional embedding (rotary embedding)
         # ================================================
         if rotary_pos_emb is not None:
             q_pos_emb, k_pos_emb = rotary_pos_emb
-            query = apply_rotary_pos_emb(query, q_pos_emb)
-            key = apply_rotary_pos_emb(key, k_pos_emb)
+
+            if packed_seq_params is not None:
+                cu_seqlens_q = packed_seq_params.cu_seqlens_q
+                cu_seqlens_kv = packed_seq_params.cu_seqlens_kv
+            else:
+                cu_seqlens_q = cu_seqlens_kv = None
+            query = apply_rotary_pos_emb(
+                query, q_pos_emb, config=self.config, cu_seqlens=cu_seqlens_q,
+            )
+            key = apply_rotary_pos_emb(
+                key, k_pos_emb, config=self.config, cu_seqlens=cu_seqlens_kv,
+            )
+
             # TODO, can apply positional embedding to value_layer so it has
             # absolute positional embedding.
             # otherwise, only relative positional embedding takes effect
@@ -255,14 +302,31 @@ class Attention(MegatronModule, ABC):
         # core attention computation
         # ==================================
 
-        if self.checkpoint_core_attention:
+        if self.checkpoint_core_attention and self.training:
             core_attn_out = self._checkpointed_attention_forward(
-                query, key, value, attention_mask, attn_mask_type=attn_mask_type
+                query,
+                key,
+                value,
+                attention_mask,
+                attn_mask_type=attn_mask_type,
+                packed_seq_params=packed_seq_params,
             )
         else:
             core_attn_out = self.core_attention(
-                query, key, value, attention_mask, attn_mask_type=attn_mask_type
+                query,
+                key,
+                value,
+                attention_mask,
+                attn_mask_type=attn_mask_type,
+                packed_seq_params=packed_seq_params,
             )
+
+        if packed_seq_params is not None:
+            # reshape to same output shape as unpacked case
+            # (t, np, hn) -> (t, b=1, h=np*hn)
+            # t is the pack size = sum (sq_i)
+            # note that batch is a dummy dimension in the packed case
+            core_attn_out = core_attn_out.reshape(core_attn_out.size(0), 1, -1)
 
         # =================
         # Output. [sq, b, h]
@@ -302,11 +366,100 @@ class SelfAttention(Attention):
             config=self.config,
             init_method=self.config.init_method,
             gather_output=False,
-            bias=self.config.add_bias_linear,
+            bias=self.config.add_bias_linear or self.config.add_qkv_bias,
             skip_bias_add=False,
             is_expert=False,
             tp_comm_buffer_name='qkv',
         )
+
+        if submodules.q_layernorm is not None:
+            self.q_layernorm = build_module(
+                submodules.q_layernorm,
+                hidden_size=self.hidden_size_per_attention_head,
+                config=self.config,
+                eps=self.config.layernorm_epsilon,
+            )
+        else:
+            self.q_layernorm = None
+
+        if submodules.k_layernorm is not None:
+            self.k_layernorm = build_module(
+                submodules.k_layernorm,
+                hidden_size=self.hidden_size_per_attention_head,
+                config=self.config,
+                eps=self.config.layernorm_epsilon,
+            )
+        else:
+            self.k_layernorm = None
+
+    def run_realtime_tests(self):
+        """Performs a consistency check.
+
+        This function makes sure that tensors across devices are the same during an experiment.
+        This is often not guaranteed to be so because of silent hardware failures (eg, memory
+        corruption loading a checkpoint, network traffic corruption encountered during data transmission).
+
+        (TODO) In the future, more tensors should be checked across the training run and
+        checked every X iterations. This is left for future work. Equality of tensors is probably not
+        required; transmitting hashes is sufficient."""
+
+        if self.config.qk_layernorm:
+            # check that all tensor parallel and data parallel ranks have the same
+            # Q & K layernorm parameters.
+            rank = get_data_parallel_rank()
+            inputs = torch.stack(
+                [
+                    self.q_layernorm.weight.data,
+                    self.q_layernorm.bias.data,
+                    self.k_layernorm.weight.data,
+                    self.k_layernorm.bias.data,
+                ]
+            )
+            dp_list = [torch.empty_like(inputs) for _ in range(get_data_parallel_world_size())]
+            dp_list[rank] = inputs
+            torch.distributed.all_gather(dp_list, inputs, group=get_data_parallel_group())
+
+            def _compare(srcs, tgts, names, parallelism):
+                assert len(srcs) == len(tgts) == len(names)
+                for src, tgt, name in zip(srcs, tgts, names):
+                    assert torch.all(
+                        src == tgt
+                    ), f"Discrepancy between {name} in {parallelism} ranks {i} and {rank}. Diff: {torch.norm(src - tgt)}"
+
+            for i, dp in enumerate(dp_list):
+                q_w, q_b, k_w, k_b = torch.unbind(dp)
+                _compare(
+                    [q_w, q_b, k_w, k_b],
+                    [
+                        self.q_layernorm.weight.data,
+                        self.q_layernorm.bias.data,
+                        self.k_layernorm.weight.data,
+                        self.k_layernorm.bias.data,
+                    ],
+                    ["q_w", "q_b", "k_w", "k_b"],
+                    "DP",
+                )
+
+            rank = get_tensor_model_parallel_rank()
+            tp_list = [
+                torch.empty_like(inputs) for _ in range(get_tensor_model_parallel_world_size())
+            ]
+            tp_list[rank] = inputs
+            torch.distributed.all_gather(tp_list, inputs, group=get_tensor_model_parallel_group())
+
+            for i, tp in enumerate(tp_list):
+                q_w, q_b, k_w, k_b = torch.unbind(tp)
+                _compare(
+                    [q_w, q_b, k_w, k_b],
+                    [
+                        self.q_layernorm.weight.data,
+                        self.q_layernorm.bias.data,
+                        self.k_layernorm.weight.data,
+                        self.k_layernorm.bias.data,
+                    ],
+                    ["q_w", "q_b", "k_w", "k_b"],
+                    "TP",
+                )
 
     def get_query_key_value_tensors(self, hidden_states, key_value_states=None):
         """
@@ -325,39 +478,38 @@ class SelfAttention(Attention):
         )
         mixed_qkv = mixed_qkv.view(*new_tensor_shape)
 
-        # [sq, b, ng, (np/ng + 2) * hn] --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
-        (query, key, value) = torch.split(
-            mixed_qkv,
-            [
-                (
-                    self.num_attention_heads_per_partition
-                    // self.num_query_groups_per_partition
-                    * self.hidden_size_per_attention_head
-                ),
-                self.hidden_size_per_attention_head,
-                self.hidden_size_per_attention_head,
-            ],
-            dim=3,
-        )
+        split_arg_list = [
+            (
+                self.num_attention_heads_per_partition
+                // self.num_query_groups_per_partition
+                * self.hidden_size_per_attention_head
+            ),
+            self.hidden_size_per_attention_head,
+            self.hidden_size_per_attention_head,
+        ]
+
+        if SplitAlongDim is not None:
+
+            # [sq, b, ng, (np/ng + 2) * hn] --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
+            (query, key, value) = SplitAlongDim(mixed_qkv, 3, split_arg_list,)
+        else:
+
+            # [sq, b, ng, (np/ng + 2) * hn] --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
+            (query, key, value) = torch.split(mixed_qkv, split_arg_list, dim=3,)
+
         # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]
         query = query.reshape(query.size(0), query.size(1), -1, self.hidden_size_per_attention_head)
 
-        return query, key, value
+        if self.q_layernorm is not None:
+            query = self.q_layernorm(query)
 
-    def sharded_state_dict(self, prefix='', sharded_key_prefix=None, sharded_offsets=()):
-        sharded_key_prefix = prefix if sharded_key_prefix is None else sharded_key_prefix
-        sharded_state_dict = {}
-        for name, module in (
-            ('linear_qkv', self.linear_qkv),
-            ('linear_proj', self.linear_proj),
-        ):
-            sub_sd = module.sharded_state_dict(
-                prefix=f'{prefix}{name}.',
-                sharded_key_prefix=f'{sharded_key_prefix}{name}.',
-                sharded_offsets=sharded_offsets,
-            )
-            sharded_state_dict.update(sub_sd)
-        return sharded_state_dict
+        if self.k_layernorm is not None:
+            key = self.k_layernorm(key)
+
+        if self.config.test_mode:
+            self.run_realtime_tests()
+
+        return query, key, value
 
 
 class CrossAttention(Attention):

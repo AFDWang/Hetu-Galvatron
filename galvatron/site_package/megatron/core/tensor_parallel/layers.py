@@ -1,8 +1,10 @@
+# Copyright (c) 2024, Peking University. All rights reserved.
 # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 
 # Parts of the code here are adapted from PyTorch
 # repo: https://github.com/pytorch/pytorch
 
+# Add support for Megatron-TP with custom group
 import io
 import math
 import os
@@ -33,6 +35,17 @@ from .mappings import (
     reduce_from_tensor_model_parallel_region,
     reduce_scatter_to_sequence_parallel_region,
     scatter_to_tensor_model_parallel_region,
+)
+from .mappings_group import (
+    get_tensor_model_parallel_world_size_group,
+    get_tensor_model_parallel_rank_group,
+    copy_to_tensor_model_parallel_region_group,
+    gather_from_tensor_model_parallel_region_group,
+    gather_from_sequence_parallel_region_group,
+    reduce_from_tensor_model_parallel_region_group,
+    scatter_to_tensor_model_parallel_region_group,
+    scatter_to_sequence_parallel_region_group,
+    reduce_scatter_to_sequence_parallel_region_group,
 )
 from .random import get_cuda_rng_tracker, get_expert_parallel_rng_tracker_name
 from .utils import VocabUtility, divide, split_tensor_along_last_dim
@@ -110,6 +123,7 @@ def _initialize_affine_weight_cpu(
     init_method,
     stride=1,
     return_master_weight=False,
+    tp_group=None,
     *,
     params_dtype=torch.float32,
 ):
@@ -132,6 +146,12 @@ def _initialize_affine_weight_cpu(
     weight_list = torch.split(master_weight, per_partition_per_stride_size, dim=partition_dim)
     rank = get_tensor_model_parallel_rank()
     world_size = get_tensor_model_parallel_world_size()
+    if tp_group is None:
+        rank = get_tensor_model_parallel_rank()
+        world_size = get_tensor_model_parallel_world_size()
+    else:
+        rank = get_tensor_model_parallel_rank_group(tp_group)
+        world_size = get_tensor_model_parallel_world_size_group(tp_group)
     my_weight_list = weight_list[rank::world_size]
 
     with torch.no_grad():
@@ -164,18 +184,27 @@ class VocabParallelEmbedding(torch.nn.Module):
         *,
         init_method: Callable,
         config: ModelParallelConfig,
+        tp_group = None,
+        sp_group = None,
     ):
         super(VocabParallelEmbedding, self).__init__()
+        self.tp_group = tp_group
+        self.sp_group = sp_group
         # Keep the input dimensions.
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.tensor_model_parallel_size = get_tensor_model_parallel_world_size()
+        if tp_group is None:
+            self.tensor_model_parallel_size = get_tensor_model_parallel_world_size()
+            rank = get_tensor_model_parallel_rank()
+        else:
+            self.tensor_model_parallel_size = get_tensor_model_parallel_world_size_group(tp_group)
+            rank = get_tensor_model_parallel_rank_group(tp_group)
         # Divide the weight matrix along the vocaburaly dimension.
         (
             self.vocab_start_index,
             self.vocab_end_index,
         ) = VocabUtility.vocab_range_from_global_vocab_size(
-            self.num_embeddings, get_tensor_model_parallel_rank(), self.tensor_model_parallel_size
+            self.num_embeddings, rank, self.tensor_model_parallel_size
         )
         self.num_embeddings_per_partition = self.vocab_end_index - self.vocab_start_index
 
@@ -194,6 +223,7 @@ class VocabParallelEmbedding(torch.nn.Module):
                     self.num_embeddings_per_partition,
                     0,
                     init_method,
+                    tp_group=tp_group,
                     params_dtype=config.params_dtype,
                 )
         else:
@@ -223,7 +253,10 @@ class VocabParallelEmbedding(torch.nn.Module):
         if self.tensor_model_parallel_size > 1:
             output_parallel[input_mask, :] = 0.0
         # Reduce across all the model parallel GPUs.
-        output = reduce_from_tensor_model_parallel_region(output_parallel)
+        if self.tp_group is None:
+            output = reduce_from_tensor_model_parallel_region(output_parallel)
+        else:
+            output = reduce_from_tensor_model_parallel_region_group(output_parallel, self.tp_group)
         return output
 
     def sharded_state_dict(
@@ -282,6 +315,7 @@ def linear_with_frozen_weight(
     async_grad_allreduce: bool,
     sequence_parallel: bool,
     grad_output_buffer: Optional[List[torch.Tensor]] = None,
+    tp_group: Optional[torch.distributed.ProcessGroup] = None,
 ) -> torch.Tensor:
     """Linear layer execution with weight.requires_grad == False.
 
@@ -320,7 +354,10 @@ def linear_with_frozen_weight(
     )
 
     if sequence_parallel:
-        input = gather_from_sequence_parallel_region(input, tensor_parallel_output_grad=True)
+        if tp_group is None:
+            input = gather_from_sequence_parallel_region(input, tensor_parallel_output_grad=True)
+        else:
+            input = gather_from_sequence_parallel_region_group(input, tp_group, tensor_parallel_output_grad=True)
     else:
         input = input
 
@@ -347,6 +384,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         async_grad_allreduce,
         sequence_parallel,
         grad_output_buffer,
+        tp_group,
     ):
         ctx.save_for_backward(input, weight)
         ctx.use_bias = bias is not None
@@ -354,15 +392,21 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         ctx.async_grad_allreduce = async_grad_allreduce
         ctx.sequence_parallel = sequence_parallel
         ctx.grad_output_buffer = grad_output_buffer
+        ctx.tp_group = tp_group
 
         if sequence_parallel:
-            world_size = get_tensor_model_parallel_world_size()
+            if tp_group is None:
+                world_size = get_tensor_model_parallel_world_size()
+            else:
+                world_size = get_tensor_model_parallel_world_size_group(tp_group)
             dim_size = list(input.size())
             dim_size[0] = dim_size[0] * world_size
 
             all_gather_buffer = get_global_memory_buffer().get_tensor(dim_size, input.dtype, "mpu")
+            if tp_group is None:
+                tp_group = get_tensor_model_parallel_group()
             torch.distributed._all_gather_base(
-                all_gather_buffer, input, group=get_tensor_model_parallel_group()
+                all_gather_buffer, input, group=tp_group
             )
             total_input = all_gather_buffer
         else:
@@ -387,16 +431,26 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
 
         if wgrad_compute:
             if ctx.sequence_parallel:
-                world_size = get_tensor_model_parallel_world_size()
+                if ctx.tp_group is None:
+                    world_size = get_tensor_model_parallel_world_size()
+                else:
+                    world_size = get_tensor_model_parallel_world_size_group(ctx.tp_group)
                 dim_size = list(input.size())
                 dim_size[0] = dim_size[0] * world_size
 
                 all_gather_buffer = get_global_memory_buffer().get_tensor(
                     dim_size, input.dtype, "mpu"
                 )
-                handle = torch.distributed._all_gather_base(
-                    all_gather_buffer, input, group=get_tensor_model_parallel_group(), async_op=True
-                )
+                if ctx.tp_group is None:
+                    ctx.tp_group = get_tensor_model_parallel_group()
+                if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
+                    handle = torch.distributed._all_gather_base(
+                        all_gather_buffer, input, group=ctx.tp_group, async_op=True
+                    )
+                else:
+                    handle = torch.distributed._all_gather_base(
+                        all_gather_buffer, input, group=ctx.tp_group # , async_op=True
+                    )
 
                 # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
                 # gather is scheduled before the input gradient computation
@@ -405,7 +459,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
                 total_input = input
         grad_input = grad_output.matmul(weight)
 
-        if ctx.sequence_parallel and wgrad_compute:
+        if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1" and ctx.sequence_parallel and wgrad_compute:
             handle.wait()
 
         if wgrad_compute:
@@ -428,9 +482,14 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
                 dim_size, dtype=input.dtype, device=torch.cuda.current_device(), requires_grad=False
             )
             # reduce_scatter
-            handle = torch.distributed._reduce_scatter_base(
-                sub_grad_input, grad_input, group=get_tensor_model_parallel_group(), async_op=True
-            )
+            if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
+                handle = torch.distributed._reduce_scatter_base(
+                    sub_grad_input, grad_input, group=ctx.tp_group, async_op=True
+                )
+            else:
+                handle = torch.distributed._reduce_scatter_base(
+                    sub_grad_input, grad_input, group=ctx.tp_group# , async_op=True
+                )
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # reduce scatter is scheduled before the weight gradient computation
 
@@ -474,15 +533,16 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         grad_bias = grad_output.sum(dim=0) if use_bias else None
 
         if ctx.sequence_parallel:
-            handle.wait()
+            if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
+                handle.wait()
             # Need to return None's as gradient has to flow for all the input arguments
             # provided during forward
-            return sub_grad_input, grad_weight, grad_bias, None, None, None, None
+            return sub_grad_input, grad_weight, grad_bias, None, None, None, None, None
 
         if ctx.async_grad_allreduce:
             handle.wait()
 
-        return grad_input, grad_weight, grad_bias, None, None, None, None
+        return grad_input, grad_weight, grad_bias, None, None, None, None, None
 
 
 def linear_with_grad_accumulation_and_async_allreduce(
@@ -493,6 +553,7 @@ def linear_with_grad_accumulation_and_async_allreduce(
     async_grad_allreduce: bool,
     sequence_parallel: bool,
     grad_output_buffer: Optional[List[torch.Tensor]] = None,
+    tp_group: Optional[torch.distributed.ProcessGroup] = None,
 ) -> torch.Tensor:
     """Linear layer execution with asynchronous communication and
     gradient accumulation fusion in backprop.
@@ -558,17 +619,18 @@ def linear_with_grad_accumulation_and_async_allreduce(
         async_grad_allreduce,
         sequence_parallel,
         grad_output_buffer,
+        tp_group,
     ]
 
     if not linear_with_grad_accumulation_and_async_allreduce.warned:
         if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') != "1":
-            if sequence_parallel:
-                warnings.warn(
-                    "When using sequence parallelism it is recommended to set the "
-                    "environment variable CUDA_DEVICE_MAX_CONNECTIONS to 1 for "
-                    "maximum speedup"
-                )
-                linear_with_grad_accumulation_and_async_allreduce.warned = True
+            # if sequence_parallel:
+            #     warnings.warn(
+            #         "When using sequence parallelism it is recommended to set the "
+            #         "environment variable CUDA_DEVICE_MAX_CONNECTIONS to 1 for "
+            #         "maximum speedup"
+            #     )
+            #     linear_with_grad_accumulation_and_async_allreduce.warned = True
 
             if async_grad_allreduce:
                 warnings.warn(
@@ -624,15 +686,23 @@ class ColumnParallelLinear(torch.nn.Module):
         grad_output_buffer: Optional[List[torch.Tensor]] = None,
         is_expert: bool = False,
         tp_comm_buffer_name: str = None,  # Not used
+        tp_group: Optional[torch.distributed.ProcessGroup] = None,
+        sp_group: Optional[torch.distributed.ProcessGroup] = None,
     ):
         super(ColumnParallelLinear, self).__init__()
-
+        
+        self.tp_group = tp_group
+        self.sp_group = sp_group
         # Keep input parameters
         self.input_size = input_size
         self.output_size = output_size
         self.gather_output = gather_output
         # Divide the weight matrix along the last dimension.
-        world_size = get_tensor_model_parallel_world_size()
+        if tp_group is None:
+            world_size = get_tensor_model_parallel_world_size()
+        else:
+            world_size = get_tensor_model_parallel_world_size_group(tp_group)
+            
         self.output_size_per_partition = divide(output_size, world_size)
         self.skip_bias_add = skip_bias_add
         self.is_expert = is_expert
@@ -662,6 +732,7 @@ class ColumnParallelLinear(torch.nn.Module):
                         init_method,
                         stride=stride,
                         return_master_weight=keep_master_weight_for_test,
+                        tp_group=tp_group,
                     )
             else:
                 self.weight = Parameter(
@@ -794,7 +865,10 @@ class ColumnParallelLinear(torch.nn.Module):
         ):
             input_parallel = input_
         else:
-            input_parallel = copy_to_tensor_model_parallel_region(input_)
+            if self.tp_group is None:
+                input_parallel = copy_to_tensor_model_parallel_region(input_)
+            else:
+                input_parallel = copy_to_tensor_model_parallel_region_group(input_, self.tp_group)
 
         if self.config.defer_embedding_wgrad_compute:
             self.embedding_activation_buffer.append(input_parallel)
@@ -817,11 +891,15 @@ class ColumnParallelLinear(torch.nn.Module):
             grad_output_buffer=self.grad_output_buffer
             if self.config.defer_embedding_wgrad_compute
             else None,
+            tp_group=self.tp_group,
         )
         if self.gather_output:
             # All-gather across the partitions.
             assert not self.sequence_parallel
-            output = gather_from_tensor_model_parallel_region(output_parallel)
+            if self.tp_group is None:
+                output = gather_from_tensor_model_parallel_region(output_parallel)
+            else:
+                output = gather_from_tensor_model_parallel_region_group(output_parallel, self.tp_group)
         else:
             output = output_parallel
         output_bias = self.bias if self.skip_bias_add else None
@@ -877,15 +955,20 @@ class RowParallelLinear(torch.nn.Module):
         keep_master_weight_for_test: bool = False,
         is_expert: bool = False,
         tp_comm_buffer_name: str = None,  # Not used
+        tp_group: Optional[torch.distributed.ProcessGroup] = None,
     ):
         super(RowParallelLinear, self).__init__()
 
+        self.tp_group = tp_group
         # Keep input parameters
         self.input_size = input_size
         self.output_size = output_size
         self.input_is_parallel = input_is_parallel
         # Divide the weight matrix along the last dimension.
-        world_size = get_tensor_model_parallel_world_size()
+        if tp_group is None:
+            world_size = get_tensor_model_parallel_world_size()
+        else:
+            world_size = get_tensor_model_parallel_world_size_group(tp_group)
         self.input_size_per_partition = divide(input_size, world_size)
         self.skip_bias_add = skip_bias_add
         self.config = config
@@ -917,6 +1000,7 @@ class RowParallelLinear(torch.nn.Module):
                     stride=stride,
                     return_master_weight=keep_master_weight_for_test,
                     params_dtype=config.params_dtype,
+                    tp_group=tp_group,
                 )
         else:
             self.weight = Parameter(
@@ -992,7 +1076,10 @@ class RowParallelLinear(torch.nn.Module):
             input_parallel = input_
         else:
             assert not self.sequence_parallel
-            input_parallel = scatter_to_tensor_model_parallel_region(input_)
+            if self.tp_group is None:
+                input_parallel = scatter_to_tensor_model_parallel_region(input_)
+            else:
+                input_parallel = scatter_to_tensor_model_parallel_region_group(input_, self.tp_group)
         # Matrix multiply.
         if not self.weight.requires_grad:
             self._forward_impl = linear_with_frozen_weight
@@ -1012,9 +1099,15 @@ class RowParallelLinear(torch.nn.Module):
             assert self.skip_bias_add
             output_ = output_parallel
         elif self.sequence_parallel:
-            output_ = reduce_scatter_to_sequence_parallel_region(output_parallel)
+            if self.tp_group is None:
+                output_ = reduce_scatter_to_sequence_parallel_region(output_parallel)
+            else:
+                output_ = reduce_scatter_to_sequence_parallel_region_group(output_parallel, self.tp_group)
         else:
-            output_ = reduce_from_tensor_model_parallel_region(output_parallel)
+            if self.tp_group is None:
+                output_ = reduce_from_tensor_model_parallel_region(output_parallel)
+            else:
+                output_ = reduce_from_tensor_model_parallel_region_group(output_parallel, self.tp_group)
         if not self.skip_bias_add:
             output = (output_ + self.bias) if self.bias is not None else output_
             output_bias = None

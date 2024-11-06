@@ -5,7 +5,7 @@ from galvatron.core import mixed_precision_dtype, ModelInfo
 from galvatron.core import get_args
 from megatron.core import tensor_parallel
 # from transformers.models.llama.modeling_llama import LlamaRMSNorm
-from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
+from megatron.legacy.model.rms_norm import RMSNorm as LlamaRMSNorm
 # from flash_attn.ops.rms_norm import RMSNorm as LlamaRMSNorm
 from galvatron.core.tensor_parallel import colummn_row_reset_parameters
 from megatron.core.tensor_parallel.utils import VocabUtility

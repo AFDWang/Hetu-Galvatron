@@ -1,5 +1,5 @@
-from megatron.initialize import initialize_megatron
-from megatron import get_args as get_megatron_args
+from megatron.training.initialize import initialize_megatron
+from megatron.training import get_args as get_megatron_args
 import argparse
 
 def initialize_galvatron(model_args = None, mode="train_dist"):

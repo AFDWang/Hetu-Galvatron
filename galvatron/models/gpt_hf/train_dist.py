@@ -12,7 +12,7 @@ from galvatron.models.gpt_hf.meta_configs import config_from_meta, set_model_con
 from galvatron.models.gpt_hf.arguments import model_args
 from galvatron.core.initialize import init_empty_weights
 from galvatron.core.utils import set_megatron_args_for_dataset
-from megatron.arguments import _print_args
+from megatron.training.arguments import _print_args
 
 def train(args):
     local_rank = args.local_rank

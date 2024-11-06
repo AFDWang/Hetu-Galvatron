@@ -1,4 +1,4 @@
-from megatron.training import build_train_valid_test_data_iterators
+from megatron.training.training import build_train_valid_test_data_iterators
 
 def get_train_valid_test_data_iterators():
     train_valid_test_datasets_provider.is_distributed = True

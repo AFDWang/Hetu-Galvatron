@@ -44,8 +44,16 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
     parser = _add_experimental_args(parser)
 
     # Custom arguments.
+    # ---------- Galvatron modify ----------
     if extra_args_provider is not None:
-        parser = extra_args_provider(parser)
+        if isinstance(extra_args_provider, list):
+            for extra_args in extra_args_provider:
+                parser = extra_args(parser)
+        else:
+            parser = extra_args_provider(parser)
+            
+    # if extra_args_provider is not None:
+    #     parser = extra_args_provider(parser)
 
     # Parse.
     if ignore_unknown_args:
@@ -363,21 +371,22 @@ def validate_args(args, defaults={}):
         else:
             args.ffn_hidden_size = 4 * args.hidden_size
 
-    if args.kv_channels is None:
-        assert args.hidden_size % args.num_attention_heads == 0
-        args.kv_channels = args.hidden_size // args.num_attention_heads
+    # ---------- Galvatron modify ----------
+    # if args.kv_channels is None:
+    #     assert args.hidden_size % args.num_attention_heads == 0
+    #     args.kv_channels = args.hidden_size // args.num_attention_heads
 
-    if args.seq_length is not None:
-        assert args.encoder_seq_length is None
-        args.encoder_seq_length = args.seq_length
-    else:
-        assert args.encoder_seq_length is not None
-        args.seq_length = args.encoder_seq_length
+    # if args.seq_length is not None:
+    #     assert args.encoder_seq_length is None
+    #     args.encoder_seq_length = args.seq_length
+    # else:
+    #     assert args.encoder_seq_length is not None
+    #     args.seq_length = args.encoder_seq_length
 
-    if args.seq_length is not None:
-        assert args.max_position_embeddings >= args.seq_length
-    if args.decoder_seq_length is not None:
-        assert args.max_position_embeddings >= args.decoder_seq_length
+    # if args.seq_length is not None:
+    #     assert args.max_position_embeddings >= args.seq_length
+    # if args.decoder_seq_length is not None:
+    #     assert args.max_position_embeddings >= args.decoder_seq_length
     if args.lr is not None:
         assert args.min_lr <= args.lr
     if args.save is not None:
@@ -437,19 +446,26 @@ def validate_args(args, defaults={}):
     # disable sequence parallelism when tp=1
     # to avoid change in numerics when
     # sequence_parallelism is enabled.
-    if args.tensor_model_parallel_size == 1:
-        args.sequence_parallel = False
+    # ---------- Galvatron modify ----------
+    # if args.tensor_model_parallel_size == 1:
+    #     args.sequence_parallel = False
 
     # disable async_tensor_model_parallel_allreduce when
     # model parallel memory optimization is enabled
     if args.sequence_parallel:
         args.async_tensor_model_parallel_allreduce = False
 
+    # ---------- Galvatron modify ----------
+    # zsh add: force this option off, maybe changed later    
+    args.async_tensor_model_parallel_allreduce = False
+    
     if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') != "1":
-        if args.sequence_parallel:
-            raise RuntimeError(
-                "Using sequence parallelism requires setting the environment variable "
-                "CUDA_DEVICE_MAX_CONNECTIONS to 1")
+        # ---------- Galvatron modify ----------
+        # lxy add: Support comm compute overlap in FSDP
+        # if args.sequence_parallel:
+        #     raise RuntimeError(
+        #         "Using sequence parallelism requires setting the environment variable "
+        #         "CUDA_DEVICE_MAX_CONNECTIONS to 1")
         if args.async_tensor_model_parallel_allreduce:
             raise RuntimeError(
                 "Using async gradient all reduce requires setting the environment "
@@ -511,19 +527,58 @@ def validate_args(args, defaults={}):
         raise RuntimeError('--use-dist-ckpt only support Megatron Core, please add --use-mcore-models.')
 
     # Print arguments.
-    _print_args("arguments", args)
+    # ---------- Galvatron modify ----------
+    # _print_args("arguments", args)
 
     return args
 
-
+# ---------- Galvatron modify ----------
 def _print_args(title, args):
     """Print arguments."""
     if args.rank == 0:
         print(f'------------------------ {title} ------------------------',
               flush=True)
         str_list = []
+        no_used_args = [
+            'accumulate_allreduce_grads_in_fp32',
+            'attention_softmax_in_fp32',
+            'bf16',
+            'bias_gelu_fusion',
+            'data_parallel_size',
+            # 'data_path', # DONE
+            'dropout_prob',
+            'encoder_num_layers',
+            'encoder_seq_length',
+            'init_method_std', # TODO
+            'initial_loss_scale',
+            'lr_decay_style', # TODO
+            'lr_warmup_fraction', # TODO
+            'masked_softmax_fusion',
+            'max_position_embeddings',
+            'min_lr', #TODO?
+            'no_load_optim',
+            'no_load_rng',
+            'num_layers',
+            'params_dtype',
+            'pipeline_model_parallel_size',
+            'position_embedding_type',
+            'recompute_granularity',
+            'recompute_method',
+            'recompute_num_layers',
+            'save',
+            'save_interval',
+            'tensor_model_parallel_size',
+            # 'tokenizer_model', # DONE
+            # 'tokenizer_type', # DONE
+            # 'train_iters', # DONE
+            'transformer_pipeline_model_parallel_size',
+            # 'untie_embeddings_and_output_weights', # DONE
+            'use_cpu_initialization'
+        ]
         for arg in vars(args):
             dots = '.' * (48 - len(arg))
+            if arg in no_used_args:
+                continue
             str_list.append('  {} {} {}'.format(arg, dots, getattr(args, arg)))
         for arg in sorted(str_list, key=lambda x: x.lower()):
             print(arg, flush=True)
@@ -681,7 +736,9 @@ def _add_retro_args(parser):
 def _add_network_size_args(parser):
     group = parser.add_argument_group(title='network size')
 
-    group.add_argument('--num-layers', type=int, default=None,
+    # ---------- Galvatron modify ----------
+    # set default num_layers, max_position_embeddings to avoid none assert
+    group.add_argument('--num-layers', type=int, default=24,
                        help='Number of transformer layers.')
     group.add_argument('--encoder-num-layers', type=int, default=None,
                        help='Number of encoder transformer layers.')
@@ -703,7 +760,7 @@ def _add_network_size_args(parser):
                           help='Use group-query attention.')
     group.add_argument('--num-query-groups', type=int, default=1)
 
-    group.add_argument('--max-position-embeddings', type=int, default=None,
+    group.add_argument('--max-position-embeddings', type=int, default=512,
                        help='Maximum number of position embeddings to use. '
                        'This is the size of position embedding.')
     group.add_argument('--position-embedding-type', type=str, default='learned_absolute',
@@ -881,9 +938,12 @@ def _add_regularization_args(parser):
 
 
 def _add_training_args(parser):
+    # ---------- Galvatron modify ----------
+    # set default micro_batch_size to avoid none assert
+    # dsiable profile, gradient_accumulation_fusion
     group = parser.add_argument_group(title='training')
 
-    group.add_argument('--micro-batch-size', type=int, default=None,
+    group.add_argument('--micro-batch-size', type=int, default=1,
                        help='Batch size per model instance (local batch size). '
                        'Global batch size is local batch size times data '
                        'parallel size times number of micro batches.')
@@ -944,13 +1004,13 @@ def _add_training_args(parser):
     group.add_argument('--no-clone-scatter-output-in-embedding', action='store_false',
                        help='If not set, clone the output of the scatter in embedding layer to GC original tensor.',
                        dest='clone_scatter_output_in_embedding')
-    group.add_argument('--profile', action='store_true',
-                       help='Enable nsys profiling. When using this option, nsys '
-                       'options should be specified in commandline. An example '
-                       'nsys commandline is `nsys profile -s none -t nvtx,cuda '
-                       '-o <path/to/output_file> --force-overwrite true '
-                       '--capture-range=cudaProfilerApi '
-                       '--capture-range-end=stop`.')
+    # group.add_argument('--profile', action='store_true',
+    #                    help='Enable nsys profiling. When using this option, nsys '
+    #                    'options should be specified in commandline. An example '
+    #                    'nsys commandline is `nsys profile -s none -t nvtx,cuda '
+    #                    '-o <path/to/output_file> --force-overwrite true '
+    #                    '--capture-range=cudaProfilerApi '
+    #                    '--capture-range-end=stop`.')
     group.add_argument('--profile-step-start', type=int, default=10,
                        help='Global step to start profiling.')
     group.add_argument('--profile-step-end', type=int, default=12,
@@ -1055,9 +1115,14 @@ def _add_training_args(parser):
                        'size is supported.')
     group.add_argument('--sequence-parallel', action='store_true',
                        help='Enable sequence parallel optimization.')
-    group.add_argument('--no-gradient-accumulation-fusion',
-                       action='store_false',
-                       help='Disable fusing gradient accumulation to weight '
+    # group.add_argument('--no-gradient-accumulation-fusion',
+    #                    action='store_false',
+    #                    help='Disable fusing gradient accumulation to weight '
+    #                    'gradient computation of linear layers',
+    #                    dest='gradient_accumulation_fusion')
+    group.add_argument('--gradient-accumulation-fusion',
+                       action='store_true',
+                       help='Enable fusing gradient accumulation to weight '
                        'gradient computation of linear layers',
                        dest='gradient_accumulation_fusion')
     group.add_argument('--use-mcore-models', action='store_true',

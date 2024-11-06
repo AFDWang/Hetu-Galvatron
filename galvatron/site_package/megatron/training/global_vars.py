@@ -96,7 +96,8 @@ def set_global_variables(args, build_tokenizer=True):
     set_args(args)
 
     _build_num_microbatches_calculator(args)
-    if build_tokenizer:
+    # ---------- Galvatron modify ----------
+    if build_tokenizer and args.vocab_file:
         _ = _build_tokenizer(args)
     _set_tensorboard_writer(args)
     _set_wandb_writer(args)

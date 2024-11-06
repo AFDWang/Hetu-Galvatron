@@ -3,17 +3,18 @@ from torch.utils.data import Dataset
 import numpy as np
 from functools import partial
 from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegatronDatasetBuilder
-from megatron.core.datasets.blended_megatron_dataset_config import GPTDatasetConfig
+from megatron.core.datasets.gpt_dataset import GPTDatasetConfig
 from megatron.core import mpu, tensor_parallel
-from megatron import print_rank_0, get_args
-from megatron.training import build_train_valid_test_data_iterators
+from megatron.training import print_rank_0, get_args
+from megatron.training.training import build_train_valid_test_data_iterators
 from megatron.core.datasets.gpt_dataset import GPTDataset
 from torch import Tensor
 from typing import List
-from megatron import get_tokenizer
-from megatron.utils import (
+from megatron.training import get_tokenizer
+from megatron.training.utils import (
     get_ltor_masks_and_position_ids,
-    average_losses_across_data_parallel_group
+    average_losses_across_data_parallel_group,
+    get_batch_on_this_tp_rank
 )
 from galvatron.core.hybrid_parallel_config import get_chunks
 from galvatron.core.pipeline.utils import chunk_batch
@@ -78,15 +79,22 @@ def is_dataset_built_on_rank():
     return (mpu.is_pipeline_first_stage() or mpu.is_pipeline_last_stage()) and mpu.get_tensor_model_parallel_rank() == 0
 
 def core_gpt_dataset_config_from_args(args):
+    tokenizer = get_tokenizer()
+
     return GPTDatasetConfig(
-        is_built_on_rank=is_dataset_built_on_rank,
         random_seed=args.seed,
         sequence_length=args.seq_length,
         blend=args.data_path,
         blend_per_split=[args.train_data_path, args.valid_data_path, args.test_data_path],
         split=args.split,
         path_to_cache=args.data_cache_path,
-        return_document_ids=args.retro_return_doc_ids
+        mock=args.mock_data,
+        mmap_bin_files=args.mmap_bin_files,
+        tokenizer=tokenizer,
+        reset_position_ids=args.reset_position_ids,
+        reset_attention_mask=args.reset_attention_mask,
+        eod_mask_loss=args.eod_mask_loss,
+        create_attention_mask=args.create_attention_mask_in_dataloader,
     )
 
 def train_valid_test_datasets_provider(train_val_test_num_samples):
@@ -102,6 +110,7 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
     train_ds, valid_ds, test_ds = BlendedMegatronDatasetBuilder(
         GPTDataset,
         train_val_test_num_samples,
+        is_dataset_built_on_rank,
         core_gpt_dataset_config_from_args(args)
     ).build()
 
@@ -116,57 +125,31 @@ def get_train_valid_test_data_iterators():
                 train_valid_test_datasets_provider)
     return train_data_iterator, valid_data_iterator, test_data_iterator
 
+def fake_tensor(bsz):
+    return torch.zeros([bsz, 1], device="cuda")
 
 def get_batch(data_iterator):
     """Generate a batch."""
 
+    args = get_args()
+    # TODO: this is pretty hacky, find a better way
+    batch_size = args.global_train_batch_size // mpu.get_data_parallel_world_size()
     # TODO: this is pretty hacky, find a better way
     if (not mpu.is_pipeline_first_stage()) and (not mpu.is_pipeline_last_stage()):
-        return None, {}, None
+        return fake_tensor(batch_size), {}, None
         # return torch.empty(args.micro_batch_size,args.seq_length+1).cuda().long()
     
     args = get_args()
-    tokenizer = get_tokenizer()
-    
-    # Items and their type.
-    keys = ['text']
-    datatype = torch.int64
+    batch = get_batch_on_this_tp_rank(data_iterator)
 
-    # Broadcast data.
-    if data_iterator is not None:
-        data = next(data_iterator)
-    else:
-        data = None
-    data_b = tensor_parallel.broadcast_data(keys, data, datatype)
-
-    # Unpack.
-    tokens_ = data_b['text'].long()
-    labels = tokens_[:, 1:].contiguous()
-    tokens = tokens_[:, :-1].contiguous()
-
-    # Get the masks and postition ids.
-    attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(
-        tokens,
-        tokenizer.eod,
-        args.reset_position_ids,
-        args.reset_attention_mask,
-        args.eod_mask_loss)
-
-    batch = {
-        'tokens': tokens,
-        'labels': labels,
-        'loss_mask': loss_mask,
-        'attention_mask': attention_mask,
-        'position_ids': position_ids
-    }
-
-    micro_lossmask = chunk_batch([loss_mask], get_chunks(args))
+    micro_lossmask = chunk_batch([batch["loss_mask"]], get_chunks(args))
     # print(f"Rank {torch.cuda.current_device()} with input {tokens}")
-
-    return tokens, {
-            "position_ids" : position_ids, 
-            "attention_mask" : attention_mask, 
-            "labels" : labels,
+    if batch["tokens"] == None:
+        batch["tokens"] = fake_tensor(batch_size)
+    return batch["tokens"], {
+            "position_ids" : batch["position_ids"], 
+            "attention_mask" : batch["attention_mask"], 
+            "labels" : batch["labels"],
             }, partial(loss_func, micro_lossmask)
 
 def loss_func(micro_lossmask: Tensor, label: List, output_tensor: List):

@@ -4,7 +4,7 @@ from galvatron.models.llama_hf.LlamaModel_sequential import LlamaModelInfo, cons
 from galvatron.models.llama_hf.LlamaModel_tensor_parallel import construct_tensor_parallel_model, LlamaLayer_tp
 from galvatron.models.llama_hf.LlamaModel_checkpoint import load_llama_module
 
-# from megatron.model.rms_norm import RMSNorm as LlamaRMSNorm
+# from megatron.legacy.model.rms_norm import RMSNorm as LlamaRMSNorm
 
 def get_hybrid_parallel_configs(model_config, training_args):
     hybrid_parallel_configs = get_hybrid_parallel_configs_api(model_config, training_args, LlamaModelInfo)

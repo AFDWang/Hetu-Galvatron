@@ -1,27 +1,24 @@
-# Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 
 """Transformer."""
 from contextlib import nullcontext
+import os
 import math
 import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import Optional
 
-from typing import Any, Tuple
-from torch import Tensor
-from torch.nn import Module
-import torch.distributed as dist
-
-from megatron import get_timers, get_args, get_retro_args, core, get_num_microbatches
-from megatron.model.module import MegatronModule
+from megatron import core
+from megatron.training import get_timers, get_args, get_num_microbatches
+from megatron.legacy.model.module import MegatronModule
 from megatron.core import mpu, tensor_parallel
 from megatron.core.enums import ModelType
-from megatron.model.enums import AttnMaskType, LayerType, AttnType
-from megatron.model.fused_softmax import FusedScaleMaskSoftmax
-from megatron.model.fused_bias_gelu import bias_gelu_impl
+from megatron.legacy.model.enums import AttnMaskType, LayerType, AttnType
+from megatron.legacy.model.fused_softmax import FusedScaleMaskSoftmax
+from megatron.legacy.model.fused_bias_gelu import bias_gelu_impl
 from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding, apply_rotary_pos_emb
-from megatron.model.utils import attention_mask_func, openai_gelu, erf_gelu, get_norm
+from megatron.legacy.model.utils import attention_mask_func, openai_gelu, erf_gelu, get_norm
 from megatron.core.tensor_parallel import (
     gather_from_sequence_parallel_region_to_moe,
     reduce_scatter_to_sequence_parallel_region_from_moe,
@@ -29,6 +26,7 @@ from megatron.core.tensor_parallel import (
     get_data_parallel_rng_tracker_name
 )
 from megatron.core.parallel_state import get_tensor_model_parallel_group, get_tensor_and_expert_parallel_group
+from megatron.core.jit import jit_fuser
 
 try:
     from einops import rearrange
@@ -521,7 +519,7 @@ class ParallelAttention(MegatronModule):
         self.attn_mask_type = attn_mask_type
         self.params_dtype = config.params_dtype
         self.sequence_parallel = config.sequence_parallel
-
+        self.config = config
         self.group_query_attention = args.group_query_attention
         self.num_query_groups = args.num_query_groups
 
@@ -532,13 +530,16 @@ class ParallelAttention(MegatronModule):
             kv_projection_size = args.kv_channels * args.num_attention_heads
 
         self.use_flash_attn = args.use_flash_attn \
-            and attention_type == AttnType.self_attn
+            and attention_type == AttnType.self_attn \
+            and self.attn_mask_type == AttnMaskType.causal
         if self.use_flash_attn:
             if flash_attn_unpadded_func is None:
                 raise ImportError('FlashAttention is not installed, please install with '
                                   'pip install flash-attn')
             assert attention_type == AttnType.self_attn, ('FlashAttention code path only supports '
                                                           'self-attention for now')
+            assert self.attn_mask_type == AttnMaskType.causal, ('FlashAttention code path only '
+                                                                'supports causal mask for now')
             if rearrange is None:
                 raise ImportError('einops is not installed, please install with pip install einops')
 
@@ -572,7 +573,7 @@ class ParallelAttention(MegatronModule):
                 query_projection_size + 2 * kv_projection_size,
                 config=config,
                 init_method=config.init_method,
-                bias=args.add_bias_linear,
+                bias=args.add_bias_linear or args.add_qkv_bias,
                 gather_output=False,
                 tp_group=tp_group)
         else:
@@ -606,7 +607,7 @@ class ParallelAttention(MegatronModule):
 
         if self.use_flash_attn:
             self.core_attention_flash = FlashSelfAttention(
-                causal=attn_mask_type == AttnMaskType.causal, attention_dropout=config.attention_dropout
+                causal=True, attention_dropout=config.attention_dropout
             )
         if args.use_ulysses:
             assert args.num_attention_heads % sp_world_size == 0
@@ -717,6 +718,7 @@ class ParallelAttention(MegatronModule):
                 dim=3)
 
             # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn] -
+            # TODO: check if it is necessary to reshape
             if self.group_query_attention:
                 query_layer = query_layer.reshape(query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head)
             else:
@@ -810,8 +812,8 @@ class ParallelAttention(MegatronModule):
         # apply relative positional encoding (rotary embedding)
         if rotary_pos_emb is not None:
             q_pos_emb, k_pos_emb = rotary_pos_emb
-            query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb)
-            key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb)
+            query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb,self.config)
+            key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb,self.config)
             # TODO, can apply positional embedding to value_layer so it has
             # absolute positional embedding.
             # otherwise, only relative positional embedding takes effect
@@ -871,7 +873,7 @@ def get_bias_dropout_add(training):
     return _bias_dropout_add
 
 
-@torch.jit.script
+@jit_fuser
 def bias_dropout_add_fused_train(x: torch.Tensor,
                                  bias: Optional[torch.Tensor],
                                  residual: torch.Tensor,
@@ -879,7 +881,7 @@ def bias_dropout_add_fused_train(x: torch.Tensor,
     return bias_dropout_add(x, bias, residual, prob, True)
 
 
-@torch.jit.script
+@jit_fuser
 def bias_dropout_add_fused_inference(x: torch.Tensor,
                                      bias: Optional[torch.Tensor],
                                      residual: torch.Tensor,
@@ -952,10 +954,10 @@ class ParallelTransformerLayer(MegatronModule):
                 nullcontext if use_nvfuser else torch.enable_grad
 
         if args.retro_add_retriever:
-            retro_args = get_retro_args()
             self.retro_num_neighbors = args.retro_num_neighbors
-            self.retro_chunk_length = retro_args.retro_gpt_chunk_length
-            self.retro_retrieved_length = retro_args.retro_gpt_retrieved_length
+            self.retro_chunk_length = args.retro_chunk_length
+            self.retro_retrieved_length = \
+                args.retro_num_retrieved_chunks * args.retro_chunk_length
 
         # Retriever (bi-directional transformer with cross attention)
         if layer_type == LayerType.retro_decoder_with_retriever:
@@ -1100,7 +1102,6 @@ class ParallelTransformerLayer(MegatronModule):
         if self.layer_type == LayerType.retro_decoder_with_retriever:
             first_ns = ns % self.retro_chunk_length
             if first_ns > 0:
-                raise Exception("test this case.")
                 first_chunk, rest_chunk = \
                     norm_output[:first_ns], norm_output[first_ns:]
                 first_chunk = torch.nn.functional.pad(
@@ -1168,7 +1169,9 @@ class ParallelTransformerLayer(MegatronModule):
                 norm_input,
                 (0, 0, 0, 0, pad, 0),
                 'constant', 0)[:ns] # [ns, b, d]
-            norm_input = norm_input + residual
+            # TODO: better redesign with inference param
+            args = get_args()
+            norm_input = args.retro_attention_gate * norm_input + residual
 
         # Layer norm post the decoder attention
         norm_output = self.post_inter_attention_norm(norm_input)
@@ -1182,6 +1185,16 @@ class ParallelTransformerLayer(MegatronModule):
                 retriever_attn_mask=None,
                 inference_params=None,
                 rotary_pos_emb=None):
+
+        # Update the params in case the retro param changes during inference
+        # TODO: better redesign with inference param
+        args = get_args()
+        if args.retro_add_retriever:
+            self.retro_num_neighbors = args.retro_num_neighbors
+            self.retro_chunk_length = args.retro_chunk_length
+            self.retro_retrieved_length = \
+                args.retro_num_retrieved_chunks * args.retro_chunk_length
+
         # hidden_states: [s, b, h]
 
         # Layer norm at the beginning of the transformer layer.
@@ -1528,6 +1541,10 @@ class ParallelTransformer(MegatronModule):
                     extra_transformer_engine_kwargs["activation"] = "swiglu" if args.swiglu else "gelu"
                 if self.transformer_engine_v_0_11:
                     extra_transformer_engine_kwargs["normalization"] = args.normalization
+                assert config.attention_softmax_in_fp32, "TransformerEngine only supports softmax compute in FP32."
+                assert (
+                    (bool(int(os.getenv("NVTE_APPLY_QK_LAYER_SCALING", "0"))) and args.fp16) == config.apply_query_key_layer_scaling
+                ), "Unsupported config for apply_query_key_layer_scaling in TransformerEngine."
                 return transformer_engine.pytorch.TransformerLayer(
                     config.hidden_size,
                     config.ffn_hidden_size,
@@ -1543,8 +1560,6 @@ class ParallelTransformer(MegatronModule):
                     tp_group=mpu.get_tensor_model_parallel_group(),
                     get_rng_state_tracker=tensor_parallel.get_cuda_rng_tracker,
                     fuse_wgrad_accumulation=config.gradient_accumulation_fusion,
-                    apply_query_key_layer_scaling=config.apply_query_key_layer_scaling,
-                    attention_softmax_in_fp32=config.attention_softmax_in_fp32,
                     seq_length=args.seq_length,
                     micro_batch_size=args.micro_batch_size,
                     sequence_parallel=config.sequence_parallel,
@@ -1829,11 +1844,19 @@ class ParallelTransformer(MegatronModule):
         # Handle renaming layernorm -> norm in component names
         state_dict_ = {}
         for key in state_dict.keys():
+            # Bypass TransformerEngine module parameters.
+            if "layernorm_qkv" in key or "layernorm_mlp" in key:
+                state_dict_[key] = state_dict[key]
+                continue
             newkey = key.replace("layernorm", "norm")
             state_dict_[newkey] = state_dict[key]
 
         super().load_state_dict(state_dict_, strict)
 
+from typing import Any, Tuple
+from torch import Tensor
+from torch.nn import Module
+import torch.distributed as dist
 
 # --------- ulysses --------------
 

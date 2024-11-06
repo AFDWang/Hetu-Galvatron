@@ -91,7 +91,8 @@ def initialize_megatron(
         _init_autoresume()
 
         # Compile dependencies.
-        _compile_dependencies()
+        # ---------- Galvatron modify ----------
+        # _compile_dependencies()
 
         if args.tp_comm_overlap:
            _initialize_tp_communicators()

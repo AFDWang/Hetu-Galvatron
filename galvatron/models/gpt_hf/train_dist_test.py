@@ -11,7 +11,7 @@ from galvatron.models.gpt_hf.dataloader import DataLoaderForGPT, test_collate_fn
 from galvatron.models.gpt_hf.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
 from galvatron.models.gpt_hf.arguments import model_args
 from galvatron.core.initialize import init_empty_weights
-from megatron.arguments import _print_args
+from megatron.training.arguments import _print_args
 
 def train(args):
     local_rank = args.local_rank

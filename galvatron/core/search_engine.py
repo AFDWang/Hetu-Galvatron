@@ -9,7 +9,8 @@ from galvatron.utils import (
     print_strategies,
     strategy2config,
     array2str,
-    write_json_config
+    write_json_config,
+    remap_config
 )
 from galvatron.core import MemoryCostModel, TimeCostModel, DpOnModel
 from scipy.optimize import curve_fit
@@ -235,6 +236,11 @@ class GalvatronSearchEngine():
         overlap_coe_path = hardware_configs_dir + 'overlap_coefficient.json'
         self.overlap_coe = read_json_config(overlap_coe_path)['overlap_coe']
 
+        sp_time_path = hardware_configs_dir + 'sp_time_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
+        sp_config = read_json_config(sp_time_path)
+        self.sp_allreduce = remap_config(sp_config, "allreduce")
+        self.sp_all2all = remap_config(sp_config, "all2all")
+
     def set_cost_models(self):
         self.set_time_cost_models()
         self.set_memory_cost_models()
@@ -261,6 +267,8 @@ class GalvatronSearchEngine():
                     'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
                     'costmodel_coe': self.args.costmodel_coe,
                     'async_grad_reduce': self.args.async_grad_reduce,
+                    'allreduce_dict': self.sp_allreduce,
+                    'all2all_dict': self.sp_all2all,
                     })
     
     def set_memory_cost_models(self):
@@ -283,6 +291,7 @@ class GalvatronSearchEngine():
                     'max_tp_deg': self.args.max_tp_deg,
                     'gpu_num': self.args.gpu_num,
                     'async_grad_reduce': self.args.async_grad_reduce,
+                    'sequence_parallel': self.args.sequence_parallel,
                     })
     
     # =============== For Galvatron Search Engine Parallelism Optimization ===============
@@ -306,9 +315,19 @@ class GalvatronSearchEngine():
             total_min_tp = [1]
         if not self.args.global_memory_buffer:
             total_max_tp = [self.args.max_tp_deg]
+            total_no_tp = [0,1]
         else:
             total_max_tp = total_min_tp
-            
+            total_no_tp = [0]
+        
+        if self.args.sp_space == 'tp+sp':
+            total_vsp = [0, 1]
+        elif self.args.sp_space == 'tp':
+            total_vsp = [0]
+        elif self.args.sp_space == 'sp':
+            assert Fasle,"Only sp mode unsupport now."
+            total_vsp = [1]
+
         for bsz in self.BSZs:
             pp_stage_dict = pp_stage_dict_for_bsz[bsz]
             results[bsz] = dict()
@@ -323,47 +342,58 @@ class GalvatronSearchEngine():
                     for max_tp in total_max_tp:
                         if min_tp > max_tp:
                             continue
-                        self.strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
-                        self.strategies = [s for s in self.strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
-                        if len(self.strategies) == 0:
-                            continue
+                        results[bsz][chunk][min_tp][max_tp] = dict()
+                        for vsp in total_vsp:
+                            results[bsz][chunk][min_tp][max_tp][vsp] = dict()
+                            for no_tp in total_no_tp:
+                                if no_tp == 1 and vsp == 0:
+                                    continue
                         
-                        pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
-                        
-                        pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
-                        
-                        if len(pp_deg_list) == 0:
-                            continue
-                        
-                        self.strategies = [s for s in self.strategies if s[0] in pp_deg_list]
-                        
-                        mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
-                        for pp in pp_deg_list:
-                            mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
-                        
-                        # strict mode: search chunk must be equal to real chunk 
-                        self.strategies = [s for s in self.strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
-                        
-                        if len(self.strategies) == 0:
-                            continue
-                        
-                        results[bsz][chunk][min_tp][max_tp] = self.dynamic_programming(bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp)
-                        min_res_list, min_pp_deg, throughput = results[bsz][chunk][min_tp][max_tp]['min_res_list'], results[bsz][chunk][min_tp][max_tp]['min_pp_deg'], results[bsz][chunk][min_tp][max_tp]['throughput']
-                        if throughput > max_throughput:
-                            max_throughput = throughput
-                            optimal_bsz = bsz
-                            optimal_chunk = chunk
-                            optimal_min_tp = min_tp
-                            optimal_max_tp = max_tp
-                        # if min_pp_deg == -1 and min_res_list is None:
-                        #     break
-                        max_bsz = bsz
+                                self.strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
+                                self.strategies = [s for s in self.strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
+                                if no_tp == 1:
+                                    self.strategies = [s for s in self.strategies if 'sp' in s[-1] and s[-1]['sp'] == 1]
+                                if len(self.strategies) == 0:
+                                    continue
+                                
+                                pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
+                                
+                                pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
+                                
+                                if len(pp_deg_list) == 0:
+                                    continue
+                                
+                                self.strategies = [s for s in self.strategies if s[0] in pp_deg_list]
+                                
+                                mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
+                                for pp in pp_deg_list:
+                                    mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
+                                
+                                # strict mode: search chunk must be equal to real chunk 
+                                self.strategies = [s for s in self.strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
+                                
+                                if len(self.strategies) == 0:
+                                    continue
+                                
+                                results[bsz][chunk][min_tp][max_tp][vsp][no_tp] = self.dynamic_programming(bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, no_tp)
+                                min_res_list, min_pp_deg, throughput = results[bsz][chunk][min_tp][max_tp][vsp][no_tp]['min_res_list'], results[bsz][chunk][min_tp][max_tp][vsp][no_tp]['min_pp_deg'], results[bsz][chunk][min_tp][max_tp][vsp][no_tp]['throughput']
+                                if throughput > max_throughput:
+                                    max_throughput = throughput
+                                    optimal_bsz = bsz
+                                    optimal_chunk = chunk
+                                    optimal_min_tp = min_tp
+                                    optimal_max_tp = max_tp
+                                    optimal_vsp = vsp
+                                    optimal_no_tp = no_tp
+                                # if min_pp_deg == -1 and min_res_list is None:
+                                #     break
+                                max_bsz = bsz
 
         print('\nFinal results of max memory %d MB:'%self.memory_constraint)
-        re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp]
-        print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Max throughput={re['throughput']} samples/s")
+        re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp][optimal_vsp][optimal_no_tp]
+        print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Optimal vocab sp = {optimal_vsp} Max throughput={re['throughput']} samples/s")
         print(f"pp_deg={re['min_pp_deg']} Minimized timecost={re['min_cost']} Memory remaining={re['mem_remain']} Memory cost={re['mem_cost']}")
-        print(f"Min_tp={re['min_min_tp']} Max_tp={re['min_max_tp']} ")
+        print(f"Min_tp={optimal_min_tp} Max_tp={optimal_max_tp} ")
         print_strategies(re['min_res_list'])
         
         self.save_results(re, optimal_bsz, optimal_chunk, pp_stage_dict_for_bsz[optimal_bsz])
@@ -442,7 +472,7 @@ class GalvatronSearchEngine():
             bsz += scale
         return max_bsz
 
-    def dynamic_programming(self, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp):
+    def dynamic_programming(self, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, no_tp):
         args = self.args
         print('bsz=%d'%bsz, pp_stage_dict)
         dp_on_model = DpOnModel(self.strategies, 
@@ -467,15 +497,14 @@ class GalvatronSearchEngine():
         print('Chunk_dict for bsz %d: '%bsz, chunk_dict)
         print('Mbsz_dict for bsz %d'%bsz, mbsz_dict)
         
-        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_min_tp, min_max_tp, min_vtp = dp_on_model.fit(bsz, min_tp, max_tp, mbsz_dict = mbsz_dict)
+        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_vtp = dp_on_model.fit(bsz, min_tp, max_tp, vsp, no_tp, mbsz_dict = mbsz_dict)
         throughput = bsz / min_cost
-        print(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Min tp={min_min_tp} Max tp={min_max_tp} Vocab tp={min_vtp}")
+        print(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Min tp={min_tp} Max tp={max_tp} Vocab tp={min_vtp} Vocab sp={vsp}")
         print(f"Max throughput={throughput} samples/s")
         print_strategies(min_res_list)
         # print(min_res_list)
         result = {'min_cost': min_cost, 'min_res_list': min_res_list, 'min_pp_deg': min_pp_deg, 
-                        'mem_remain': mem_remain, 'mem_cost': mem_cost, 'throughput': throughput, "vtp": min_vtp,
-                        "min_min_tp": min_min_tp, "min_max_tp": min_max_tp}
+                        'mem_remain': mem_remain, 'mem_cost': mem_cost, 'throughput': throughput, "vtp": min_vtp}
         return result
 
     def save_results(self, results, bsz, chunk, pp_stage_dict):
@@ -722,6 +751,24 @@ class GalvatronSearchEngine():
                 strategies[0][-1]['tp'] = 1
         elif args.search_space == 'pp':
             strategies = [[args.max_pp_deg,1,gpu_num//args.max_pp_deg,{'fsdp':0}]]
+        
+        if args.sp_space == 'tp':
+            for strategie in strategies:
+                if strategie[1] > 1:
+                    strategie[-1]['sp'] = 0
+        elif args.sp_space == 'sp':
+            for strategie in strategies:
+                if strategie[1] > 1:
+                    strategie[-1]['sp'] = 1
+        elif args.sp_space == 'tp+sp':
+            new_strategies = []
+            for strategie in strategies:
+                if strategie[1] > 1:
+                    strategie[-1]['sp'] = 0
+                    new_strategies.append(copy.deepcopy(strategie))
+                    strategie[-1]['sp'] = 1
+                    new_strategies.append(copy.deepcopy(strategie))
+                
         return strategies
     
     def show_search_info(self):

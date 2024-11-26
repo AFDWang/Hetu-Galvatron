@@ -18,6 +18,11 @@ def form_strategy(strategy):
     if 'cpt' in info.keys():
         if info['cpt']:
             dp_deg += '-c'
+    
+    if 'sp' in info.keys():
+        if info['sp']:
+            dp_deg += '-sp'
+    
     return template%(pp_deg, tp_deg, dp_deg)
 
 def strategy_str2list(strategy_str):

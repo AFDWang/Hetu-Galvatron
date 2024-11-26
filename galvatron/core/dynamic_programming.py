@@ -1,6 +1,7 @@
 import numpy as np
 from tqdm import trange
 from .cost_model import pipeline_costmodel
+from .cost_model import OtherTimeCostModel
 
 def estimate_bsz_start_gpunum(type,scale,max_bsz_estimator,gpu_num):
     prune_percent = 0.65
@@ -353,7 +354,7 @@ class DpOnModel:
             self.search_history[key]={'comm_cost': comm_cost, 'res_list': res_list, 'mem_cost': mem_cost, "min_tp": min_tp, "max_tp": max_tp, "vtp": vtp}
         return comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history
 
-    def _build_dp_and_run_multi_layer_type(self, pp_deg, bsz, mbsz, min_tp, max_tp):
+    def _build_dp_and_run_multi_layer_type(self, pp_deg, bsz, mbsz, min_tp, max_tp, vsp, no_tp):
         # Look for results in search history
         # history_results = []
         # for i in range(pp_deg):
@@ -389,32 +390,16 @@ class DpOnModel:
             v_list = []
             for i in range(len(self.layer_num)):
                 mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, max_tp = max_tp, sequence_parallel = self.config.sequence_parallel, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
-                for k, v in mem_cost_list[0]['other'].items():
-                    other_mem_cost[k] = np.ceil(v).astype(int)
-                    other_time_cost[k] = [0] * pp_deg
-                    comm_factor = 2 * (k - 1) / k * (mbsz / min_tp * k)
-                    data_size = (self.timecost_model_args[0]["sequence_length"] * 
-                                self.timecost_model_args[0]["hidden_size"] * 2 * 4 / 1024 / 1024 / 1024)
-
-                    if k == 1 or k == self.n_gpu:
-                        comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d' % k]
-                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
-                    else:
-                        comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d_0' % k]
-                        other_time_cost[k][0] += comm_factor * data_size * comm_coe
-                        
-                    if self.config.mixed_precision:
-                        for t in range(pp_deg):
-                            other_time_cost[k][t] /= 2 # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
-                    if isinstance(self.other_time_profiled_list[i],np.ndarray):
-                        def linear_func(x, m, c):
-                            return m * x + c
-                        other_time_cost[k][0] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
-                        other_time_cost[k][-1] += linear_func(mbsz / min_tp, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
-                    else:
-                        other_time_cost[k][0] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
-                        other_time_cost[k][-1] += mbsz / min_tp * self.other_time_profiled_list[i] * 0.001 * 3 / 2
-                    
+                # TODO: mulitple layer type
+                if i == 0:
+                    for k, v in mem_cost_list[0]['other'].items():
+                        other_mem_cost[k] = np.ceil(v).astype(int)
+                    other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
+                                                        self.timecost_model_args[0]['comm_coe_dict'], 
+                                                        vsp, min_tp, max_tp, 
+                                                        self.memcost_model_args[i]['other_memory_pp_on'],
+                                                        self.memcost_model_args[i]['other_memory_pp_off'],
+                                                        self.other_time_profiled_list[i]).gen_result()
                 v = [cost['enc_total'] for cost in mem_cost_list]
                 v = np.ceil(np.array(v)).astype(np.int32)
                 v = v.reshape(1, -1).repeat(self.layer_num[i], axis=0)
@@ -426,33 +411,16 @@ class DpOnModel:
                 v_list = []
                 for i in range(len(self.layer_num)):
                     mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, stage_idx = stage_idx, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
-                    for k, v in mem_cost_list[0]['other'].items():
-                        other_mem_cost[k] = np.ceil(v).astype(int)
-                        other_time_cost[k] = [0] * pp_deg
-                        
-                        comm_factor = 2 * (k - 1) / k * (mbsz / min_tp * k)
-                        data_size = (self.timecost_model_args[0]["sequence_length"] * 
-                                    self.timecost_model_args[0]["hidden_size"] * 2 * 4 / 1024 / 1024 / 1024)
-
-                        if k == 1 or k == self.n_gpu:
-                            comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d' % k]
-                            other_time_cost[k][0] += comm_factor * data_size * comm_coe
-                        else:
-                            comm_coe = self.timecost_model_args[0]['comm_coe_dict']['%d_0' % k]
-                            other_time_cost[k][0] += comm_factor * data_size * comm_coe
-                            
-                        if self.config.mixed_precision:
-                            for t in range(pp_deg):
-                                other_time_cost[k][t] /= 2
-                        if isinstance(self.other_time_profiled_list[i],np.ndarray):
-                            def linear_func(x, m, c):
-                                return m * x + c
-                            other_time_cost[k][0] += linear_func(mbsz / min_tp * k, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
-                            other_time_cost[k][-1] += linear_func(mbsz / min_tp * k, *self.other_time_profiled_list[i]) * 0.001 * 3 / 2
-                        else:
-                            other_time_cost[k][0] += mbsz / min_tp * k * self.other_time_profiled_list[i] * 0.001 * 3 / 2
-                            other_time_cost[k][-1] += mbsz / min_tp * k * self.other_time_profiled_list[i] * 0.001 * 3 / 2
-                        
+                    # TODO: mulitple layer type
+                    if stage_idx == 0 and i == 0:
+                        for k, v in mem_cost_list[0]['other'].items():
+                            other_mem_cost[k] = np.ceil(v).astype(int)
+                        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
+                                                            self.timecost_model_args[0]['comm_coe_dict'], 
+                                                            vsp, min_tp, max_tp, 
+                                                            self.memcost_model_args[i]['other_memory_pp_on'],
+                                                            self.memcost_model_args[i]['other_memory_pp_off'],
+                                                            self.other_time_profiled_list[i]).gen_result()
                     # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
                     v = [cost['enc_total'] for cost in mem_cost_list]
                     v = np.ceil(np.array(v)).astype(np.int32)
@@ -549,12 +517,12 @@ class DpOnModel:
                 comm_cost_list, res_list_list, mem_remain_list, mem_cost_list = [], [], [], []
                 for i in range(pp_deg):
                     if self.config.sequence_parallel:
-                        global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_len * 4 / 1024 / 1024
+                        global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_length * 4 / 1024 / 1024
                         if self.config.mixed_precision:
                             global_memory = global_memory / 2
                     else:
                         global_memory = 0
-                    nw_other_mem_cost = {k:v[i] + global_memory for k,v in other_mem_cost.items()}
+                    nw_other_mem_cost = {k:v[i] + int(global_memory) for k,v in other_mem_cost.items()}
                     nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
                     mem_cost = {k:0 for k,v in other_time_cost.items()}
                     dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], 1, local_strategy_set, self.config.fine_grained_mode)
@@ -579,7 +547,7 @@ class DpOnModel:
                     mem_cost_list.append(mem_cost)
                     start_layer += pp_stage_list[i]
                 
-                for k,v in other_mem_cost.items():
+                for k in other_time_cost.keys():
                     nw_res_list_list = [v2[k] for v2 in res_list_list]
                     nw_comm_cost_list = [v2[k] for v2 in comm_cost_list]
                     if self.model_microbatch_after_dp:
@@ -604,7 +572,7 @@ class DpOnModel:
             return final_comm_cost, final_res_list_list, final_mem_remain_list, final_mem_cost_list, vtp, best_strategy_flag, from_history
         
         for i in range(pp_deg):
-            if self.config.sequence_parallel and self.config.global_memory_buffer:
+            if self.config.sequence_parallel and self.config.global_memory_buffer and no_tp == 0:
                 global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_length * 4 / 1024 / 1024
                 if self.config.mixed_precision:
                     global_memory = global_memory / 2
@@ -636,7 +604,7 @@ class DpOnModel:
             start_layer += pp_stage_list[i]
         comm_cost = np.inf
         vtp = -1
-        for k,v in other_mem_cost.items():
+        for k in other_time_cost.keys():
             nw_res_list_list = [v2[k] for v2 in res_list_list]
             nw_comm_cost_list = [v2[k] for v2 in comm_cost_list]
             if self.model_microbatch_after_dp:
@@ -660,14 +628,12 @@ class DpOnModel:
             res_list_list, mem_remain_list, mem_cost_list = None, [-1 for v2 in mem_remain_list], [-1 for v2 in mem_cost_list]
         return comm_cost, res_list_list, mem_remain_list, mem_cost_list, vtp, best_strategy_flag, from_history
 
-    def fit(self, bsz, min_tp, max_tp, print_=True, mbsz_dict=None):
+    def fit(self, bsz, min_tp, max_tp, vsp, no_tp, print_=True, mbsz_dict=None):
         min_comm_cost = np.inf
         min_res_list = None
         min_pp_deg = -1
         min_mem_remain = -1
         min_mem_cost = -1
-        min_min_tp = -1
-        min_max_tp = -1
         min_vtp = -1
         if mbsz_dict == None:
             mbsz_dict = {}
@@ -678,7 +644,7 @@ class DpOnModel:
             if pp_deg * min_tp > self.gpu_num:
                 continue
             if print_:
-                print(f'bsz={bsz}, pp_deg={pp_deg}, min_tp={min_tp}, max_tp={max_tp}:', flush=True)
+                print(f'bsz={bsz}, pp_deg={pp_deg}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, no_tp={no_tp}:', flush=True)
             if bsz % (self.gpu_num//(pp_deg*min_tp)):
                 comm_cost, res_list, mem_remain, mem_cost, best_strategy_flag, from_history = np.inf, None, -1, np.inf, False, False
                 if min_res_list is None:
@@ -688,9 +654,9 @@ class DpOnModel:
                     print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
                 continue
             if self.multi_layer_type:
-                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp)
+                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, no_tp)
             else:
-                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp)
+                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, no_tp)
             mem_cost = [m + self.mem_cache for m in mem_cost] if isinstance(mem_cost, list) else mem_cost + self.mem_cache
             if print_:
                 print('Best strategy:', best_strategy_flag, '\nFrom history:', from_history)
@@ -701,8 +667,6 @@ class DpOnModel:
                 min_pp_deg = pp_deg
                 min_mem_remain = mem_remain
                 min_mem_cost = mem_cost
-                min_min_tp = min_tp
-                min_max_tp = max_tp
                 min_vtp = vtp
 
-        return min_comm_cost, min_res_list, min_pp_deg, min_mem_remain, min_mem_cost, min_min_tp, min_max_tp, min_vtp
+        return min_comm_cost, min_res_list, min_pp_deg, min_mem_remain, min_mem_cost, min_vtp

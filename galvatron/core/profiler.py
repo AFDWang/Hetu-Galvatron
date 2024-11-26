@@ -621,11 +621,53 @@ class GalvatronProfiler():
             
         os.system('rm -rf %s'%(os.path.join(self.path, 'nccl_test.log')))
     
+    def profile_sp_bandwidth(self):
+        args = self.args
+        world_size = args.num_nodes * args.num_gpus_per_node
+        hardware_config_dir = os.path.join(self.path, './hardware_configs')
+        if not os.path.exists(hardware_config_dir):
+            os.mkdir(hardware_config_dir)
+        
+        nccl_file = 'build/all_reduce_perf'
+        ARGS = self.prepare_nccltest_args(nccl_file)
+        hardware_config_file = 'sp_time_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
+        hardware_config_path = os.path.join(hardware_config_dir, hardware_config_file)
+        allreduce_size = world_size
+        while allreduce_size > 1:
+            allreduce_consec = 1
+            print('============= allreduce_size: %d, allreduce_consec: %d ============='%(allreduce_size, allreduce_consec))
+            allreduce_groups = self.generate_allreduce_groups(world_size, allreduce_size, allreduce_consec)
+            sizes, times = self.launch_nccl_test(allreduce_groups, args.num_gpus_per_node, ARGS, mode = 'detail')
+            for size,time in zip(sizes,times):
+                key = 'allreduce_size_%d_%dMB_time'%(allreduce_size,size)
+                self.write_config(hardware_config_path, key, time)
+            print('='*70, '\n')
+            allreduce_size /= 2
+        
+        nccl_file = 'build/alltoall_perf'
+        ARGS = self.prepare_nccltest_args(nccl_file)
+        hardware_config_file = 'sp_time_%dnodes_%dgpus_per_node.json'%(args.num_nodes, args.num_gpus_per_node)
+        hardware_config_path = os.path.join(hardware_config_dir, hardware_config_file)
+        all2all_size = world_size
+        while all2all_size > 1:
+            all2all_consec = 1
+            print('============= all2all_size: %d, all2all_consec: %d ============='%(all2all_size, all2all_consec))
+            allreduce_groups = self.generate_allreduce_groups(world_size, all2all_size, all2all_consec)
+            sizes, times = self.launch_nccl_test(allreduce_groups, args.num_gpus_per_node, ARGS, mode = 'detail')
+            for size,time in zip(sizes,times):
+                key = 'all2all_size_%d_%dMB_time'%(all2all_size,size)
+                self.write_config(hardware_config_path, key, time)
+            print(times)
+            print('='*70, '\n')
+            all2all_size /= 2
+            
+        os.system('rm -rf %s'%(os.path.join(self.path, 'nccl_log')))
+    
     def write_config(self, hardware_config_path, key, bandwidth):
         config = read_json_config(hardware_config_path) if os.path.exists(hardware_config_path) else dict()
         config[key] = bandwidth
         write_json_config(config, hardware_config_path)
-        print('Already written bandwidth %s into hardware config file %s!'%(key, hardware_config_path))
+        print('Already written bandwidth/time %s into hardware config file %s!'%(key, hardware_config_path))
     
     def read_hostfile(self):
         args = self.args
@@ -676,7 +718,7 @@ class GalvatronProfiler():
             pp_groups.append(ranks)
         return pp_groups
     
-    def launch_nccl_test(self, groups, num_gpus_per_node, ARGS):
+    def launch_nccl_test(self, groups, num_gpus_per_node, ARGS, mode = 'avg'):
         hostnames = self.read_hostfile()
         bandwidths = []
         for group in groups:
@@ -692,19 +734,32 @@ class GalvatronProfiler():
             DEVICE_ARGS += 'NUM_NODES=%d '%group_num_nodes
             DEVICE_ARGS += 'NUM_GPUS_PER_NODE=%d '%group_num_gpus_per_node
             DEVICE_ARGS += 'DEVICES="CUDA_VISIBLE_DEVICES=%s" '%(','.join([str(i) for i in cuda_visible_devices]))
+            if mode is 'detail':
+                ARGS += 'START_MB=1 '
+                ARGS += 'END_MB=1024 '
             # print(DEVICE_ARGS+ARGS)
             os.system(DEVICE_ARGS+ARGS+'sh %s'%(os.path.join(self.path, 'scripts/run_nccl_test.sh')))
-            with open('nccl_test.log', 'r') as f:
+            with open('nccl_log/1/rank.0/stdout', 'r') as f:
                 lines = f.readlines()
-            for line in lines[::-1]:
-                if 'Avg bus bandwidth' in line:
-                    result = line
-                    bandwidth = float(line.split()[-1])
+            if mode is 'avg':
+                for line in lines[::-1]:
+                    if 'Avg bus bandwidth' in line:
+                        result = line
+                        bandwidth = float(line.split()[-1])
+                        break
+                print(result)
+                bandwidths.append(bandwidth)
+                if self.args.avg_or_min_or_first == 'first':
                     break
-            print(result)
-            bandwidths.append(bandwidth)
-            if self.args.avg_or_min_or_first == 'first':
-                break
+            else:
+                sizes = []
+                times = []
+                for line in lines:
+                    datas = line.split()
+                    if len(datas) > 10 and datas[0].isdigit():
+                        sizes.append(int(datas[0])//1024//1024)
+                        times.append(float(datas[5])/1000)
+                return sizes, times
         bandwidth = np.min(bandwidths) if self.args.avg_or_min_or_first == 'min'  else np.mean(bandwidths)
         print('Bandwidths:', bandwidths, 'Average bandwidth:', bandwidth)
         print()

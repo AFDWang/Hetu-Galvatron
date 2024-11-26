@@ -3,6 +3,7 @@ import os
 from .strategy_utils import form_strategy
 from typing import List
 import numpy as np
+from scipy.optimize import curve_fit
 
 def str2array(s):
     return list(map(int,s.split(',')))
@@ -36,7 +37,9 @@ def strategy2config(strategy_list):
     tp_sizes_enc = array2str([s[1] for s in strategy_list])
     tp_consecutive_flags = array2str([0 if 'tp' in s[-1] and not s[-1]['tp'] else 1 for s in strategy_list])
     dp_types_enc = array2str([1 if 'fsdp' in s[-1] and s[-1]['fsdp'] else 0 for s in strategy_list])
-    config = {"pp_deg":pp_deg, "tp_sizes_enc":tp_sizes_enc, "tp_consecutive_flags":tp_consecutive_flags, "dp_types_enc":dp_types_enc}
+    sp = array2str([1 if 'sp' in s[-1] and s[-1]['sp'] else 0 for s in strategy_list])
+    
+    config = {"pp_deg":pp_deg, "tp_sizes_enc":tp_sizes_enc, "tp_consecutive_flags":tp_consecutive_flags, "dp_types_enc":dp_types_enc, "use_sp":sp}
     return config
 
 def read_allreduce_bandwidth_config(config_path, gpu_num):
@@ -113,3 +116,33 @@ def dict_join_dirname(dic, dirname):
     for key, val in dic.items():
         dic[key] = os.path.join(dirname, val)
     return dic
+
+def remap_config(config, op):
+    remap_config = {}
+    for key, val in config.items():
+        if key.startswith(op):
+            split = key.split("_")
+            world_size, size = int(split[-3]), int(split[-2][:-2])
+            if world_size in remap_config:
+                remap_config[world_size][size * 1024 * 1024] = val
+            else:
+                remap_config[world_size] = {}
+                remap_config[world_size][size * 1024 * 1024] = val
+    
+    for world_size, time_config in remap_config.items():
+        x_data = []
+        y_data = []
+        for size, time in time_config.items():
+            x_data.append(size // 1024 // 1024)
+            y_data.append(time)
+        assert len(x_data) >= 8, f"Different size in communication profile of {op} should not be lower than 8."
+    
+        def linear_func(x, m, c):
+            return m * x + c
+        popt, pcov = curve_fit(linear_func, x_data, y_data)
+        
+        print(f"Fitted parameters of {op}", popt)
+        
+        time_config["popt"] = popt
+        
+    return remap_config

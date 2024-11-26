@@ -152,7 +152,7 @@ def construct_hybrid_parallel_model_api(
         
     # [Step 0] Generate communication groups
     pp_group, tp_groups_whole, sp_groups_whole, dp_groups_whole, seq_data_groups_whole, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole, embedding_group = \
-        gen_comm_groups(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['sp_sizes_whole'], hp_configs_whole['pp_deg'], hp_configs_whole['tp_consec_whole'], show_rank = 0)
+        gen_comm_groups(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['sp_sizes_whole'], hp_configs_whole['pp_deg'], hp_configs_whole['tp_consec_whole'], use_ulysses = args.use_ulysses, show_rank = 0)
     
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
     if args.initialize_on_meta and args.shape_order == "SBH":

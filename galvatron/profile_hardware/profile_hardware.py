@@ -10,6 +10,7 @@ if __name__ == '__main__':
     
     # profile allreduce & p2p bandwidth
     profiler.profile_bandwidth()
-    
+    # profile allreduce & a2a bandwidth in different communication size
+    profiler.profile_sp_bandwidth()
     # profile overlapping slowdown coefficient
     profiler.profile_overlap()

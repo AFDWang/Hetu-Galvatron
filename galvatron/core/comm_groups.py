@@ -286,7 +286,7 @@ def gen_seq_data_group_dist(pp_size, to_print, world_ranks = None):
         show_groups(all_seq_data_groups)
     return seq_data_group
 
-def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, show_rank = -1, world_ranks = None):
+def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, show_rank = -1, use_ulysses = False, world_ranks = None):
     world_ranks = sort_ranks(world_ranks)
     world_size = get_world_size(world_ranks)
     world_size_per_stage = world_size // pp_size
@@ -313,7 +313,10 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, s
         dp_groups.append(dp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i] * all_sp_sizes[i]])
         sp_groups.append(sp_group_dict[tp_consecutive_flags[i]][all_sp_sizes[i]])
     for i in range(1, len(all_tp_sizes)):
-        split_group, allgather_group = gen_redistributed_group(all_tp_sizes[i-1], all_tp_sizes[i], tp_consecutive_flags[i-1], tp_consecutive_flags[i], tp_groups[i-1], tp_groups[i])
+        if use_ulysses:
+            split_group, allgather_group = gen_redistributed_group(all_sp_sizes[i-1], all_sp_sizes[i], tp_consecutive_flags[i-1], tp_consecutive_flags[i], sp_groups[i-1], sp_groups[i])
+        else:
+            split_group, allgather_group = gen_redistributed_group(all_tp_sizes[i-1], all_tp_sizes[i], tp_consecutive_flags[i-1], tp_consecutive_flags[i], tp_groups[i-1], tp_groups[i])
         fused_split_group, fused_allgather_group = merge_redistributed_group(split_group, allgather_group, world_ranks=world_ranks)
         allgather_groups.append(allgather_group)
         split_groups.append(split_group)

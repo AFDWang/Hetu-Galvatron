@@ -25,6 +25,7 @@ BSZ_ARGS="
 
 SEARCH_SPACE_ARGS="
     --search_space full \
+    --sp_space tp+sp \
     --disable_dp 0 \
     --disable_tp 0 \
     --disable_pp 0 \

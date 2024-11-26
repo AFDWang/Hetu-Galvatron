@@ -156,16 +156,12 @@ class LlamaCls_(nn.Module):
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
         else:
-            if not self.use_ulysses:
-                if not self.half_entorpy:
-                    loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), labels, tp_group = self.tp_group)
-                else:
-                    loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, labels, tp_group = self.tp_group)
+            if not self.half_entorpy:
+                loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), labels, tp_group = self.tp_group)
             else:
-                if not self.half_entorpy:
-                    loss = tensor_parallel.vocab_sequence_parallel_cross_entropy(logits_parallel.float(), labels, self.sp_group)
-                else:
-                    loss = tensor_parallel.vocab_sequence_parallel_cross_entropy(logits_parallel, labels, self.sp_group)
+                loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, labels, tp_group = self.tp_group)
+            if self.use_ulysses:
+                loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.sp_group)
             # loss = loss.mean()
         loss = loss.transpose(0,1).contiguous()
         return loss

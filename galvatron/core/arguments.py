@@ -309,6 +309,9 @@ def galvatron_search_args(parser):
         "--search_space", type=str, default="full", help="Galvatron parallelism optimization type.", choices=["full","dp+tp","dp+pp", "3d", "dp", "sdp", "tp", "pp"],
     )
     group.add_argument(
+        "--sp_space", type=str, default="tp", help="Galvatron sequence parallelism optimization type.", choices=["tp+sp","tp","sp"],
+    )
+    group.add_argument(
         "--disable_dp", type=int, default=0, help="Whether to disable dp."
     )
     group.add_argument(

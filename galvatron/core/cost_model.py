@@ -26,14 +26,21 @@ class MemoryCostModel:
             min_tp = -1,
             gpu_num = 8,
             chunks=None,
-            async_grad_reduce=True):
+            async_grad_reduce=True,
+            sequence_parallel=True):
         assert mbsz > -1
         assert min_tp > -1
         self.strategy = strategy
         self.pp_size = self.strategy[0]
         self.tp_size = self.strategy[1]
         self.dp_size = self.strategy[2]
-        self.parameter_size = parameter_size/self.tp_size
+        if 'sp' in self.strategy[-1].keys() and self.strategy[-1]['sp'] == 1:
+            self.sdp_size = self.tp_size * self.dp_size
+            self.parameter_size = parameter_size
+        else:
+            self.sdp_size = self.dp_size
+            self.parameter_size = parameter_size/self.tp_size
+        
         self.model_states_size = 4 * self.parameter_size
         self.max_tp_deg = max_tp_deg
         self.gpu_num = gpu_num
@@ -59,6 +66,8 @@ class MemoryCostModel:
         if 'cpt' in self.strategy[-1].keys() and self.strategy[-1]['cpt']:
             assert(tp_activation_per_bsz_dict['checkpoint'] is not None)
             self.activation_size = tp_activation_per_bsz_dict['checkpoint'] * self.bsz
+            if sequence_parallel:
+                self.activation_size /= self.tp_size
         else:
             self.activation_size = tp_activation_per_bsz_dict[self.tp_size] * self.bsz
         
@@ -78,9 +87,9 @@ class MemoryCostModel:
             # fsdp_model_states memory is slightly larger than dp_model_states/dp_size
             # we add a small bias to ensure the predicted fsdp memory NOT smaller than real value
             # Actually, this bias barely affect search result.
-            self.model_states_size  *= zero3_ratio(self.dp_size)
+            self.model_states_size  *= zero3_ratio(self.sdp_size)
         elif 'fsdp' in self.strategy[-1].keys() and self.strategy[-1]['fsdp']==0 and use_zero2_for_dp:
-            self.model_states_size *= zero2_ratio(self.dp_size)
+            self.model_states_size *= zero2_ratio(self.sdp_size)
         
         self.total = self.model_states_size + self.activation_size
         
@@ -175,7 +184,10 @@ class TimeCostModel:
             mixed_precision=False,
             no_comm=False,
             costmodel_coe=1.0,
-            async_grad_reduce=True):
+            async_grad_reduce=True,
+            allreduce_dict = None,
+            all2all_dict = None,
+            sp_space = 'tp'):
         # TODO: align time cost model when async_grad_reduce is False
         self.s = strategy[:3]
         self.sl = sequence_length
@@ -184,28 +196,58 @@ class TimeCostModel:
         self.pp_size = self.s[0]
         self.tp_size = self.s[1]
         self.dp_size = self.s[2]
+        self.sp_space = sp_space
+        if 'sp' in strategy[-1].keys() and strategy[-1]['sp'] == 1:
+            self.sdp_size = self.tp_size * self.dp_size
+            self.parameter_size = parameter_size
+            if self.tp_size == 1:
+                self.sp_dict = np.inf
+            else:
+                self.sp_dict = all2all_dict[self.tp_size]
+        else:
+            self.sdp_size = self.dp_size
+            self.parameter_size = parameter_size/self.tp_size
+            if self.tp_size == 1:
+                self.sp_dict = np.inf
+            else:
+                self.sp_dict = allreduce_dict[self.tp_size]
+
         self.comm_coe_dict = comm_coe_dict
         self.costmodel_coe = costmodel_coe
-        if self.tp_size == 1 or self.dp_size == 1:
-            self.dc = self.comm_coe_dict['%d'%self.dp_size] if '%d'%self.dp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%self.dp_size]
-            self.tc = self.comm_coe_dict['%d'%self.tp_size] if '%d'%self.tp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%self.tp_size]
-        else:
-            # In this case, strategy[-1]['tp'] represents tp_consecutive_flag
-            info = strategy[-1]
-            assert 'tp' in info.keys() and info['tp'] in [0, 1]
-            tp_consecutive_flag = info['tp']
-            if tp_consecutive_flag:
-                self.dc = self.comm_coe_dict['%d_0'%self.dp_size]
-                self.tc = self.comm_coe_dict['%d_1'%self.tp_size]
+        if 'sp' in strategy[-1].keys() and strategy[-1]['sp'] == 1:
+            self.dc = self.comm_coe_dict['%d'%self.sdp_size] if '%d'%self.sdp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%self.sdp_size]
+            if self.tp_size == 1 or self.dp_size == 1:
+                self.tc = self.comm_coe_dict['%d'%self.tp_size] if '%d'%self.tp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%self.tp_size]
             else:
-                self.dc = self.comm_coe_dict['%d_1'%self.dp_size]
-                self.tc = self.comm_coe_dict['%d_0'%self.tp_size]
+                # In this case, strategy[-1]['tp'] represents tp_consecutive_flag
+                info = strategy[-1]
+                assert 'tp' in info.keys() and info['tp'] in [0, 1]
+                tp_consecutive_flag = info['tp']
+                if tp_consecutive_flag:
+                    self.tc = self.comm_coe_dict['%d_1'%self.tp_size]
+                else:
+                    self.tc = self.comm_coe_dict['%d_0'%self.tp_size]
+        else:
+            if self.tp_size == 1 or self.dp_size == 1:
+                self.dc = self.comm_coe_dict['%d'%self.dp_size] if '%d'%self.dp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%self.dp_size]
+                self.tc = self.comm_coe_dict['%d'%self.tp_size] if '%d'%self.tp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%self.tp_size]
+            else:
+                # In this case, strategy[-1]['tp'] represents tp_consecutive_flag
+                info = strategy[-1]
+                assert 'tp' in info.keys() and info['tp'] in [0, 1]
+                tp_consecutive_flag = info['tp']
+                if tp_consecutive_flag:
+                    self.dc = self.comm_coe_dict['%d_0'%self.dp_size]
+                    self.tc = self.comm_coe_dict['%d_1'%self.tp_size]
+                else:
+                    self.dc = self.comm_coe_dict['%d_1'%self.dp_size]
+                    self.tc = self.comm_coe_dict['%d_0'%self.tp_size]
         self.fsdp = False
         if 'fsdp' in strategy[-1].keys() and strategy[-1]['fsdp']:
             self.fsdp = True
         self.dp_overlap_coe = dp_overlap_coe
         self.dc_overlap = self.dc*dp_overlap_coe
-        self.ps = parameter_size/self.tp_size
+
         self.bs = global_batch_size/self.dp_size 
         self.layer_type = layer_type
         assert(layer_type in ['enc', 'dec'])
@@ -232,9 +274,25 @@ class TimeCostModel:
         self.eo = extra_overhead
 
         # dp & tp message size of whole model (depending on dummy layer_num)
-        self.dp_message_size = (2*(self.dp_size-1)/self.dp_size*self.ps) * self.layer_num
-        tp_comm_times = 4 if layer_type=='enc' else 6
-        self.tp_message_size = 2*(self.tp_size-1)/self.tp_size*(self.bs*self.sl*self.hs*tp_comm_times*4/1024/1024) * self.layer_num
+        self.dp_message_size = (2*(self.dp_size-1)/self.dp_size*self.parameter_size) * self.layer_num
+        
+        if self.sp_space == 'tp+sp':
+            self.per_tp_message_size = self.bs*self.sl*self.hs * (4 if mixed_precision else 2)
+            self.tp_comm_num = 4 if layer_type=='enc' else 6
+            self.tp_comm_num *= self.layer_num
+
+            if self.tp_size == 1:
+                self.per_tp_message_time = 0
+            else:
+                if self.per_tp_message_size in self.sp_dict:
+                    self.per_tp_message_time = self.sp_dict[self.per_tp_message_size]
+                else:
+                    def linear_func(x, m, c):
+                        return m * x + c
+                    self.per_tp_message_time = linear_func( 1 / 1024 / 1024 * self.per_tp_message_size, *self.sp_dict["popt"] )
+        else:
+            tp_comm_times = 4 if layer_type=='enc' else 6
+            self.tp_message_size = 2*(self.tp_size-1)/self.tp_size*(self.bs*self.sl*self.hs*tp_comm_times*4/1024/1024) * self.layer_num
 
         # if self.fsdp:
         #     self.dp_message_size = self.dp_message_size * 0.5
@@ -254,16 +312,27 @@ class TimeCostModel:
         if self.checkpoint:
             # self.fct *= 2
             self.bct += self.fct #  * 0.5
-            self.tp_message_size *= 1.5
+            if self.sp_space == 'tp+sp':
+                self.tp_comm_num *= 1.5
+            else:
+                self.tp_message_size *= 1.5
 
         if mixed_precision:
             self.dp_message_size = self.dp_message_size/2
-            self.tp_message_size = self.tp_message_size/2
+            if self.sp_space == 'tp+sp':
+                pass
+            else:
+                self.tp_message_size = self.tp_message_size/2
 
         self.fsdp_allgather_message_size = self.dp_message_size * 0.5
         
         if no_comm:
             self.dp_message_size = 0
+
+        if self.sp_space == 'tp+sp':
+            self.tp_time = self.tp_comm_num * self.per_tp_message_time
+        else:
+            self.tp_time = self.tp_message_size*self.tc
 
     def bct_dp_overlap(self, dp_message_size, bct):
         dp_overlap_time = dp_message_size * self.dc_overlap
@@ -288,29 +357,6 @@ class TimeCostModel:
         return result
 
     def gen_result(self):
-        # if self.pp_size == 1:
-        #     if self.tp_size == 1 and self.dp_size > 1: # pure dp
-        #         overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
-        #         # print(self.bct, self.dp_message_size * self.dc_overlap)
-        #         result = self.fct + overlap_part + rest_part + self.eo
-        #     elif self.dp_size == 1 and self.tp_size > 1: # pure tp
-        #         result = self.fct + self.bct + self.tp_message_size*self.tc
-        #     else: # dp+tp
-        #         if self.tp_size < self.tp_size * self.dp_size // 2: 
-        #             if self.layer_type == 'enc':
-        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
-        #                 result = self.fct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
-        #                 # print(self.fct, self.bct, self.dp_message_size, self.dp_message_size*self.dc, self.tp_message_size, self.tp_message_size*self.tc)
-        #             elif self.layer_type == 'dec':
-        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-        #                 result = self.fct + 1/3*self.bct + overlap_part + rest_part +self.tp_message_size*self.tc+self.eo
-        #         else:
-        #             if self.layer_type == 'enc':
-        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*1/2)
-        #                 result = self.fct + 1/2*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
-        #             elif self.layer_type == 'dec':
-        #                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-        #                 result = self.fct + 1/3*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
         if self.pp_size >= 1:
             if self.tp_size == 1 and self.dp_size > 1: # pp+dp
                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
@@ -323,9 +369,9 @@ class TimeCostModel:
                     result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
             elif self.dp_size == 1 and self.tp_size > 1: # pp+tp
                 if self.microbatch == False:
-                    result = self.fct + self.bct + self.tp_message_size*self.tc
+                    result = self.fct + self.bct + self.tp_time
                 else:
-                    overall_overhead = self.fct + self.bct + self.tp_message_size*self.tc
+                    overall_overhead = self.fct + self.bct + self.tp_time
                     result = self.pipe_with_microbatch(overall_overhead, 0)
             elif self.dp_size == 1 and self.tp_size == 1: # pure pp
                 if self.microbatch == False:
@@ -337,27 +383,27 @@ class TimeCostModel:
                 if self.tp_size < self.tp_size * self.dp_size // 2:
                     if self.layer_type == 'enc':
                         overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
-                        overall_overhead = self.fct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
+                        overall_overhead = self.fct + overlap_part + rest_part + self.tp_time + self.eo
                     elif self.layer_type == 'dec':
                         overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-                        overall_overhead = self.fct + 1/3*self.bct + overlap_part + rest_part +self.tp_message_size*self.tc+self.eo
+                        overall_overhead = self.fct + 1/3*self.bct + overlap_part + rest_part +self.tp_time+self.eo
                     if self.microbatch == False:
                         result = overall_overhead
                     else:
-                        computation_overhead = self.fct + self.bct + self.tp_message_size*self.tc
+                        computation_overhead = self.fct + self.bct + self.tp_time
                         communication_overhead = overall_overhead-computation_overhead
                         result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
                 else:
                     if self.layer_type == 'enc':
                         overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*1/2)
-                        overall_overhead = self.fct + 1/2*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
+                        overall_overhead = self.fct + 1/2*self.bct + overlap_part + rest_part + self.tp_time + self.eo
                     elif self.layer_type == 'dec':
                         overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-                        overall_overhead = self.fct + 1/3*self.bct + overlap_part + rest_part + self.tp_message_size*self.tc + self.eo
+                        overall_overhead = self.fct + 1/3*self.bct + overlap_part + rest_part + self.tp_time + self.eo
                     if self.microbatch == False:
                         result = overall_overhead
                     else:
-                        computation_overhead = self.fct + self.bct + self.tp_message_size*self.tc
+                        computation_overhead = self.fct + self.bct + self.tp_time
                         communication_overhead = overall_overhead-computation_overhead
                         result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
 
@@ -385,6 +431,91 @@ class TimeCostModel:
         result = result*coe
         result = result / self.layer_num
         return result
+
+class OtherTimeCostModel:
+    def __init__(
+            self,
+            mbsz,
+            pp_deg,
+            world_size,
+            comm_coe_dict,
+            vsp,
+            min_tp,
+            max_tp,
+            other_memory_pp_on,
+            other_memory_pp_off,
+            other_time_profiled_list,
+    ):
+        self.mbsz = mbsz
+        # self.sequence_length = sequence_length
+        # self.hidden_size = hidden_size
+        self.vsp = vsp
+        self.min_tp = min_tp
+        self.max_tp = max_tp
+        self.comm_coe_dict = comm_coe_dict
+        self.dp_coe = dict()
+        self.pp_deg = pp_deg
+        
+        self.fct = dict()
+        self.sp_size = dict()
+        self.dp_size = dict()
+        self.comm_factor = dict()
+        # calc calc time (ms)
+        k = min_tp
+        while k <= max_tp and world_size // pp_deg >= k:
+            def linear_func(x, m, c):
+                return m * x + c
+            if pp_deg == 1:
+                if isinstance(other_time_profiled_list ,np.ndarray):
+                    self.fct[k] = linear_func(mbsz / min_tp, *other_time_profiled_list)
+                else:
+                    self.fct[k] = mbsz / min_tp * k * other_time_profiled_list
+            else:
+                if isinstance(other_time_profiled_list, np.ndarray):
+                    self.fct[k] = (linear_func(mbsz / min_tp, *other_time_profiled_list) / 2, \
+                                linear_func(mbsz / min_tp, *other_time_profiled_list) / 2)
+                else:
+                    self.fct[k] = (mbsz / min_tp * k * other_time_profiled_list / 2, \
+                                mbsz / min_tp * k * other_time_profiled_list / 2)
+            k *= 2
+        # calc dp comm size
+        k = min_tp
+        while k <= max_tp and world_size // pp_deg >= k:
+            if vsp == 0:
+                dp_size = world_size // pp_deg // k
+                if k == 1 or dp_size == 1:
+                    self.dp_coe[k] = self.comm_coe_dict['%d'%dp_size] if '%d'%dp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%dp_size]
+                else:
+                    self.dp_coe[k] = self.comm_coe_dict['%d_0'%dp_size]
+                self.dp_coe[k] *= (dp_size - 1) / dp_size # bus -> alg
+            else:
+                dp_size = world_size // pp_deg
+                self.dp_coe[k] = self.comm_coe_dict['%d'%dp_size] if '%d'%dp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%dp_size]
+                self.dp_coe[k] *= (dp_size - 1) / dp_size # bus -> alg
+            if pp_deg == 1:
+                if vsp == 0:
+                    self.dp_size[k] = other_memory_pp_off['model_states'][k] / 4
+                else:
+                    self.dp_size[k] = other_memory_pp_off['model_states'][1] / 4
+            else:
+                if vsp == 0:
+                    self.dp_size[k] = (other_memory_pp_on['first_stage']['model_states'][k] / 4, other_memory_pp_on['first_stage']['model_states'][k] / 4)
+                else:
+                    self.dp_size[k] = (other_memory_pp_on['last_stage']['model_states'][1] / 4, other_memory_pp_on['last_stage']['model_states'][1] / 4)
+            k *= 2
+
+    def gen_result(self):
+        
+        other_time_cost = dict()
+        k = self.min_tp
+        for k in self.dp_size.keys():
+            other_time_cost[k] = [0] * self.pp_deg 
+            if self.pp_deg  == 1:
+                other_time_cost[k][0] = 0.001 * (self.dp_size[k] * self.dp_coe[k] + self.fct[k] * 3) # + 4 * self.sp_time[k] # fwd + bwd
+            else:
+                other_time_cost[k][0] = 0.001 * (self.dp_size[k][0] * self.dp_coe[k] + self.fct[k][0] * 3) # + 2 * self.sp_time[k]
+                other_time_cost[k][-1] = 0.001 * (self.dp_size[k][-1] * self.dp_coe[k] + self.fct[k][-1] * 3) # + 2 * self.sp_time[k]
+        return other_time_cost
     
 def check_optimal_chunks(world_size, strategies, optimal_chunk_func, bsz):
     chunk_dict = {}

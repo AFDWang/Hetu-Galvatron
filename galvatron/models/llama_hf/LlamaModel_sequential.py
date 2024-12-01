@@ -37,8 +37,8 @@ class LlamaEmbeddings_(nn.Module):
         self.clone_scatter_output_in_embedding = args.clone_scatter_output_in_embedding
         self.tp_group = self.embed_tokens.tp_group
         self.sp_group = self.embed_tokens.sp_group
-        self.use_ulysses = args.use_ulysses
-        if self.use_ulysses:
+        self.vocab_sp = args.vocab_sp
+        if self.vocab_sp:
             self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
                     args.seq_length, torch.distributed.get_rank(self.sp_group), torch.distributed.get_world_size(self.sp_group)
                 )
@@ -47,7 +47,7 @@ class LlamaEmbeddings_(nn.Module):
     def forward(self, tokens, position_ids=None, attention_mask=None, labels=None):
         # tokens = input_ids[:, :-1].contiguous()
         # labels = input_ids[:, 1:].contiguous()
-        if self.use_ulysses:
+        if self.vocab_sp:
             tokens = tokens[:, self.seq_start_index:self.seq_end_index].contiguous()
         hidden_states = self.embed_tokens(tokens)
         # [b, s, h] -> [s, b, h]
@@ -119,13 +119,13 @@ class LlamaCls_(nn.Module):
         self.half_entorpy = half_entorpy
         args = get_args()
         self.seq_length = args.seq_length
-        self.use_ulysses = args.use_ulysses
-        if self.use_ulysses:
+        self.vocab_sp = args.vocab_sp
+        if self.vocab_sp:
             self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
                     self.seq_length, torch.distributed.get_rank(self.sp_group), torch.distributed.get_world_size(self.sp_group)
                 )
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
-        if self.use_ulysses:
+        if self.vocab_sp:
             labels = labels[:, self.seq_start_index:self.seq_end_index].contiguous()
             
         if not self.sequence_parallel:
@@ -160,7 +160,7 @@ class LlamaCls_(nn.Module):
                 loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), labels, tp_group = self.tp_group)
             else:
                 loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, labels, tp_group = self.tp_group)
-            if self.use_ulysses:
+            if self.vocab_sp:
                 loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.sp_group)
             # loss = loss.mean()
         loss = loss.transpose(0,1).contiguous()

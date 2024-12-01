@@ -50,8 +50,8 @@ class GPTEmbeddings_(nn.Module):
         self.clone_scatter_output_in_embedding = args.clone_scatter_output_in_embedding
         self.tp_group = self.wte.wte.tp_group
         self.sp_group = self.wte.wte.sp_group
-        self.use_ulysses = args.use_ulysses
-        if self.use_ulysses:
+        self.vocab_sp = args.vocab_sp
+        if self.vocab_sp:
             self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
                     args.seq_length, torch.distributed.get_rank(self.sp_group), torch.distributed.get_world_size(self.sp_group)
                 )
@@ -60,7 +60,7 @@ class GPTEmbeddings_(nn.Module):
 
         # tokens = input_ids[:, :-1].contiguous()
         # labels = input_ids[:, 1:].contiguous()
-        if self.use_ulysses:
+        if self.vocab_sp:
             tokens = tokens[:, self.seq_start_index:self.seq_end_index].contiguous()
         
         if position_ids == None:
@@ -68,7 +68,7 @@ class GPTEmbeddings_(nn.Module):
             position_ids = position_ids.unsqueeze(0)
         inputs_embeds = self.wte(tokens)
         position_embeds = self.wpe(position_ids)
-        if self.use_ulysses:
+        if self.vocab_sp:
             position_embeds = position_embeds[:, self.seq_start_index:self.seq_end_index].contiguous()
 
         hidden_states = inputs_embeds + position_embeds
@@ -145,14 +145,14 @@ class GPTCls_(nn.Module):
         self.half_entorpy = half_entorpy
         args = get_args()
         self.seq_length = args.seq_length
-        self.use_ulysses = args.use_ulysses
-        if self.use_ulysses:
+        self.vocab_sp = args.vocab_sp
+        if self.vocab_sp:
             self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
                     self.seq_length, torch.distributed.get_rank(self.sp_group), torch.distributed.get_world_size(self.sp_group)
                 )
 
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
-        if self.use_ulysses:
+        if self.vocab_sp:
             labels = labels[:, self.seq_start_index:self.seq_end_index].contiguous()
             
         if not self.sequence_parallel:
@@ -183,7 +183,7 @@ class GPTCls_(nn.Module):
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
         else:
-            if not self.use_ulysses:
+            if not self.vocab_sp:
                 if not self.half_entorpy:
                     loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel.float(), labels, tp_group = self.tp_group)
                 else:

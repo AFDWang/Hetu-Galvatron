@@ -366,7 +366,7 @@ class DpOnModel:
 
         if self.model_microbatch_after_dp:
             dp_size = self.gpu_num//pp_deg
-            chunks = [timecost_model_args_['optimal_chunk_func'](bsz // dp_size, [pp_deg, min_tp, dp_size], mbsz, min_tp) for timecost_model_args_ in self.timecost_model_args]
+            chunks = [timecost_model_args_['optimal_chunk_func'](bsz * min_tp // dp_size, [pp_deg, min_tp, dp_size], mbsz, min_tp) for timecost_model_args_ in self.timecost_model_args]
         strategy_set = list(filter(lambda s: s[0] == pp_deg, self.strategies_set))
         strategy_num = len(strategy_set)
 
@@ -395,7 +395,12 @@ class DpOnModel:
                     for k, v in mem_cost_list[0]['other'].items():
                         other_mem_cost[k] = np.ceil(v).astype(int)
                     other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
+                                                        self.timecost_model_args[0]['sequence_length'],
+                                                        self.timecost_model_args[0]['hidden_size'],
+                                                        self.timecost_model_args[0]['mixed_precision'],
                                                         self.timecost_model_args[0]['comm_coe_dict'], 
+                                                        self.timecost_model_args[0]['allreduce_dict'], 
+                                                        self.timecost_model_args[0]['sp_space'], 
                                                         vsp, min_tp, max_tp, 
                                                         self.memcost_model_args[i]['other_memory_pp_on'],
                                                         self.memcost_model_args[i]['other_memory_pp_off'],
@@ -416,11 +421,16 @@ class DpOnModel:
                         for k, v in mem_cost_list[0]['other'].items():
                             other_mem_cost[k] = np.ceil(v).astype(int)
                         other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
-                                                            self.timecost_model_args[0]['comm_coe_dict'], 
-                                                            vsp, min_tp, max_tp, 
-                                                            self.memcost_model_args[i]['other_memory_pp_on'],
-                                                            self.memcost_model_args[i]['other_memory_pp_off'],
-                                                            self.other_time_profiled_list[i]).gen_result()
+                                                        self.timecost_model_args[0]['sequence_length'],
+                                                        self.timecost_model_args[0]['hidden_size'],
+                                                        self.timecost_model_args[0]['mixed_precision'],
+                                                        self.timecost_model_args[0]['comm_coe_dict'], 
+                                                        self.timecost_model_args[0]['allreduce_dict'], 
+                                                        self.timecost_model_args[0]['sp_space'], 
+                                                        vsp, min_tp, max_tp, 
+                                                        self.memcost_model_args[i]['other_memory_pp_on'],
+                                                        self.memcost_model_args[i]['other_memory_pp_off'],
+                                                        self.other_time_profiled_list[i]).gen_result()
                     # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
                     v = [cost['enc_total'] for cost in mem_cost_list]
                     v = np.ceil(np.array(v)).astype(np.int32)

@@ -107,7 +107,6 @@ class PipelineParallel(nn.Module):
         args = get_args()
         self.sequence_parallel = args.sequence_parallel
         self.shape_order = args.shape_order
-        self.use_ulysses = args.use_ulysses
         self.async_grad_reduce = args.async_grad_reduce
         # if not self.async_grad_reduce and self.group_size > 1:
         #     assert Fasle, "No async grad reduce only support pp = 1"
@@ -196,7 +195,7 @@ class PipelineParallel(nn.Module):
         tensor_shape, tensor_shape_last = copy.deepcopy(template_tensor_shape), copy.deepcopy(template_tensor_shape)
         microbatch_size = microbatches[0][0][0].shape[0] * dp_size_input // dp_size
         microbatch_size_last = microbatches[0][-1][0].shape[0] * dp_size_input // dp_size
-        if self.use_ulysses:
+        if tp_size == 1:
             size = sp_size
         else:
             size = tp_size

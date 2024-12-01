@@ -42,7 +42,7 @@ def train(args):
     
     if local_rank == 0:
         print("Creating Dataset...")
-    set_megatron_args_for_dataset(args, model, model.sp_groups_whole[0] if args.use_ulysses else model.tp_groups_whole[0], model.dp_groups_whole[0])
+    set_megatron_args_for_dataset(args, model, model.sp_groups_whole[0] if args.vocab_sp else model.tp_groups_whole[0], model.dp_groups_whole[0])
     train_data_iterator, valid_data_iterator, test_data_iterator = get_train_valid_test_data_iterators()
 
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)

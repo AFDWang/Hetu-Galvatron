@@ -14,6 +14,7 @@ from galvatron.models.llama_hf.arguments import model_args
 from galvatron.core.initialize import init_empty_weights
 from galvatron.core.utils import set_megatron_args_for_dataset
 from megatron.training.arguments import _print_args
+from megatron.training.training import get_optimizer_param_scheduler
 
 def train(args):
     local_rank = args.local_rank
@@ -48,14 +49,16 @@ def train(args):
     if local_rank == 0:
         print("Creating Dataset...")
         
-    set_megatron_args_for_dataset(args, model, model.sp_groups_whole[0] if args.use_ulysses else model.tp_groups_whole[0], model.dp_groups_whole[0])
+    set_megatron_args_for_dataset(args, model, model.sp_groups_whole[0] if args.vocab_sp else model.tp_groups_whole[0], model.dp_groups_whole[0])
     if local_rank == 0:
         _print_args("arguments", args)
 
     train_data_iterator, valid_data_iterator, test_data_iterator = get_train_valid_test_data_iterators()
     
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
-
+    
+    opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
+    
     path = os.path.dirname(os.path.abspath(__file__))
     profiler = GalvatronProfiler(args)
     profiler.set_profiler_dist(path, model_layer_configs(config), model_name(config),start_iter=0)
@@ -64,6 +67,8 @@ def train(args):
     if local_rank == 0:
         print("Start training...")
         
+    t = 0
+    torch.cuda.cudart().cudaProfilerStart()
     for iter in range(args.train_iters):
         tokens, kwargs, loss_func = get_batch(train_data_iterator)
         profiler.profile_time_start(iter)
@@ -82,6 +87,7 @@ def train(args):
         #     if torch.cuda.current_device() == 0:
         #         print(f"final grad {name},{weight.grad}")
         optimizer.step()
+        opt_param_scheduler.step(increment=args.global_batch_size)
         
         profiler.profile_memory(iter, "After optimizer_step")
         
@@ -90,9 +96,15 @@ def train(args):
         # print_loss(args, loss, ep, iter)
 
         profiler.post_profile_memory(iter)
-        profiler.profile_time_end(iter, loss)
+        for param_group in optimizer.param_groups:
+            learning_rate = param_group['lr']
+        profiler.profile_time_end(iter, loss, learning_rate)
         
         torch.distributed.barrier()
+
+        t += 1
+        if t == 4:
+            torch.cuda.cudart().cudaProfilerStop()
 
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='train_dist')

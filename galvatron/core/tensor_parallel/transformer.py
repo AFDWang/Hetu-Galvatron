@@ -509,10 +509,10 @@ class ParallelAttention(MegatronModule):
     def __init__(self, config, layer_number,
                  attention_type=AttnType.self_attn,
                  attn_mask_type=AttnMaskType.padding,
-                 tp_group=None, sp_group = None):
+                 tp_group=None, sp_group = None, use_ulysses = False):
         super(ParallelAttention, self).__init__()
         args = get_args()
-        self.use_ulysses = args.use_ulysses
+        self.use_ulysses = use_ulysses
         
         self.layer_number = max(1, layer_number)
         self.attention_type = attention_type
@@ -609,7 +609,7 @@ class ParallelAttention(MegatronModule):
             self.core_attention_flash = FlashSelfAttention(
                 causal=True, attention_dropout=config.attention_dropout
             )
-        if args.use_ulysses:
+        if self.use_ulysses:
             assert args.num_attention_heads % sp_world_size == 0
             self.dist_attn = DistributedAttention(self.core_attention_flash if self.use_flash_attn else self.core_attention, sp_group, 
                                                   gather_idx = 1 if self.use_flash_attn else 0,)

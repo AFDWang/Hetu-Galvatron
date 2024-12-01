@@ -26,9 +26,15 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         dp_types_enc = total_layer_num * [args.sdp]
         checkpoint_flags_enc = [args.global_checkpoint] * total_layer_num
         pp_divide = None
+        if args.use_ulysses:
+            args.vocab_sp = 1
+            args.use_sp = [1] * total_layer_num
+        else:
+            args.vocab_sp = 0
+            args.use_sp = [0] * total_layer_num
     else:
         galvatron_config = read_json_config(args.galvatron_config_path)
-        pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, vtp = config2strategy(galvatron_config)
+        pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp = config2strategy(galvatron_config)
         bsz, chunks = galvatron_config['global_bsz'], galvatron_config['chunks']
         checkpoint_flags_enc = str2array(galvatron_config['checkpoint']) if 'checkpoint' in galvatron_config.keys() else [0] * len(tp_sizes_enc)
         pp_divide = str2array(galvatron_config['pp_division']) if 'pp_division' in galvatron_config.keys() else None
@@ -48,6 +54,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         args.chunks = chunks
         args.pp_deg = pp_deg
         args.vocab_tp = vtp
+        args.vocab_sp = vsp
         
     if pp_divide is None:
         avg_layer_num = int(total_layer_num // pp_deg)
@@ -64,7 +71,8 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         'dp_types_enc':dp_types_enc,
         'checkpoint_flags_enc':checkpoint_flags_enc,
         'pp_ranks_enc':pp_ranks_enc,
-        'pp_division':pp_divide
+        'pp_division':pp_divide,
+        'use_sp':use_sp,
     }
     if local_rank == 0:
         if config_type == 'GLOBAL':
@@ -79,6 +87,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
             print('   pipeline_type: %s, default_dp_type: %s, dtype: %s%s'%(args.pipeline_type, args.default_dp_type, args.mixed_precision, embed_sdp))
             print_hp_config('pp_division', pp_divide)
             print_hp_config('pp_ranks', pp_ranks_enc)
+            print_hp_config('use_sp', [use_ulysses])
             print('================================================================================')
         else:
             print('[%s config mode] Loaded hybrid parallel config from %s:'%(config_type, config_source))
@@ -140,34 +149,44 @@ def print_hp_configs(hp_configs):
         print_hp_config(key, val)
     print('================================================================================')
     
-def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1):
-    pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc = \
-        hp_configs['pp_deg'], hp_configs['tp_sizes_enc'], hp_configs['tp_consecutive_flags'], hp_configs['dp_types_enc'], hp_configs['pp_ranks_enc'], hp_configs['checkpoint_flags_enc']
+def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0):
+    pp_deg, tp_sizes_enc, use_sp, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc = \
+        hp_configs['pp_deg'], hp_configs['tp_sizes_enc'], hp_configs['use_sp'], hp_configs['tp_consecutive_flags'], hp_configs['dp_types_enc'], hp_configs['pp_ranks_enc'], hp_configs['checkpoint_flags_enc']
     
     hp_configs_whole = dict()
     hp_configs_whole['pp_deg'] = hp_configs['pp_deg']
-    keys = ['tp_sizes_whole', 'tp_consec_whole', 'dp_types_whole', 'pp_ranks_whole', 'checkpoint_flags_whole']
+    keys = ['tp_sizes_whole', 'sp_sizes_whole', 'tp_consec_whole', 'dp_types_whole', 'pp_ranks_whole', 'checkpoint_flags_whole']
     for key in keys:
         hp_configs_whole[key] = []
     
     idx_enc = 0
     for module_type in module_types:
         if module_type[-3:] == 'enc' or module_type[-3:] == 'dec':
-            hp_configs_whole['tp_sizes_whole'].append(tp_sizes_enc[idx_enc])
+            if use_sp[idx_enc] == 1:
+                hp_configs_whole['sp_sizes_whole'].append(tp_sizes_enc[idx_enc])
+                hp_configs_whole['tp_sizes_whole'].append(1)
+            else:
+                hp_configs_whole['tp_sizes_whole'].append(tp_sizes_enc[idx_enc])
+                hp_configs_whole['sp_sizes_whole'].append(1)
             hp_configs_whole['dp_types_whole'].append(dp_types_enc[idx_enc])
             hp_configs_whole['pp_ranks_whole'].append(pp_ranks_enc[idx_enc])
             hp_configs_whole['tp_consec_whole'].append(tp_consecutive_flags[idx_enc])
             hp_configs_whole['checkpoint_flags_whole'].append(checkpoint_flags_enc[idx_enc])
             idx_enc += 1
         else:
-            hp_configs_whole['tp_sizes_whole'].append(vocab_tp)
+            if vocab_sp == 1:
+                hp_configs_whole['sp_sizes_whole'].append(vocab_tp)
+                hp_configs_whole['tp_sizes_whole'].append(1)
+            else:
+                hp_configs_whole['tp_sizes_whole'].append(vocab_tp)
+                hp_configs_whole['sp_sizes_whole'].append(1)
             hp_configs_whole['dp_types_whole'].append(embed_sdp)
             hp_configs_whole['pp_ranks_whole'].append(pp_ranks_enc[idx_enc] if idx_enc < len(pp_ranks_enc) else pp_ranks_enc[-1])
             hp_configs_whole['tp_consec_whole'].append(1)
             hp_configs_whole['checkpoint_flags_whole'].append(embed_ckpt)
     
     world_size = torch.distributed.get_world_size()
-    hp_configs_whole['dp_sizes_whole'] = [world_size // pp_deg // tp_size for tp_size in hp_configs_whole['tp_sizes_whole']]
+    hp_configs_whole['dp_sizes_whole'] = [world_size // pp_deg // tp_size // sp_size for tp_size, sp_size in zip(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['sp_sizes_whole'])]
     if get_args().local_rank == 0:
         print('Model Layer Types:')
         print(module_types)

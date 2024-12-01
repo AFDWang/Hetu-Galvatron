@@ -333,6 +333,8 @@ class TimeCostModel:
             self.tp_time = self.tp_comm_num * self.per_tp_message_time
         else:
             self.tp_time = self.tp_message_size*self.tc
+        
+        
 
     def bct_dp_overlap(self, dp_message_size, bct):
         dp_overlap_time = dp_message_size * self.dc_overlap
@@ -438,7 +440,12 @@ class OtherTimeCostModel:
             mbsz,
             pp_deg,
             world_size,
+            sequence_length,
+            hidden_size,
+            mixed_precision,
             comm_coe_dict,
+            allreduce_dict,
+            sp_space,
             vsp,
             min_tp,
             max_tp,
@@ -447,8 +454,8 @@ class OtherTimeCostModel:
             other_time_profiled_list,
     ):
         self.mbsz = mbsz
-        # self.sequence_length = sequence_length
-        # self.hidden_size = hidden_size
+        self.sl = sequence_length
+        self.hs = hidden_size
         self.vsp = vsp
         self.min_tp = min_tp
         self.max_tp = max_tp
@@ -457,9 +464,41 @@ class OtherTimeCostModel:
         self.pp_deg = pp_deg
         
         self.fct = dict()
+        self.tp_time = dict()
         self.sp_size = dict()
         self.dp_size = dict()
         self.comm_factor = dict()
+        # calc tp comm size
+        k = min_tp
+        while k <= max_tp and world_size // pp_deg >= k:
+            if self.vsp == 0:
+                if sp_space == 'tp+sp':
+                    self.per_tp_message_size = self.mbsz*self.sl*self.hs * (4 if mixed_precision else 2)
+                    if k == 1:
+                        self.per_tp_message_time = 0
+                    else:
+                        if self.per_tp_message_size in allreduce_dict:
+                            self.per_tp_message_time = allreduce_dict[self.per_tp_message_size]
+                        else:
+                            def linear_func(x, m, c):
+                                return m * x + c
+                            self.per_tp_message_time = linear_func( 1 / 1024 / 1024 * self.per_tp_message_size, *allreduce_dict[k]["popt"] )
+                else:
+                    dp_size = world_size // pp_deg // k
+                    if k == 1 or dp_size == 1:
+                        tp_coe = self.comm_coe_dict['%d'%k] if '%d'%k in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%dp_size]
+                    else:
+                        tp_coe = self.comm_coe_dict['%d_0'%k]
+
+                    self.tp_message_size = (k-1)/k*(self.mbsz*self.sl*self.hs/1024/1024) * (4 if mixed_precision else 2)
+                    self.per_tp_message_time = self.tp_message_size * tp_coe
+            else:
+                self.per_tp_message_time = 0
+            if pp_deg == 1:
+                self.tp_time[k] = 2 * self.per_tp_message_time
+            else:
+                self.tp_time[k] = (self.per_tp_message_time, self.per_tp_message_time)
+            k *= 2
         # calc calc time (ms)
         k = min_tp
         while k <= max_tp and world_size // pp_deg >= k:
@@ -511,10 +550,10 @@ class OtherTimeCostModel:
         for k in self.dp_size.keys():
             other_time_cost[k] = [0] * self.pp_deg 
             if self.pp_deg  == 1:
-                other_time_cost[k][0] = 0.001 * (self.dp_size[k] * self.dp_coe[k] + self.fct[k] * 3) # + 4 * self.sp_time[k] # fwd + bwd
+                other_time_cost[k][0] = 0.001 * (self.dp_size[k] * self.dp_coe[k] + self.fct[k] * 3 + self.tp_time[k]) # + 4 * self.sp_time[k] # fwd + bwd
             else:
-                other_time_cost[k][0] = 0.001 * (self.dp_size[k][0] * self.dp_coe[k] + self.fct[k][0] * 3) # + 2 * self.sp_time[k]
-                other_time_cost[k][-1] = 0.001 * (self.dp_size[k][-1] * self.dp_coe[k] + self.fct[k][-1] * 3) # + 2 * self.sp_time[k]
+                other_time_cost[k][0] = 0.001 * (self.dp_size[k][0] * self.dp_coe[k] + self.fct[k][0] * 3 + self.tp_time[k][0]) # + 2 * self.sp_time[k]
+                other_time_cost[k][-1] = 0.001 * (self.dp_size[k][-1] * self.dp_coe[k] + self.fct[k][-1] * 3 + self.tp_time[k][-1]) # + 2 * self.sp_time[k]
         return other_time_cost
     
 def check_optimal_chunks(world_size, strategies, optimal_chunk_func, bsz):
@@ -558,7 +597,7 @@ def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, s
         bsz_chunked = [bsz / chunks] * len(layer_num_list)
         # print(bsz, bsz/chunks, chunks)
         max_chunk = chunks
-    # print(bsz_chunked)
+         
     pp_deg = len(partition)
     layer_num = len(strategies)
     from galvatron.utils import form_strategy, strategy_str2list

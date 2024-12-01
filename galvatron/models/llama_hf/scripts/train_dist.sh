@@ -4,7 +4,7 @@ export MASTER_ADDR=localhost
 export MASTER_PORT=$MASTER_PORT
 export NODE_RANK=0
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
-export CUDA_DEVICE_MAX_CONNECTIONS=1
+# export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NCCL_IB_HCA=mlx5_2,mlx5_5
 LAUNCHER="python3 -m torch.distributed.launch"
 LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"
@@ -22,11 +22,12 @@ MODEL_ARGS="
     --model_size llama-7b \
     --set_model_config_manually 0 \
     --set_layernum_manually 0 \
+    --set_seqlen_manually 1 \
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_hidden_layers 8 \
     --num_attention_heads 32 \
-    --seq_length 2048"
+    --seq_length 8192"
 
 TRAIN_ARGS="
     --global_train_batch_size 1 \
@@ -64,7 +65,7 @@ PARALLEL_ARGS="
     --mixed_precision bf16 \
     --sequence-parallel \
     --use-flash-attn \
-    --initialize_on_meta 1" 
-    # --galvatron_config_path ./configs/galvatron_config_llama-7b_2nodes_8gpus_per_node_40GB_bf16_example.json"
+    --initialize_on_meta 1 \
+    --galvatron_config_path ./configs/galvatron_config_hidden4096_head32_1nodes_8gpus_per_node_36GB_bf16_[tpconsec_off].json"
 
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS} ${CKPT_ARGS}

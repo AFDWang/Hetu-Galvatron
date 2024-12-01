@@ -269,6 +269,7 @@ class GalvatronSearchEngine():
                     'async_grad_reduce': self.args.async_grad_reduce,
                     'allreduce_dict': self.sp_allreduce,
                     'all2all_dict': self.sp_all2all,
+                    'sp_space': self.args.sp_space,
                     })
     
     def set_memory_cost_models(self):
@@ -325,7 +326,7 @@ class GalvatronSearchEngine():
         elif self.args.sp_space == 'tp':
             total_vsp = [0]
         elif self.args.sp_space == 'sp':
-            assert Fasle,"Only sp mode unsupport now."
+            assert False,"Only sp mode unsupport now."
             total_vsp = [1]
 
         for bsz in self.BSZs:
@@ -391,6 +392,7 @@ class GalvatronSearchEngine():
 
         print('\nFinal results of max memory %d MB:'%self.memory_constraint)
         re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp][optimal_vsp][optimal_no_tp]
+        re['vsp'] = optimal_vsp
         print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Optimal vocab sp = {optimal_vsp} Max throughput={re['throughput']} samples/s")
         print(f"pp_deg={re['min_pp_deg']} Minimized timecost={re['min_cost']} Memory remaining={re['mem_remain']} Memory cost={re['mem_cost']}")
         print(f"Min_tp={optimal_min_tp} Max_tp={optimal_max_tp} ")
@@ -526,6 +528,7 @@ class GalvatronSearchEngine():
             config['pipeline_type'] = args.pipeline_type
             config['default_dp_type'] = args.default_dp_type
             config['vtp'] = re['vtp']
+            config['vsp'] = re['vsp']
             if args.embed_sdp:
                 config['embed_sdp'] = 1
             

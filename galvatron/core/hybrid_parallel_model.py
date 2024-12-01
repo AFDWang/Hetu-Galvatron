@@ -142,17 +142,17 @@ def construct_hybrid_parallel_model_api(
     shapes_whole, dtypes_whole = layer_shapes_dtypes_whole_model(module_types, layernum_list, layer_shapes_list, layer_dtypes_list)
     
     # Get hp_configs_whole for the whole model (including embed/cls/... layers)
-    hp_configs_whole = hp_config_whole_model(module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp = args.vocab_tp)
+    hp_configs_whole = hp_config_whole_model(module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp = args.vocab_tp, vocab_sp = args.vocab_sp)
 
-    if args.use_ulysses:
-        hp_configs_whole['sp_sizes_whole'] = hp_configs_whole['tp_sizes_whole']
-        hp_configs_whole['tp_sizes_whole'] = [1] * len(hp_configs_whole['tp_sizes_whole'])
-    else:
-        hp_configs_whole['sp_sizes_whole'] = [1] * len(hp_configs_whole['tp_sizes_whole'])
+    # if args.use_ulysses:
+    #     hp_configs_whole['sp_sizes_whole'] = hp_configs_whole['tp_sizes_whole']
+    #     hp_configs_whole['tp_sizes_whole'] = [1] * len(hp_configs_whole['tp_sizes_whole'])
+    # else:
+    #     hp_configs_whole['sp_sizes_whole'] = [1] * len(hp_configs_whole['tp_sizes_whole'])
         
     # [Step 0] Generate communication groups
     pp_group, tp_groups_whole, sp_groups_whole, dp_groups_whole, seq_data_groups_whole, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole, embedding_group = \
-        gen_comm_groups(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['sp_sizes_whole'], hp_configs_whole['pp_deg'], hp_configs_whole['tp_consec_whole'], use_ulysses = args.use_ulysses, show_rank = 0)
+        gen_comm_groups(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['sp_sizes_whole'], hp_configs_whole['pp_deg'], hp_configs_whole['tp_consec_whole'], show_rank = 0)
     
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
     if args.initialize_on_meta and args.shape_order == "SBH":

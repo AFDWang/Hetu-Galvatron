@@ -6,7 +6,7 @@ Galvatron is an automatic distributed training system designed for Transformer m
 ### (1) Enhanced Efficiency via Automatic Parallelism
 
 #### Enlarged Parallelism Search Space
-Incorporate multiple popular parallelism dimensions of distributed training, including DP (Data Parallelism), SDP (Sharded Data Parallelism, support both ZeRO-2 & ZeRO-3), PP (Pipeline Parallelism, support both GPipe & Pipedream-flush / 1F1B-flush), TP (Tensor Parallelism). Also incorporate CKPT (Activation Checkpointing) as a special parallelism dimension.
+Incorporate multiple popular parallelism dimensions of distributed training, including DP (Data Parallelism), SDP (Sharded Data Parallelism, support both ZeRO-2 & ZeRO-3), PP (Pipeline Parallelism, support both GPipe & Pipedream-flush / 1F1B-flush), TP (Tensor Parallelism), SP (Sequence Parallelism, support Megatron-SP and Deepspeed-Ulysses). Also incorporate CKPT (Activation Checkpointing) as a special parallelism dimension.
 
 #### Fine-grained Hybrid Parallelism
 For each Transformer layer, support flexible and fine-grained hybrid parallelism strategies, contributing to the enhanced training efficiency.

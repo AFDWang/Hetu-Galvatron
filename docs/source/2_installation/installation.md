@@ -29,7 +29,7 @@ pip install hetu-galvatron
 
 ### Installation from Source Code
 
-To install the latest version of OpenBox from the source code, run the following commands:
+To install the latest version of Galvatron from the source code, run the following commands:
 
 ``` shell
 git clone https://github.com/PKU-DAIR/Hetu-Galvatron.git

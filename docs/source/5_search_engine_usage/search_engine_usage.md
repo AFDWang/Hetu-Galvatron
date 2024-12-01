@@ -44,6 +44,18 @@ Here, `group_size` denotes the size of the communication group, `0/1` indicates 
 ```
 When computation and communication overlap, the CUDA kernel is simultaneously preempted by both, causing a slowdown. `coe` represents the slowdown ratio of the kernel when overlap occurs, typically ranging between 1.1 and 1.3.
 
+Additionally, if you want to perform a search with `sp_space` set to `tp+sp`, you will need a new file named `sp_time_{num_nodes}nodes_{num_gpus}gpus_per_node.json`. The format of this file is as follows:
+
+```
+{
+    "allreduce_size_{group_size}_{message_size}MB_time": {time},
+    "all2all_size_{group_size}_{message_size}MB_time": {time},
+    ...
+}
+```
+
+Here, `group_size` denotes the size of the communication group for the corresponding operation (allreduce/all2all), `message_size` is the amount of data being communicated (in MB), and `time` is the duration of this communication operation.
+
 ### Model Configuration
 
 Model configurations are found in the `models/{model_name}/configs` directory.

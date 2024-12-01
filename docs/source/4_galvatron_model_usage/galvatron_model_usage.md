@@ -53,7 +53,11 @@ Set `fine_grained_mode` to `0` / `1`(default:`1`) to disable/enable fine-grained
 
 Set `profile_mode` to `static` / `batch` / `sequence` (default:`static`) to determine the estimation method for computation time and memory when building a cost model, `static` indicates that computation time increases proportionally with batch size. In contrast, `batch` suggests that computation time grows linearly with batch size. Specifically, we will use an $\alpha-\beta$ model to fit a linear function based on the profiled data. To ensure accuracy, when using `batch`, we require profile results for 8 different batch sizes for the same layer type. Additionally, `sequence` uses profiled data to model memory and time performance for other sequence lengths. In practice, `profile_mode` in the searching argument should typically match the profile argument. When using `static` or `batch` modes, user also need to ensure the sequence length is consistent. However, this is not necessary when using the `sequence` mode.
 
+Set `tp_space` to `tp+sp` / `tp` (default:`tp`) to determine the search space for sequence parallelism. `tp+sp` represents considering both Megatron-SP and Ulysses, while `tp` represents considering only Megatron-SP. 
+
 Set `no_global_memory_buffer` to disable the estimation of global memory for all-gather buffer when using Megatron-SP. In Megatron-SP, a buffer is allocated to store the results of all-gather communication operations. This memory is not released, and as the sequence length increases, the memory usage of this buffer can become significant.
+
+**`tp_space` set to `tp+sp` is incompatible with `tp_consec` set to 0. The search for `tp_consec` is quite uncommon, and we plan to remove it in future versions.**
 
 ## Training with Galvatron
 
@@ -126,4 +130,4 @@ Set `no_async_grad_reduce` to disable the asynchronous gradient synchronization 
 
 Please refer to function ```galvatron_training_args``` in [arguments.py](https://github.com/PKU-DAIR/Hetu-Galvatron/blob/main/galvatron/core/arguments.py) for the full list of training arguments.
 
-**New features are only supported on llama_hf, gpt_hf.**
+**Ulysses is only supported on llama_hf, gpt_hf.**

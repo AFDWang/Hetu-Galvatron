@@ -55,7 +55,7 @@ def train(args):
 
     train_data_iterator, valid_data_iterator, test_data_iterator = get_train_valid_test_data_iterators()
     
-    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
+    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay, betas=(args.adam_beta1, args.adam_beta2), eps=args.adam_eps)
     
     opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
     

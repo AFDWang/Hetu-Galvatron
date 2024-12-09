@@ -27,13 +27,21 @@ MODEL_ARGS="
     --hidden_size 4096 \
     --num_hidden_layers 8 \
     --num_attention_heads 32 \
-    --seq_length 8192"
+    --seq_length 2048"
 
 TRAIN_ARGS="
-    --global_train_batch_size 1 \
+    --global_train_batch_size 64 \
     --train-iters 20 \
     --eval-iters 1 \
-    --lr 1e-5 \
+    --lr 1.25e-6 \
+    --lr-decay-style cosine \
+    --min-lr 1.25e-7 \
+    --lr-warmup-fraction 0.1 \
+    --weight-decay 0.1 \
+    --adam-beta1 0.9 \
+    --adam-beta2 0.95 \
+    --adam-eps 1.0e-5 \
+    --init-method-std 0.01 \
     --adam_weight_decay 0.01 \
     --dropout_prob 0.1 \
     --check_loss 0 \
@@ -59,13 +67,13 @@ PARALLEL_ARGS="
     --sdp 1 \
     --global_checkpoint 1 \
     --vocab_tp 8 \
-    --chunks 1 \
+    --chunks 8 \
     --pipeline_type pipedream_flush \
     --default_dp_type zero2 \
     --mixed_precision bf16 \
     --sequence-parallel \
     --use-flash-attn \
-    --initialize_on_meta 1 \
-    --galvatron_config_path ./configs/galvatron_config_hidden4096_head32_1nodes_8gpus_per_node_36GB_bf16_[tpconsec_off].json"
+    --initialize_on_meta 1"
+    # --galvatron_config_path ./configs/galvatron_config_hidden4096_head32_1nodes_8gpus_per_node_36GB_bf16_[tpconsec_off].json"
 
 ${LAUNCHER} ${TRAINER} ${MODEL_ARGS} ${TRAIN_ARGS} ${PARALLEL_ARGS} ${DATA_ARGS} ${CKPT_ARGS}

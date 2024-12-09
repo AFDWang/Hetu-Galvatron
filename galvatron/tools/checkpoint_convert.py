@@ -56,7 +56,16 @@ def convert_checkpoints_llama(input_checkpoint_path, output_dir):
 
             for layer_name, params in layer_params.items():
                 layer_file = os.path.join(output_dir, f"{layer_name.replace('.', '_')}.pt")
-                torch.save(params, layer_file)
+                if os.path.exists(layer_file):
+                    existing_params = torch.load(layer_file)
+                    for key in params:
+                        if key in existing_params:
+                            existing_params[key] += params[key]
+                        else:
+                            existing_params[key] = params[key]
+                else:
+                    existing_params = params
+                torch.save(existing_params, layer_file)
                 print(f"Saved parameters for {layer_name} to {layer_file}")
 
 def main():

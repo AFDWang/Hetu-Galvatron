@@ -9,6 +9,7 @@ path_dict =  {
     'llama-13b': 'llama-13b.json',
     'llama-30b': 'llama-30b.json',
     'llama2-70b': 'llama2-70b.json',
+    'qwen2.5-72b': 'qwen2.5-72b.json',
 }
 
 def config_from_meta(model_type) -> LlamaConfig:
@@ -32,6 +33,7 @@ def config_from_meta(model_type) -> LlamaConfig:
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
     config.use_cache = False
+    config.model_name = args.model_size
     # ======= Arguments --> Model Config ======
     # Overwrite all model configs by manually set arguments
     if args.set_model_config_manually:
@@ -90,8 +92,8 @@ def overwrite_model_args(config, args):
 def model_name(config, args=None):
     if hasattr(args,"profile_mode"):
         if args.profile_mode is not "sequence":
-            return 'hidden%d_head%d_seqlen%d'%(config.hidden_size, config.num_attention_heads, config.max_position_embeddings)
-    return 'hidden%d_head%d'%(config.hidden_size, config.num_attention_heads)
+            return '%s_seqlen%d'%(config.model_name, config.max_position_embeddings)
+    return '%s'%(config.model_name)
 
 def model_layer_configs(config):
     return [

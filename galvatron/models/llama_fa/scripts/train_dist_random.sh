@@ -13,7 +13,7 @@ LAUNCHER="${LAUNCHER} --master_addr ${MASTER_ADDR}"
 LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
-TRAINER="train_dist_test.py"
+TRAINER="train_dist_random.py"
 DATA_PATH=/home/pkuhetu/lxy/dataset/gpt2/my-gpt2_text_document
 
 MODEL_ARGS="

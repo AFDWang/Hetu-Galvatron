@@ -91,7 +91,7 @@ def overwrite_model_args(config, args):
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):
     if hasattr(args,"profile_mode"):
-        if args.profile_mode is not "sequence":
+        if args.profile_mode != "sequence":
             return '%s_seqlen%d'%(config.model_name, config.max_position_embeddings)
     return '%s'%(config.model_name)
 

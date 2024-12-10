@@ -734,14 +734,14 @@ class GalvatronProfiler():
             DEVICE_ARGS += 'NUM_NODES=%d '%group_num_nodes
             DEVICE_ARGS += 'NUM_GPUS_PER_NODE=%d '%group_num_gpus_per_node
             DEVICE_ARGS += 'DEVICES="CUDA_VISIBLE_DEVICES=%s" '%(','.join([str(i) for i in cuda_visible_devices]))
-            if mode is 'detail':
+            if mode == 'detail':
                 ARGS += 'START_MB=1 '
                 ARGS += 'END_MB=1024 '
             # print(DEVICE_ARGS+ARGS)
             os.system(DEVICE_ARGS+ARGS+'sh %s'%(os.path.join(self.path, 'scripts/run_nccl_test.sh')))
             with open('nccl_log/1/rank.0/stdout', 'r') as f:
                 lines = f.readlines()
-            if mode is 'avg':
+            if mode == 'avg':
                 for line in lines[::-1]:
                     if 'Avg bus bandwidth' in line:
                         result = line

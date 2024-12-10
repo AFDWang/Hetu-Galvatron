@@ -14,7 +14,7 @@ LAUNCHER="${LAUNCHER} --master_addr ${MASTER_ADDR}"
 LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
 
-TRAINER="train_dist_test.py"
+TRAINER="train_dist_random.py"
 
 MODEL_ARGS="
     --model_size gpt-6.7b \

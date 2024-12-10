@@ -10,7 +10,7 @@ LAUNCHER="${LAUNCHER} --nnodes ${NUM_NODES}"
 LAUNCHER="${LAUNCHER} --nproc_per_node ${NUM_GPUS_PER_NODE}"
 
 export PROFILE_LAUNCHER="$LAUNCHER"
-export PROFILE_TRAINER="train_dist_test.py"
+export PROFILE_TRAINER="train_dist_random.py"
 
 MODEL_ARGS_SIZE15B="
     --model_size gpt-1.5b \

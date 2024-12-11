@@ -87,7 +87,7 @@ def train(args):
         #     if torch.cuda.current_device() == 0:
         #         print(f"final grad {name},{weight.grad}")
         total_norm = clip_grad_norm(model, args.clip_grad)
-        # total_norm = None
+        # total_norm = 0.0
         optimizer.step()
         opt_param_scheduler.step(increment=args.global_batch_size)
         

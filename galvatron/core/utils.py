@@ -108,10 +108,10 @@ def get_layernorm_offset(model, layernorm_name=[]):
 def clip_grad_norm(model, max_norm, norm_type=2):
     parameters = []
     grads_for_norm = []
-    for i, params in enumerate(model.parameters()):
+    for name, params in model.named_parameters():
         parameters.append(params)
         grads_for_norm.append(params.grad)
     
-    total_norm = clip_grad_norm_fp32(parametes, grads_for_norm, max_norm, norm_type)
+    total_norm = clip_grad_norm_fp32(parameters, grads_for_norm, max_norm, norm_type)
 
     return total_norm

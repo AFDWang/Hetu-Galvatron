@@ -189,6 +189,12 @@ class PipelineParallel(nn.Module):
                         m.ln_size = self.ln_size[idx]
                         m.sp_group = self.layer_tp_groups[idx]
                 idx += 1
+    
+    def set_last_batch(self, state):
+        for block in self.model_cur_stage:
+            for m in block.modules():
+                if isinstance(m, FSDP):
+                    m.last_batch = state
                         
     def update_tensor_shape(self, microbatches, dp_size_input, dp_size, tp_size, sp_size, template_tensor_shape):
         # Update tensor_shape with correct microbatch_size
@@ -254,8 +260,12 @@ class PipelineParallel(nn.Module):
             enter_no_sync_context(model)
         
         losses_reduced = []
+
+        self.set_last_batch(False)
         
         for i in range(num_microbatches):
+            if i == num_microbatches - 1:
+                self.set_last_batch(True)
             cur_microbatch = [microbatches[0][i], microbatches[1][i]]
             output_tensor = self.forward_step(
                 forward_step_function(loss_func,**micro_kwargs[i]),
@@ -352,6 +362,8 @@ class PipelineParallel(nn.Module):
         if self.info:
             print('rank %d'%self.global_rank, 'start warmup')
             print('rank %d'%self.global_rank, 'num_warmup_microbatches', num_warmup_microbatches)
+        
+        self.set_last_batch(False)
         # Run warmup forward passes.
         for i in range(num_warmup_microbatches):
             recv_tensor_shapes_fwd = self.stage_input_tensor_shape_last if fwd_num == num_microbatches - 1 else self.stage_input_tensor_shape
@@ -494,6 +506,8 @@ class PipelineParallel(nn.Module):
         # Run cooldown backward passes.
         if not forward_only:
             for i in range(num_warmup_microbatches):
+                if i == num_warmup_microbatches - 1:
+                    self.set_last_batch(True)
                 input_tensor = input_tensors.pop(0)
                 output_tensor = output_tensors.pop(0)
 
@@ -604,6 +618,7 @@ class PipelineParallel(nn.Module):
         losses_reduced = []
         if self.info:
             print('rank %d'%self.global_rank, 'start forward')
+        self.set_last_batch(False)
         # Run forward passes.
         for i in range(self.num_microbatches):
             recv_tensor_shapes = self.stage_input_tensor_shape_last if i == self.num_microbatches - 1 else self.stage_input_tensor_shape
@@ -648,6 +663,8 @@ class PipelineParallel(nn.Module):
         model = self.model_cur_stage
         # Run backward passes.
         for i in range(self.num_microbatches):
+            if i == self.num_microbatches - 1:
+                self.set_last_batch(True)
             # if self.group_size > 1 and self.async_grad_reduce and i == self.num_microbatches - 1:
             #     exit_no_sync_context(self.model_cur_stage)
             if version_major > 1:

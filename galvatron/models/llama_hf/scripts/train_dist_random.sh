@@ -17,7 +17,8 @@ TRAINER="train_dist_random.py"
 MODEL_ARGS="
     --model_size llama-7b \
     --set_model_config_manually 0 \
-    --set_layernum_manually 1 \
+    --set_layernum_manually 0 \
+    --set_seqlen_manually 1 \
     --vocab_size 32000 \
     --hidden_size 4096 \
     --num_hidden_layers 8 \

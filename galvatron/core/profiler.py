@@ -176,7 +176,7 @@ class GalvatronProfiler():
                 torch.cuda.synchronize()
                 self.start.record()
             
-    def profile_time_end(self, iter, loss = None, learning_rate = None):
+    def profile_time_end(self, iter, loss = None, learning_rate = None, grad_norm = None):
         if not self.args.profile:
             return
         if iter >= self.start_iter and iter < self.end_iter:
@@ -192,14 +192,16 @@ class GalvatronProfiler():
                     log_parts = []
                     log_parts.append("| Iteration: {:6d} | Consumed samples: {:12d} | ")
                     log_parts.append("Elapsed time per iteration (ms): {:.1f} | ")
-                    log_parts.append("Learning rate: {:.6e} | Loss: {:.6e} |")
+                    log_parts.append("Learning rate: {:.6e} | Loss: {:.6e} | ")
+                    log_parts.append("grad norm: {:.2f} |")
                     message = ''.join(log_parts)
                     print(message.format(
                         iter + 1,
                         (iter + 1) * self.args.global_train_batch_size,
                         iter_time * 1e3,
                         self.args.lr if learning_rate is None else learning_rate,
-                        loss.item()
+                        loss.item(),
+                        grad_norm
                     ))
     
     def profile_time_python(self, iter):

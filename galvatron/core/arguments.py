@@ -143,6 +143,12 @@ def galvatron_training_args(parser, use_megatron=True):
         'Ensure Zero3 memory cost when chunk > 1.',
         dest='async_grad_reduce'
     )
+    group.add_argument(
+        "--reduce_in_fp32", action="store_true", help="Use fp32 for gradient reduction.",
+    )
+    group.add_argument(
+        "--entropy_in_fp32", action="store_true", help="Use fp32 for entropy calculation.",
+    )
     if not use_megatron:
         group.add_argument("--lr", type=float, default=1e-4, help="Learning rate of adam")
         group.add_argument("--gpu_id", type=int, default=0, help="Id of GPU to run.")

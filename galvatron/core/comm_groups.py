@@ -281,9 +281,9 @@ def gen_seq_data_group_dist(pp_size, to_print, world_ranks = None):
         if group.has_rank(rank):
             seq_data_group = group
 
-    if rank == 0 and to_print:
-        print("seq_data groups:", end = ' ')
-        show_groups(all_seq_data_groups)
+    # if rank == 0 and to_print:
+    #     print("seq_data groups:", end = ' ')
+    #     show_groups(all_seq_data_groups)
     return seq_data_group
 
 def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, show_rank = -1, world_ranks = None):

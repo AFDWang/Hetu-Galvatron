@@ -1,7 +1,7 @@
 import torch
 from torch import nn
-from torch.optim import Adam
-# from apex.optimizers import FusedAdam as Adam
+# from torch.optim import Adam
+from apex.optimizers import FusedAdam as Adam
 from transformers import LlamaConfig, LlamaForCausalLM
 from tqdm import tqdm
 import os
@@ -12,7 +12,7 @@ from galvatron.models.llama_hf.dataloader import DataLoaderForLlama, get_batch, 
 from galvatron.models.llama_hf.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
 from galvatron.models.llama_hf.arguments import model_args
 from galvatron.core.initialize import init_empty_weights
-from galvatron.core.utils import set_megatron_args_for_dataset
+from galvatron.core.utils import set_megatron_args_for_dataset, clip_grad_norm
 from megatron.training.arguments import _print_args
 from megatron.training.training import get_optimizer_param_scheduler
 
@@ -86,6 +86,8 @@ def train(args):
         # for name, weight in model.named_parameters():
         #     if torch.cuda.current_device() == 0:
         #         print(f"final grad {name},{weight.grad}")
+        total_norm = clip_grad_norm(model, args.clip_grad)
+        # total_norm = None
         optimizer.step()
         opt_param_scheduler.step(increment=args.global_batch_size)
         
@@ -98,7 +100,7 @@ def train(args):
         profiler.post_profile_memory(iter)
         for param_group in optimizer.param_groups:
             learning_rate = param_group['lr']
-        profiler.profile_time_end(iter, loss, learning_rate)
+        profiler.profile_time_end(iter, loss, learning_rate, total_norm)
         
         torch.distributed.barrier()
 

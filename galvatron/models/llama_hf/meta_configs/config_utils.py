@@ -28,6 +28,7 @@ def config_from_meta(model_type) -> LlamaConfig:
         rms_norm_eps=params['norm_eps'],
         num_key_value_heads=params['n_kv_heads'],
         max_position_embeddings=params['n_positions'],
+        vocab_size=params['vocab_size'],
     )
     
 # ============= Set Model Config and Arguments =============

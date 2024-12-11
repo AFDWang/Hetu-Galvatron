@@ -25,6 +25,14 @@ To conduct parallelim optimization, ```cd galvatron/models/model_name```, custom
 sh scripts/search_dist.sh
 ```
 
+The script will automatically run the search code in the background and generate the search log results in files beginning with `Search`. When you see the following marker in the file, it indicates that the search has concluded, and no other commands need to be executed before this point:
+
+```
+========================= Galvatron Search Engine End Searching =========================
+```
+
+After the search concludes, the parallel strategy obtained will be generated in the `configs` folder. The strategy is stored in JSON format, with file names starting with `galvatron_config_{model_size}_`.
+
 See more usage details of the customized parallelism optimization in [Galvatron Model Usage](../4_galvatron_model_usage/galvatron_model_usage.html#parallelism-optimizing-with-galvatron).
 
 ## Training with Galvatron
@@ -32,7 +40,11 @@ Galvatron provides a simple way to train Transformer models in fined-grained hyb
 
 To train the model with Galvatron, ```cd galvatron/models/model_name```, set ```NUM_NODES, NUM_GPUS_PER_NODE, MASTER_ADDR, MASTER_PORT, NODE_RANK```,  and run:
 ``` shell
-sh scripts/train_dist.sh
+sh scripts/train_dist_random.sh
 ```
+
+Use the `--galvatron_config_path` parameter to apply the parallel strategy obtained from the search engine. If you have the relevant datasets and checkpoints ready, you can complete the actual training by modifying and running `scripts/train_dist.sh`.
+
+Tips: Before proceeding, ensure whether you need to use the `--set_seqlen_manually` parameter to manually specify the sequence length for the training model.
 
 See detailed guidance and more customized training options in [Galvatron Model Usage](../4_galvatron_model_usage/galvatron_model_usage.html#training-with-galvatron).

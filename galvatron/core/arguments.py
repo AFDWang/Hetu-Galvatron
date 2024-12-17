@@ -242,6 +242,24 @@ def galvatron_profile_hardware_args(parser):
         "--num_gpus_per_node", type=int, default=8, help="Number of GPUs per node.",
     )
     group.add_argument(
+        "--master_addr", type=str, default='$MASTER_ADDR', help="Master address.",
+    )
+    group.add_argument(
+        "--master_port", type=str, default='$MASTER_PORT', help="Master port.",
+    )
+    group.add_argument(
+        "--node_rank", type=str, default='$RANK', help="Node rank.",
+    )
+    group.add_argument(
+        "--max_tp_size", type=int, default=8, help="Maximum tensor parallel size.",
+    )
+    group.add_argument(
+        '--envs', type=str, nargs='+', default=[], help='Additional environment variables in format KEY=VALUE',
+    )
+    group.add_argument(
+        "--backend", type=str, default='nccl', help="Backend of nccl-tests.", choices=['nccl', 'torch'],
+    )
+    group.add_argument(
         "--nccl_test_dir", type=str, default='nccl-tests', help="Directory of nccl-tests.",
     )
     group.add_argument(

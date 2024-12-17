@@ -583,9 +583,101 @@ class GalvatronProfiler():
             write_json_config(config, memory_config_path)
 
     # =============== For Launching Nccl-test for Hardware Profiling ===============
-    def profile_bandwidth(self):
+    def get_env(self):
+        env = {
+            'NUM_NODES': self.args.num_nodes,
+            'NUM_GPUS_PER_NODE': self.args.num_gpus_per_node,
+            'MASTER_ADDR': self.args.master_addr,
+            'MASTER_PORT': self.args.master_port,
+            'NODE_RANK': self.args.node_rank,
+        }
+        env_str = "\n".join([k for k in self.args.envs]) + "\n"
+
+        env_str += "\n".join([f"export {k}={v}" for k, v in env.items()]) + "\n"
+        
+
+        return env_str
+
+    def generate_script(self, num_nodes, num_gpus_per_node):
+        world_size = num_nodes * num_gpus_per_node
+        env = self.get_env()
+
+        def allreduce_script(allreduce_size, allreduce_consec):
+            return "python -m torch.distributed.launch --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK profile_allreduce.py --global_tp_deg %d --global_tp_consec %d --pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE \n"%(allreduce_size,allreduce_consec)
+        
+        with open('scripts/profile_allreduce.sh', 'w') as f:
+            f.write(env)
+            allreduce_size = num_nodes * num_gpus_per_node
+            while allreduce_size > 1:
+                for allreduce_consec in [1, 0]:
+                    if world_size == allreduce_size and allreduce_consec == 0:
+                        continue
+                    f.write("echo \"Running: %s\"\n"%allreduce_script(allreduce_size, allreduce_consec))
+                    f.write(allreduce_script(allreduce_size, allreduce_consec))
+                allreduce_size /= 2
+                f.write('sleep 1\n')
+        
+        args = self.args
+        def p2p_script(pp_deg):
+            return "python -m torch.distributed.launch --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK profile_p2p.py --global_tp_deg 1 --global_tp_consec 1 --pp_deg %d --nproc_per_node=$NUM_GPUS_PER_NODE \n"%(pp_deg)
+        
+        with open('scripts/profile_p2p.sh', 'w') as f:
+            f.write(env)
+            pp_deg = 2
+            while pp_deg <= world_size and pp_deg <= args.max_pp_deg:
+                f.write("echo \"Running: %s\"\n"%p2p_script(pp_deg))
+                f.write(p2p_script(pp_deg))
+                pp_deg *= 2
+                f.write('sleep 1\n')
+
+    def generate_sp_script(self):
+        env = self.get_env()
+        
+        def allreduce_script(allreduce_size, allreduce_consec, buffer_size):
+            return "python -m torch.distributed.launch --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK profile_allreduce.py --global_tp_deg %d --global_tp_consec %d --pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE --local_batch_size %d --profile_time 1\n"%(allreduce_size,allreduce_consec,buffer_size)
+        
+        args = self.args
+
+        with open('scripts/profile_allreduce_sp.sh', 'w') as f:
+            f.write(env)
+            allreduce_size = args.max_tp_size
+            while allreduce_size > 1:
+                buffer_size = 1024
+                while buffer_size >= 1:
+                    f.write("echo \"Running: %s\"\n"%allreduce_script(allreduce_size, 1, buffer_size))
+                    f.write(allreduce_script(allreduce_size, 1, buffer_size))
+                    f.write('sleep 1\n')
+                    buffer_size /= 2
+                allreduce_size /= 2
+        
+        def all2all_script(allreduce_size, allreduce_consec, buffer_size):
+            return "python -m torch.distributed.launch --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK profile_all2all.py --global_tp_deg %d --global_tp_consec %d --pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE --local_batch_size %d --profile_time 1\n"%(allreduce_size,allreduce_consec,buffer_size)
+        
+        with open('scripts/profile_all2all_sp.sh', 'w') as f:
+            f.write(env)
+            all2all_size = args.max_tp_size
+            while all2all_size > 1:
+                buffer_size = 1024
+                while buffer_size >= 1:
+                    f.write("echo \"Running: %s\"\n"%all2all_script(all2all_size, 1, buffer_size))
+                    f.write(all2all_script(all2all_size, 1, buffer_size))
+                    f.write('sleep 1\n')
+                    buffer_size /= 2
+                all2all_size /= 2
+                
+        
+
+    def profile_bandwidth(self, backend = "nccl"):
         args = self.args
         world_size = args.num_nodes * args.num_gpus_per_node
+        if backend != "nccl":
+            self.generate_script(args.num_nodes, args.num_gpus_per_node)
+            # import os
+            # os.system('sh scripts/allreduce_scrpit.sh')
+            # os.system('sh scripts/p2p_scrpit.sh')
+            return
+
+        import os
         hardware_config_dir = os.path.join(self.path, './hardware_configs')
         if not os.path.exists(hardware_config_dir):
             os.mkdir(hardware_config_dir)
@@ -623,7 +715,15 @@ class GalvatronProfiler():
             
         os.system('rm -rf %s'%(os.path.join(self.path, 'nccl_test.log')))
     
-    def profile_sp_bandwidth(self):
+    def profile_sp_bandwidth(self, backend = "nccl"):
+        args = self.args
+        world_size = args.num_nodes * args.num_gpus_per_node
+        if backend != "nccl":
+            self.generate_sp_script()
+            # import os
+            # os.system('sh scripts/allreduce_scrpit.sh')
+            # os.system('sh scripts/p2p_scrpit.sh')
+            return
         args = self.args
         world_size = args.num_nodes * args.num_gpus_per_node
         hardware_config_dir = os.path.join(self.path, './hardware_configs')

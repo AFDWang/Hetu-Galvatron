@@ -4,8 +4,7 @@ import random
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-def set_seed():
-    seed = 1234
+def set_seed(seed = 1234):
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)

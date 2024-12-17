@@ -6,13 +6,14 @@ START_MB=16
 END_MB=256
 SCALE=2
 HOSTFILE="hostfile"
-
+BACKEND=nccl
 # These args will be directly added to nccl-test arguments
 export NCCLTEST_OTHER_ARGS="-x NCCL_IB_DISABLE=0 -x NCCL_IB_HCA=mlx5_2,mlx5_5"
 
 PROFILE_ARGS="
     --num_nodes ${NUM_NODES} \
     --num_gpus_per_node ${NUM_GPUS_PER_NODE} \
+    --backend ${BACKEND} \
     --nccl_test_dir ${NCCLTEST_DIR} \
     --mpi_path ${MPI_PATH} \
     --start_mb ${START_MB} \

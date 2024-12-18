@@ -188,54 +188,57 @@ def train(args):
         print('[p2p_message_size]: total %d MB'%(p2p_message_size))
 
     def trace_handler(prof):
-        if rank == inter_node_send_rank:
-            table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
-            time.sleep(0.5*model.pp_global_ranks[0])
-            print('Results of p2p from rank %d to rank %d:'%(inter_node_send_rank, inter_node_recv_rank))
-            print(table)
-            table = table.split('\n')
-            def split_line(line):
-                line = line.split('  ')
-                ls = []
-                for s in line:
-                    if len(s):
-                        ls.append(s.strip())
-                return ls
-            def str2time(s):
-                if 'ms' in s:
-                    return float(s[:-2])
-                elif 'us' in s:
-                    return float(s[:-2])*1e-3
-                else:
-                    return float(s[:-1])*1e3
-            for line in table:
-                if 'Name' in line:
-                    title = split_line(line)
-                if 'ncclKernel_SendRecv' in line:
-                    result = split_line(line)
-            for i in range(len(title)):
-                # print('%s: %s'%(title[i],result[i]))
-                if 'CUDA total' in title[i]:
-                    cuda_total_idx = i
+        try:
+            if rank == inter_node_send_rank:
+                table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
+                time.sleep(0.5*model.pp_global_ranks[0])
+                print('Results of p2p from rank %d to rank %d:'%(inter_node_send_rank, inter_node_recv_rank))
+                print(table)
+                table = table.split('\n')
+                def split_line(line):
+                    line = line.split('  ')
+                    ls = []
+                    for s in line:
+                        if len(s):
+                            ls.append(s.strip())
+                    return ls
+                def str2time(s):
+                    if 'ms' in s:
+                        return float(s[:-2])
+                    elif 'us' in s:
+                        return float(s[:-2])*1e-3
+                    else:
+                        return float(s[:-1])*1e3
+                for line in table:
+                    if 'Name' in line:
+                        title = split_line(line)
+                    if 'ncclKernel_SendRecv' in line:
+                        result = split_line(line)
+                for i in range(len(title)):
+                    # print('%s: %s'%(title[i],result[i]))
+                    if 'CUDA total' in title[i]:
+                        cuda_total_idx = i
 
-            p2p_time = str2time(result[cuda_total_idx]) / 10
-            comm_coe = p2p_message_size / p2p_time
-            comm_coe = torch.tensor([comm_coe]).to(device)
-            
-            torch.distributed.all_reduce(comm_coe, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
-            comm_coe = comm_coe.cpu().numpy()[0] / tp_groups[0].size
-            if 0 in model.pp_global_ranks:
-                print('**********')
-                print('p2p_coe_pp_deg_%d (ms/MB):'%(pp_size), comm_coe)
-                print('**********')
-                path = os.path.dirname(os.path.abspath(__file__))
-                env_config_path = os.path.join(path, './hardware_configs/p2p_bandwidth_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
-                config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
-                key = 'pp_size_%d'%(pp_size)
-                config[key] = comm_coe
-                write_json_config(config, env_config_path)
-                print('Already written p2p bandwidth into env config file %s!'%(env_config_path))
-
+                p2p_time = str2time(result[cuda_total_idx]) / 10
+                comm_coe = p2p_message_size / p2p_time
+                comm_coe = torch.tensor([comm_coe]).to(device)
+                
+                torch.distributed.all_reduce(comm_coe, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
+                comm_coe = comm_coe.cpu().numpy()[0] / tp_groups[0].size
+                if 0 in model.pp_global_ranks:
+                    print('**********')
+                    print('p2p_coe_pp_deg_%d (ms/MB):'%(pp_size), comm_coe)
+                    print('**********')
+                    path = os.path.dirname(os.path.abspath(__file__))
+                    env_config_path = os.path.join(path, './hardware_configs/p2p_bandwidth_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
+                    config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
+                    key = 'pp_size_%d'%(pp_size)
+                    config[key] = comm_coe
+                    write_json_config(config, env_config_path)
+                    print('Already written p2p bandwidth into env config file %s!'%(env_config_path))
+        except Exception as e:
+            print(f"Profiler error: {e}")
+            return
     inter_node_send_rank = model.pp_global_ranks[model.group_size // 2 - 1]
     inter_node_recv_rank = model.pp_global_ranks[model.group_size // 2]
     if rank == inter_node_send_rank:

@@ -200,84 +200,74 @@ def train(args):
 
     def trace_handler(prof):
         # if rank == 0:
-        table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
-        if rank == 0:
-            print(table)
-        table = table.split('\n')
-        def split_line(line):
-            line = line.split('  ')
-            ls = []
-            for s in line:
-                if len(s):
-                    ls.append(s.strip())
-            return ls
-        def str2time(s):
-            if 'ms' in s:
-                return float(s[:-2])
-            elif 'us' in s:
-                return float(s[:-2])*1e-3
+        try:
+            table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
+            if rank == 0:
+                print(table)
+            table = table.split('\n')
+            def split_line(line):
+                line = line.split('  ')
+                ls = []
+                for s in line:
+                    if len(s):
+                        ls.append(s.strip())
+                return ls
+            def str2time(s):
+                if 'ms' in s:
+                    return float(s[:-2])
+                elif 'us' in s:
+                    return float(s[:-2])*1e-3
+                else:
+                    return float(s[:-1])*1e3
+            for line in table:
+                if 'Name' in line:
+                    title = split_line(line)
+                if 'ncclKernel_AllReduce' in line:
+                    result = split_line(line)
+            for i in range(len(title)):
+                # print('%s: %s'%(title[i],result[i]))
+                if 'CUDA total' in title[i]:
+                    cuda_total_idx = i
+                if "Calls" in title[i]:
+                    comm_num = int(result[i])
+            comm_time = str2time(result[cuda_total_idx])
+            
+            if args.profile_time == 0:
+                allreduce_time_24_layer = comm_time / 10
+                comm_coe = allreduce_message_size_total / allreduce_time_24_layer
+                comm_coe = torch.tensor([comm_coe]).to(device)
+                torch.distributed.all_reduce(comm_coe, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
+                comm_coe = comm_coe.cpu().numpy()[0] / tp_groups[0].size
+                if rank == 0:
+                    print('**********')
+                    print('comm_coe_%d_%d_%d:'%(pp_size,tp_size,args.global_tp_consec), comm_coe)
+                    print('**********')
+                    path = os.path.dirname(os.path.abspath(__file__))
+                    env_config_path = os.path.join(path, './hardware_configs/allreduce_bandwidth_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
+                    config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
+                    key = 'allreduce_size_%d_consec_%d'%(tp_size,args.global_tp_consec)
+                    config[key] = comm_coe # * 2 * (args.global_tp_deg - 1) / args.global_tp_deg
+                    write_json_config(config, env_config_path)
+                    print('Already written allreduce bandwidth into env config file %s!'%(env_config_path))
             else:
-                return float(s[:-1])*1e3
-        for line in table:
-            if 'Name' in line:
-                title = split_line(line)
-            if 'ncclKernel_AllReduce' in line:
-                result = split_line(line)
-        for i in range(len(title)):
-            # print('%s: %s'%(title[i],result[i]))
-            if 'CUDA total' in title[i]:
-                cuda_total_idx = i
-            if "Calls" in title[i]:
-                comm_num = int(result[i])
-        comm_time = str2time(result[cuda_total_idx])
-        
-        if args.profile_time == 0:
-            allreduce_time_24_layer = comm_time / 10
-            comm_coe = allreduce_message_size_total / allreduce_time_24_layer
-            comm_coe = torch.tensor([comm_coe]).to(device)
-            torch.distributed.all_reduce(comm_coe, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
-            comm_coe = comm_coe.cpu().numpy()[0] / tp_groups[0].size
-            if rank == 0:
-                print('**********')
-                print('comm_coe_%d_%d_%d:'%(pp_size,tp_size,args.global_tp_consec), comm_coe)
-                print('**********')
-                path = os.path.dirname(os.path.abspath(__file__))
-                env_config_path = os.path.join(path, './hardware_configs/allreduce_bandwidth_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
-                config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
-                key = 'allreduce_size_%d_consec_%d'%(tp_size,args.global_tp_consec)
-                config[key] = comm_coe # * 2 * (args.global_tp_deg - 1) / args.global_tp_deg
-                write_json_config(config, env_config_path)
-                print('Already written allreduce bandwidth into env config file %s!'%(env_config_path))
-        else:
-            per_comm_time = comm_time / comm_num
-            per_comm_time = torch.tensor([per_comm_time]).to(device)
-            torch.distributed.all_reduce(per_comm_time, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
-            per_comm_time = per_comm_time.cpu().numpy()[0] / tp_groups[0].size
-            if rank == 0:
-                print('**********')
-                print('comm_time_%dMB_%d_%d:'%(args.local_batch_size, pp_size, tp_size), per_comm_time)
-                print('**********')
-                path = os.path.dirname(os.path.abspath(__file__))
-                env_config_path = os.path.join(path, './hardware_configs/sp_time_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
-                config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
-                key = 'allreduce_size_%d_%dMB_time'%(tp_size,args.local_batch_size)
-                config[key] = per_comm_time
-                write_json_config(config, env_config_path)
-                print('Already written allreduce bandwidth into env config file %s!'%(env_config_path))
-                comm_coe = allreduce_time_24_layer / allreduce_message_size_total
-                print('**********')
-                print('comm_coe_%d_%d_%d:'%(pp_size,tp_size,args.global_tp_consec), comm_coe)
-                print('**********')
-
-                comm_type = 'allreduce'
-                gpu_num = world_size
-                env_config_path = '../../env_configs/%s_bandwidth_dist_%d_gpus.json'%(comm_type, gpu_num)
-                config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
-                key = '%d_%d_%d'%(pp_size,tp_size,args.global_tp_consec)
-                config[key] = comm_coe
-                write_json_config(config, env_config_path)
-        print('Already written comm_coe_%s into env config file %s!'%(key, env_config_path))
-
+                per_comm_time = comm_time / comm_num
+                per_comm_time = torch.tensor([per_comm_time]).to(device)
+                torch.distributed.all_reduce(per_comm_time, group=tp_groups[0].group, op=torch.distributed.ReduceOp.SUM)
+                per_comm_time = per_comm_time.cpu().numpy()[0] / tp_groups[0].size
+                if rank == 0:
+                    print('**********')
+                    print('comm_time_%dMB_%d_%d:'%(args.local_batch_size, pp_size, tp_size), per_comm_time)
+                    print('**********')
+                    path = os.path.dirname(os.path.abspath(__file__))
+                    env_config_path = os.path.join(path, './hardware_configs/sp_time_%dnodes_%dgpus_per_node.json'%(node_num,args.nproc_per_node))
+                    config = read_json_config(env_config_path) if os.path.exists(env_config_path) else dict()
+                    key = 'allreduce_size_%d_%dMB_time'%(tp_size,args.local_batch_size)
+                    config[key] = per_comm_time
+                    write_json_config(config, env_config_path)
+                    print('Already written allreduce bandwidth into env config file %s!'%(env_config_path))
+        except Exception as e:
+            print(f"Profiler error: {e}")
+            return
     
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA],
                                 schedule=torch.profiler.schedule(wait=0,warmup=1,active=10),

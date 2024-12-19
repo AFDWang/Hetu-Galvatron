@@ -42,7 +42,7 @@ def _split_along_first_dim_with_sequence_parallel(input_, group):
         output = output[dim_offset:dim_offset+local_dim_size].contiguous()
 
     # print("split"+str(torch.cuda.current_device())+str(input_.shape)+str(output.shape))
-    return output
+    return output.contiguous()
 
 def _gather_along_first_dim_with_sequence_parallel(input_, group):
     """Gather tensors and concatinate along the first dimension."""
@@ -80,7 +80,7 @@ def _gather_along_first_dim_with_sequence_parallel(input_, group):
         dim_offset = rank * local_dim_size
         output = output[dim_offset:dim_offset+local_dim_size].contiguous()
     # print("gather"+str(torch.cuda.current_device())+str(input_.shape)+str(output.shape))
-    return output
+    return output.contiguous()
 
 def _split_along_first_dim(input_, group):
     """Split the tensor along its first dimension and keep the
@@ -276,7 +276,8 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(input_, allgat
         dim_offset = rank * local_dim_size
         output = output[dim_offset:dim_offset+local_dim_size].contiguous()
     # print(input_.shape, output.shape)
-    return output
+    print(output.shape, output.stride(), torch.cuda.current_device())
+    return output.contiguous()
 
 class _Fused_split_allgather(torch.autograd.Function):
     

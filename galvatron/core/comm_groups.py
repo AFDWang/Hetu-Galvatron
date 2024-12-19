@@ -313,13 +313,13 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, pp_size, tp_consecutive_flags, s
         dp_groups.append(dp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i] * all_sp_sizes[i]])
         sp_groups.append(sp_group_dict[tp_consecutive_flags[i]][all_sp_sizes[i]])
     for i in range(1, len(all_tp_sizes)):
-        if all_tp_sizes[i-1] == 1:
+        if all_tp_sizes[i-1] != 1:
             old_tp_size = all_tp_sizes[i-1]
             old_tp_groups = tp_groups[i-1]
         else:
             old_tp_size = all_sp_sizes[i-1]
             old_tp_groups = sp_groups[i-1]
-        if all_tp_sizes[i] == 1:
+        if all_tp_sizes[i] != 1:
             new_tp_size = all_tp_sizes[i]
             new_tp_groups = tp_groups[i]
         else:

@@ -14,6 +14,7 @@ class LlamaAttention_tp(nn.Module):
     def __init__(self, config, layer_number, tp_group = None, sp_group = None):
         super().__init__()
         args = get_args()
+        self.sequence_parallel = args.sequence_parallel
         self.use_ulysses = sp_group.size > 1
         megatron_config = core_transformer_config_from_args(args)
         self.tp_group = tp_group.group if tp_group is not None else None
@@ -42,10 +43,13 @@ class LlamaAttention_tp(nn.Module):
     def forward(self, hidden_states, attention_mask):
         input_tensor = hidden_states
         hidden_states = self.LayerNorm(hidden_states)
-        if self.use_ulysses:
-            rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0], offset = hidden_states.shape[0] * torch.distributed.get_rank(self.sp_group))
+        if self.sequence_parallel:
+            if self.use_ulysses:
+                rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0], offset = hidden_states.shape[0] * torch.distributed.get_rank(self.sp_group))
+            else:
+                rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group))
         else:
-            rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group))
+            rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0])
         hidden_states, bias = self.attention(hidden_states, attention_mask,rotary_pos_emb=rotary_pos_emb)
         hidden_states = hidden_states + input_tensor
         return hidden_states

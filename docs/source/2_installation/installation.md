@@ -18,6 +18,16 @@ First, based on the CUDA version in your system environment, find the specific i
 pip install torch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 --index-url https://download.pytorch.org/whl/cu118
 ```
 
+Next, install [apex](https://github.com/NVIDIA/apex) from source code:
+```shell
+git clone https://github.com/NVIDIA/apex
+cd apex
+# if pip >= 23.1 (ref: https://pip.pypa.io/en/stable/news/#v23-1) which supports multiple `--config-settings` with the same key... 
+pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings "--build-option=--cpp_ext" --config-settings "--build-option=--cuda_ext" ./
+# otherwise
+pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --global-option="--cpp_ext" --global-option="--cuda_ext" ./
+```
+
 ## Install Galvatron
 ### Installation from PyPI
 

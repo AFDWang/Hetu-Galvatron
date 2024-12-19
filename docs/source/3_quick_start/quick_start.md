@@ -8,7 +8,7 @@ The first step to use Galvatron is to profile the hardware environment and the m
 sh scripts/profile_hardware.sh
 ```
 
-Galvatron will call [nccl-tests](https://github.com/NVIDIA/nccl-tests) to profile the communication bandwidth.
+Galvatron will call [nccl-tests](https://github.com/NVIDIA/nccl-tests) or [pytorch profiler](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) to profile the communication bandwidth. You can choose one of them by setting ```--backend``` to ```nccl``` or ```torch``` in ```scripts/profile_hardware.sh```.
 
 (2) Secondly, to profile the model computation time and memory usage, ```cd galvatron/models/model_name``` and run:
 ``` shell

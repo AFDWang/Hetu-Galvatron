@@ -276,7 +276,7 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(input_, allgat
         dim_offset = rank * local_dim_size
         output = output[dim_offset:dim_offset+local_dim_size].contiguous()
     # print(input_.shape, output.shape)
-    print(output.shape, output.stride(), torch.cuda.current_device())
+    # print(output.shape, output.stride(), torch.cuda.current_device())
     return output.contiguous()
 
 class _Fused_split_allgather(torch.autograd.Function):

@@ -12,13 +12,22 @@ from torch.distributed.fsdp._common_utils import (
     clean_tensor_name,
     TrainingState,
 )
-from torch.distributed.fsdp.flat_param import (
-    FlatParameter,
-    FlatParamHandle,
-    HandleShardingStrategy,
-    HandleTrainingState,
-    RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
+if torch.__version__ >= '2.5.0':
+    from torch.distributed.fsdp._flat_param import (
+        FlatParameter,
+        FlatParamHandle,
+        HandleShardingStrategy,
+        HandleTrainingState,
+        RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
 )
+else:
+    from torch.distributed.fsdp.flat_param import (
+        FlatParameter,
+        FlatParamHandle,
+        HandleShardingStrategy,
+        HandleTrainingState,
+        RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
+    )
 from torch.distributed.utils import (
     _apply_to_tensors,
     _cast_forward_inputs,

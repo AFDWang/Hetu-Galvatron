@@ -53,7 +53,7 @@ def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='ber
         assert dp_type in fsdp_type_dict.keys()
         return wrap_module_fsdp_manually(module, pp_device, module_type, dp_group, fsdp_type=fsdp_type_dict[dp_type], mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name, wrap_other_block_name=wrap_other_block_name, tp_groups=tp_groups, all_block_name=all_block_name, load_module_func=load_module_func)
 
-def param_init_fn(all_block_name, load, tp_groups, load_module_func, module):
+def param_init_fn(all_block_name, load, distributed_checkpoint, tp_groups, load_module_func, module):
     m = module
     if isinstance(m, tuple(all_block_name)):
         m.to_empty(device=torch.device("cuda"))
@@ -63,7 +63,7 @@ def param_init_fn(all_block_name, load, tp_groups, load_module_func, module):
                 if load == None:
                     submodule.reset_parameters()
                 else:
-                    load_module_func(load, tp_groups, name, submodule, m)
+                    load_module_func(load, tp_groups, name, submodule, m, distributed_checkpoint)
     
 
 def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_group=None, fsdp_type='zero3', mixed_precision=torch.bfloat16, pp_on=False, wrap_block_name=None, wrap_other_block_name=None, tp_groups=None, all_block_name=None, load_module_func=None):
@@ -87,7 +87,7 @@ def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_grou
                     mixed_precision=mixed_precision_policy, 
                     # backward_prefetch=backward_prefetch,
                     device_id=pp_device,
-                    param_init_fn=partial(param_init_fn, all_block_name, args.load, tp_groups.group, load_module_func) if 'initialize_on_meta' in args and args.initialize_on_meta else None,
+                    param_init_fn=partial(param_init_fn, all_block_name, args.load, args.distributed_checkpoint,tp_groups.group, load_module_func) if 'initialize_on_meta' in args and args.initialize_on_meta else None,
                     limit_all_gathers=True)
     # Wrap given block
     if wrap_block_name is not None:
@@ -265,7 +265,7 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
                     mixed_precision=mixed_precision_policy, 
                     # backward_prefetch=backward_prefetch,
                     device_id=pp_devices[0],
-                    param_init_fn=partial(param_init_fn, all_block_name, args.load, None, None) if 'initialize_on_meta' in args and args.initialize_on_meta else None,
+                    param_init_fn=partial(param_init_fn, all_block_name, args.load, args.distributed_checkpoint, None, None) if 'initialize_on_meta' in args and args.initialize_on_meta else None,
                     limit_all_gathers=True)
     module_list = FSDP(module_list, **fsdp_args)
     return module_list

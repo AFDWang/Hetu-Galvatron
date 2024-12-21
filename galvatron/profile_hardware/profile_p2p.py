@@ -255,6 +255,7 @@ def train(args):
                 out = model.recv_forward(tensor_shape=[train_batch_size_input, 512, 1024])
             p.step()
 
+    torch.distributed.barrier()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

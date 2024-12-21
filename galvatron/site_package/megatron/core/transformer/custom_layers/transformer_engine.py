@@ -22,7 +22,7 @@ from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.utils import make_sharded_tensors_for_checkpoint
 
-_te_version = packaging.version.Version(version("transformer-engine"))
+# _te_version = packaging.version.Version(version("transformer-engine"))
 
 
 def _get_extra_te_kwargs(config: TransformerConfig):

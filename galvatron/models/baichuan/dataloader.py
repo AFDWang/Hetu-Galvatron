@@ -3,10 +3,10 @@ from torch.utils.data import Dataset
 import numpy as np
 
 class DataLoaderForBaiChuan(Dataset):
-    def __init__(self, args, device):
+    def __init__(self, args, device, dataset_size = 2560 * 16):
         self.vocab_size = args.vocab_size
         self.sentence_length = args.seq_length
-        self.dataset_size = 2560 * 16
+        self.dataset_size = dataset_size
         self.data_length = np.random.randint(1,self.sentence_length+1,(self.dataset_size,))
         self.device = device
 

@@ -2,7 +2,8 @@ import numpy as np
 import torch
 from .arguments import get_args
 from galvatron.utils import read_json_config, config2strategy, str2array
-
+import os
+import json
 def get_pp_ranks_enc(pp_divide):
     pp_ranks_enc = []
     pp_deg = len(pp_divide)
@@ -15,7 +16,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     world_size = torch.distributed.get_world_size()
     config_type = 'JSON' if args.galvatron_config_path not in [None,'None'] else 'GLOBAL'
     layernum_list = model_info(config, args).layernums()
-    total_layer_num = np.sum(layernum_list)
+    total_layer_num = sum(layernum_list)
     if local_rank == 0:
         print('======================== Galvatron Parallel Config =============================')
         print('Galvatron parallel config mode: [%s config mode]'%config_type)
@@ -57,7 +58,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         args.vocab_sp = vsp
         
     if pp_divide is None:
-        avg_layer_num = int(total_layer_num // pp_deg)
+        avg_layer_num = total_layer_num // pp_deg
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg-1)
         pp_divide = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
     pp_ranks_enc = get_pp_ranks_enc(pp_divide)
@@ -73,7 +74,19 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         'pp_ranks_enc':pp_ranks_enc,
         'pp_division':pp_divide,
         'use_sp':use_sp,
+        'vocab_tp':args.vocab_tp,
+        'vocab_sp':args.vocab_sp,
+        'default_dp_type':args.default_dp_type,
+        'global_batch_size':args.global_batch_size,
     }
+    
+    if args.distributed_checkpoint:
+        json_path = os.path.join(args.load, f"hybrid_parallel_configs.json")
+        checkponit_hybrid_parallel_configs = json.load(open(json_path, 'r'))
+        assert hybrid_parallel_configs.keys() == checkponit_hybrid_parallel_configs.keys(), "Hybrid parallel configs are not equal, %s vs %s"%(hybrid_parallel_configs.keys(), checkponit_hybrid_parallel_configs.keys())
+        for key in hybrid_parallel_configs.keys():
+            assert hybrid_parallel_configs[key] == checkponit_hybrid_parallel_configs[key], f"Hybrid parallel configs are not equal for key {key}, {hybrid_parallel_configs[key]} vs {checkponit_hybrid_parallel_configs[key]}"
+    
     if local_rank == 0:
         if config_type == 'GLOBAL':
             print('[GLOBAL config mode] Loaded global hybrid parallel strategy:')
@@ -120,7 +133,7 @@ class ModelInfo():
 def check_hp_config(hp_configs, layernum_list):
     pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc = \
         hp_configs['pp_deg'], hp_configs['tp_sizes_enc'], hp_configs['tp_consecutive_flags'], hp_configs['dp_types_enc'], hp_configs['pp_ranks_enc'], hp_configs['checkpoint_flags_enc']
-    total_layer_num = np.sum(layernum_list)
+    total_layer_num = sum(layernum_list)
     assert total_layer_num == len(tp_sizes_enc)
     assert total_layer_num == len(tp_consecutive_flags)
     assert total_layer_num == len(dp_types_enc) 

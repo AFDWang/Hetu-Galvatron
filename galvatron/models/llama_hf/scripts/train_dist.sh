@@ -60,6 +60,17 @@ CKPT_ARGS="
     --load /home/pkuhetu/lxy/checkpoints/llama2-7b-chat-hf-split
 "
 
+# CKPT_ARGS="
+#     --save /home/pkuhetu/lxy/checkpoints/galvatron_save_llama
+#     --save-interval 10
+# "
+
+# CKPT_ARGS="
+#     --load /home/pkuhetu/lxy/checkpoints/galvatron_save_llama \
+#     --load_iteration 10 \
+#     --distributed_checkpoint
+# "
+
 PARALLEL_ARGS="
     --pp_deg 1 \
     --global_tp_deg 8 \

@@ -1,3 +1,5 @@
+import torch
+from transformers import LlamaForCausalLM, LlamaConfig
 from galvatron.core import GalvatronProfiler, initialize_galvatron
 from galvatron.models.llama_hf.arguments import model_args, layernum_arg_names
 from galvatron.models.llama_hf.meta_configs import config_from_meta, set_model_config, model_name

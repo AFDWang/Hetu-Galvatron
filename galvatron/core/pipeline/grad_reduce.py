@@ -18,9 +18,22 @@ from torch.distributed.fsdp._common_utils import (
     _FSDPState,
 )
 
-from torch.distributed.fsdp.flat_param import (
-    FlatParamHandle,
+if torch.__version__ >= '2.5.0':
+    from torch.distributed.fsdp._flat_param import (
+        FlatParameter,
+        FlatParamHandle,
+        HandleShardingStrategy,
+        HandleTrainingState,
+        RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
 )
+else:
+    from torch.distributed.fsdp.flat_param import (
+        FlatParameter,
+        FlatParamHandle,
+        HandleShardingStrategy,
+        HandleTrainingState,
+        RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
+    )
 
 from .sp_grad_reduce import _post_backward_hook_sp as _post_backward_hook
 from torch.distributed.fsdp._runtime_utils import (

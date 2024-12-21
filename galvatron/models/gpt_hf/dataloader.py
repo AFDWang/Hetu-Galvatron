@@ -19,7 +19,7 @@ from megatron.training.utils import (
 from galvatron.core.hybrid_parallel_config import get_chunks
 from galvatron.core.pipeline.utils import chunk_batch
 
-def test_get_ltor_masks_and_position_ids(data):
+def random_get_ltor_masks_and_position_ids(data):
     """Build masks and position id for left to right model."""
     micro_batch_size, seq_length = data.size()
     att_mask_batch = 1
@@ -34,22 +34,22 @@ def test_get_ltor_masks_and_position_ids(data):
 
     return attention_mask# , position_ids
 
-def test_collate_fn(batch):
+def random_collate_fn(batch):
     tokens_ = torch.stack(batch, dim=0)
     labels = tokens_[:, 1:].contiguous()
     tokens = tokens_[:, :-1].contiguous()
     args = get_args()
     if not args.use_flash_attn:
-        attention_mask = test_get_ltor_masks_and_position_ids(tokens)
+        attention_mask = random_get_ltor_masks_and_position_ids(tokens)
     else:
         attention_mask = None
     return tokens, {"attention_mask":attention_mask, "labels" : labels}, None
 
 class DataLoaderForGPT(Dataset):
-    def __init__(self, args, device):
+    def __init__(self, args, device, dataset_size = 2560 * 16):
         self.vocab_size = args.vocab_size
         self.sentence_length = args.seq_length
-        self.dataset_size = 2560 * 16
+        self.dataset_size = dataset_size
         self.data_length = np.random.randint(1,self.sentence_length+1,(self.dataset_size,))
         self.device = device
 

@@ -10,7 +10,8 @@ from functools import partial
 from torch.distributed.fsdp._common_utils import _named_parameters_with_duplicates
 from megatron.training.global_vars import rebuild_tokenizer
 from megatron.core.optimizer.clip_grads import clip_grad_norm_fp32
-
+import os
+import json
 # utility functions, support on nested attributes for getattr, setattr, and setattr
 # https://stackoverflow.com/questions/31174295/getattr-and-setattr-on-nested-subobjects-chained-properties
 # https://stackoverflow.com/questions/24779483/hasattr-for-nested-attributes
@@ -62,7 +63,11 @@ def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_gro
     assert world_size // args.pp_deg // args.vocab_tp == len(vtp_data_group.ranks)
     args.micro_batch_size = args.global_train_batch_size // len(vtp_data_group.ranks) # // args.chunks
     args.global_batch_size = args.global_train_batch_size
-    args.iteration = 0
+    if args.load_iteration != 0:
+        assert args.distributed_checkpoint == True, "Checkpoint iteration > 0 requires distributed checkpoint"
+        args.iteration = args.load_iteration
+    else:
+        args.iteration = 0
     
     args.pipeline_model_parallel_size = hp_model.model.group_size
     mpu.set_pipeline_model_parallel_rank(hp_model.model.group_rank)
@@ -115,3 +120,25 @@ def clip_grad_norm(model, max_norm, norm_type=2):
     total_norm = clip_grad_norm_fp32(parameters, grads_for_norm, max_norm, norm_type)
 
     return total_norm
+
+# from torch.optim import Adam
+from apex.optimizers import FusedAdam as Adam
+from megatron.training.training import get_optimizer_param_scheduler
+
+def get_optimizer_and_param_scheduler(model, args):
+
+    optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay, betas=(args.adam_beta1, args.adam_beta2), eps=args.adam_eps)
+    
+    opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
+
+    if args.distributed_checkpoint:
+        rank = torch.distributed.get_rank()
+        if rank == 0:
+            print("Begin to load optimizer and param scheduler")
+        optimizer.load_state_dict(torch.load(os.path.join(args.load, f"iter_{args.load_iteration}", "optimizer", f"{rank}.pt")))
+        opt_param_scheduler.load_state_dict(json.load(open(os.path.join(args.load, f"iter_{args.load_iteration}", "opt_param_scheduler.json"))))
+        torch.distributed.barrier()
+        if rank == 0:
+            print("Finish loading optimizer and param scheduler")
+
+    return optimizer, opt_param_scheduler

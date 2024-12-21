@@ -1,8 +1,8 @@
 import torch
 from torch import nn
-# from flash_attn.ops.rms_norm import RMSNorm as LlamaRMSNorm
+from flash_attn.ops.rms_norm import RMSNorm as LlamaRMSNorm
 # from transformers.models.llama.modeling_llama import LlamaRMSNorm
-from megatron.legacy.model.rms_norm import RMSNorm as LlamaRMSNorm
+# from megatron.legacy.model.rms_norm import RMSNorm as LlamaRMSNorm
 from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding
 from megatron.core.tensor_parallel import VocabParallelEmbedding, ColumnParallelLinear
 from megatron.training.arguments import core_transformer_config_from_args

@@ -219,5 +219,7 @@ def construct_hybrid_parallel_model_api(
     model.dp_groups_whole = dp_groups_whole
     model.tp_groups_whole = tp_groups_whole
     model.sp_groups_whole = sp_groups_whole
+    model.sdp_groups_whole = seq_data_groups_whole
+    model.hybrid_parallel_configs = hybrid_parallel_configs
     
     return model

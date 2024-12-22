@@ -7,4 +7,4 @@ CHECKPOINT_ARGS="
     --output_dir $OUTPUT_PATH
 "
 
-python checkpoint_convert.py --model_type gpt ${CHECKPOINT_ARGS}
+python checkpoint_convert_h2g.py --model_type gpt ${CHECKPOINT_ARGS}

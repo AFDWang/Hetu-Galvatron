@@ -68,11 +68,13 @@ sh scripts/train_dist.sh
 
 You can customize multiple training options:
 
-### Checkpoint loading
+### Checkpoint loading & saving
+
+#### Checkpoint loading
 Galvatron supports loading Huggingface models and adapts to fine-grained parallelism strategies. With a simple weight conversion process, this can be achieved by executing the following command:
 ```shell
 cd tools
-bash convert_{MODEL_TYPE}.sh
+bash convert_{MODEL_TYPE}_h2g.sh
 ```
 You need to modify the script by setting INPUT_PATH and OUTPUT_PATH to the directories where the checkpoint files are stored before and after conversion, respectively.
 Please note that the weight conversion is independent of the parallelism strategy.
@@ -81,6 +83,22 @@ Next, you can use the following arguments in their training script to load the c
 ```shell
 --initialize_on_meta 1 \
 --load ${OUTPUT_PATH}
+```
+
+For checkpoints previously saved by Galvatron, you can load them by adding ```--load_distributed```. Note that this method requires the current parallel strategy to be consistent with the parallel strategy used when the checkpoint was saved.
+
+#### Checkpoint saving
+Galvatron supports saving checkpoints during training. You can use the following arguments in their training script to save the checkpoint:
+```shell
+--save ${OUTPUT_PATH}
+--save-interval ${SAVE_INTERVAL}
+```
+Galvatron will store the distributed checkpoint of the specified parallel strategy in the target directory, including both parameters and optimizer state.
+
+To convert an already saved distributed Galvatron checkpoint into the Hugging Face format, you can use the following command:
+```shell
+cd tools
+bash convert_{MODEL_TYPE}_g2h.sh
 ```
 
 ### Training with datasets

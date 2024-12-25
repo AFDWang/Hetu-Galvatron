@@ -115,7 +115,6 @@ def construct_hybrid_parallel_model_api(
     wrap_checkpoint_block_name=None,
     wrap_other_block_name=None,
     tied_wte_attr_names=None,
-    sp_layernorm_attr_names=None,
     layernorm_name = [],
     all_block_name = None,
     load_module_func = None,

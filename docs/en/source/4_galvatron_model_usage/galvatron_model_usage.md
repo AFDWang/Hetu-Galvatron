@@ -53,11 +53,11 @@ Set `fine_grained_mode` to `0` / `1`(default:`1`) to disable/enable fine-grained
 
 Set `profile_mode` to `static` / `batch` / `sequence` (default:`static`) to determine the estimation method for computation time and memory when building a cost model, `static` indicates that computation time increases proportionally with batch size. In contrast, `batch` suggests that computation time grows linearly with batch size. Specifically, we will use an $\alpha-\beta$ model to fit a linear function based on the profiled data. To ensure accuracy, when using `batch`, we require profile results for 8 different batch sizes for the same layer type. Additionally, `sequence` uses profiled data to model memory and time performance for other sequence lengths. In practice, `profile_mode` in the searching argument should typically match the profile argument. When using `static` or `batch` modes, user also need to ensure the sequence length is consistent. However, this is not necessary when using the `sequence` mode.
 
-Set `tp_space` to `tp+sp` / `tp` (default:`tp`) to determine the search space for sequence parallelism. `tp+sp` represents considering both Megatron-SP and Ulysses, while `tp` represents considering only Megatron-SP. 
+Set `sp_space` to `tp+sp` / `tp` (default:`tp`) to determine the search space for sequence parallelism. `tp+sp` represents considering both Megatron-SP and Ulysses, while `tp` represents considering only Megatron-SP. 
 
 Set `no_global_memory_buffer` to disable the estimation of global memory for all-gather buffer when using Megatron-SP. In Megatron-SP, a buffer is allocated to store the results of all-gather communication operations. This memory is not released, and as the sequence length increases, the memory usage of this buffer can become significant.
 
-**`tp_space` set to `tp+sp` is incompatible with `tp_consec` set to 0. The search for `tp_consec` is quite uncommon, and we plan to remove it in future versions.**
+**`sp_space` set to `tp+sp` is incompatible with `tp_consec` set to 0. The search for `tp_consec` is quite uncommon, and we plan to remove it in future versions.**
 
 ## Training with Galvatron
 
@@ -118,6 +118,67 @@ In distributed training with Galvatron, you can either train models with the opt
 #### JSON Config Mode [Recommended]
 JSON config mode is a **recommended** layerwise hybrid parallel training mode, activated by assigning argument `galvatron_config_path` with the config path in `configs` directory. In JSON config mode, you don't need be aware of the details of searched parallelism strategies, and don't need to tune any parallelism strategies or hyper-parameters. You can simply use the searched optimal parallelism strategy saved in `configs` directory by setting `galvatron_config_path` as `./configs/galvatron_config_xxx.json`. For advanced you, JSON config mode also provides a more fine-grained approach to parallelism tuning.
 
+A hybrid parallel strategy is represented in JSON format as follows:
+```json
+{
+    // Pipeline parallelism configuration
+    "pp_deg": <num_pipeline_stages>,
+    "pp_division": "<layers_per_stage_1>,<layers_per_stage_2>,...",
+    "pipeline_type": "pipedream_flush",  // or "gpipe"
+    "chunks": <num_micro_batches>,
+
+    // Tensor parallelism configuration (per-layer)
+    "tp_sizes_enc": "<tp_size_1>,<tp_size_2>,...,<tp_size_n>",
+    "tp_consecutive_flags": "<consec_1>,<consec_2>,...,<consec_n>",
+    
+    // Data parallelism configuration (per-layer)
+    "dp_types_enc": "<dp_type_1>,<dp_type_2>,...,<dp_type_n>",
+    "default_dp_type": "zero2",    // or "ddp", "zero3"
+    
+    // Sequence parallelism configuration (per-layer)
+    "use_sp": "<sp_flag_1>,<sp_flag_2>,...,<sp_flag_n>",
+
+    // Memory optimization configuration (per-layer)
+    "checkpoint": "<ckpt_flag_1>,<ckpt_flag_2>,...,<ckpt_flag_n>",
+    
+    // Global training configuration
+    "global_bsz": <global_batch_size>,
+    
+    // Vocabulary parallelism configuration
+    "vtp": <vocab_tp_size>,
+    "vsp": <vocab_sp_flag>
+}
+```
+
+The JSON configuration fields are organized by category:
+
+### Pipeline Parallelism Configuration
+- `pp_deg`: Number of pipeline stages for model segmentation
+- `pp_division`: Number of layers in each pipeline stage, comma-separated
+- `pipeline_type`: Scheduling strategy ("pipedream_flush" or "gpipe")
+- `chunks`: Number of micro-batches for pipeline parallelism
+
+### Tensor Parallelism Configuration
+- `tp_sizes_enc`: Per-layer tensor parallelism degrees
+- `tp_consecutive_flags`: GPU allocation method (1=consecutive, 0=non-consecutive)
+
+### Data Parallelism Configuration  
+- `dp_types_enc`: Per-layer data parallelism type (0=default_dp_type, 1=zero3)
+- `default_dp_type`: Default data parallelism strategy ("ddp", "zero2", or "zero3")
+
+### Sequence Parallelism Configuration
+- `use_sp`: Per-layer Ulysses sequence parallelism flags (0=disabled, 1=enabled)
+
+### Memory Optimization
+- `checkpoint`: Per-layer activation checkpointing flags (0=disabled, 1=enabled)
+
+### Global Configuration
+- `global_bsz`: Total training batch size across all devices
+
+### Vocab Embedding Parallelism
+- `vtp`: Tensor parallelism degree for vocab embedding
+- `vsp`: Vocab embedding sequence parallelism flag (0=disabled, 1=enabled)
+
 #### GLOBAL Config Mode
 GLOBAL config mode is a global hybrid parallel training mode, activated by assigning argument `galvatron_config_path` as `None`. In this mode, you can specify `pp_deg`, `global_tp_deg`, `global_tp_consec`, `sdp`, `global_train_batch_size`, `chunks`, `global_checkpoint`, `pipeline_type` to determine the global parallelism strategy, and all the layers of the Transformer model uses the same hybrid parallelism strategy assigned by the you (just as in Megatron-LM).
 
@@ -148,4 +209,4 @@ Set `no_async_grad_reduce` to disable the asynchronous gradient synchronization 
 
 Please refer to function ```galvatron_training_args``` in [arguments.py](https://github.com/PKU-DAIR/Hetu-Galvatron/blob/main/galvatron/core/arguments.py) for the full list of training arguments.
 
-**Ulysses is only supported on llama_hf, gpt_hf.**
+**Ulysses is only supported on hf models.**

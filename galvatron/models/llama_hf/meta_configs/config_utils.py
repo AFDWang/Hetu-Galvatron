@@ -13,10 +13,14 @@ path_dict =  {
 }
 
 def config_from_meta(model_type) -> LlamaConfig:
-    global path_dict
-    path_dict = dict_join_dirname(path_dict, os.path.dirname(__file__))
-    with open(path_dict[model_type]) as f:
-        params = json.load(f)
+    if isinstance(model_type, str):
+        global path_dict
+        path_dict = dict_join_dirname(path_dict, os.path.dirname(__file__))
+        with open(path_dict[model_type]) as f:
+            params = json.load(f)
+    else:
+        assert isinstance(model_type, dict), "model_type must be a string or a dictionary"
+        params = model_type
     if "n_kv_heads" not in params:
         params['n_kv_heads'] = None
     if 'ffn_dim' not in params:
@@ -53,31 +57,19 @@ def set_model_config(config, args, overwrite_args=True):
     
     # ======= Model Config --> Arguments ======
     # This step is necessary that maintains the consistency of model config and arguments.
-    # Overwrite the model arguments with the model config
-    overwrite_model_args(config, args)
-    
     if overwrite_args: # Overwrite necessary Megatron-LM arguments with the model config
         overwrite_megatron_args(config, args)
     return config
 
 def overwrite_megatron_args(config, args):
-    args.hidden_size = config.hidden_size
-    args.ffn_hidden_size = config.intermediate_size
     args.num_layers = config.num_hidden_layers
-    args.num_attention_heads = config.num_attention_heads
-    args.max_position_embeddings = config.max_position_embeddings
-    args.use_cpu_initialization = True
-    args.swiglu = True
-
-# Need to overwrite the arguments with the model config
-def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
     args.ffn_hidden_size = config.intermediate_size
     args.seq_length = config.max_position_embeddings
-    args.num_hidden_layers = config.num_hidden_layers
     args.vocab_size = config.vocab_size
     args.num_attention_heads = config.num_attention_heads
     args.kv_channels = args.hidden_size // args.num_attention_heads
+    args.norm_epsilon = config.rms_norm_eps
     args.hidden_dropout = 0.0
     args.attention_dropout = 0.0
     args.add_bias_linear = False

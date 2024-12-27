@@ -80,6 +80,8 @@ def construct_tensor_parallel_model(model, config, tp_groups_enc, sp_groups_enc)
     megatron_config = core_transformer_config_from_args(get_args())
     setattr(model.transformer, 'wte', VocabParallelEmbedding(
             args.padded_vocab_size, megatron_config.hidden_size, config = megatron_config, init_method = megatron_config.init_method, tp_group = tp_groups_enc[0].group, sp_group = sp_groups_enc[0].group))
+    setattr(model.transformer, 'wpe', VocabParallelEmbedding(
+            args.seq_length, megatron_config.hidden_size, config = megatron_config, init_method = megatron_config.init_method, tp_group = tp_groups_enc[0].group, sp_group = sp_groups_enc[0].group))
     setattr(model, 'lm_head', ColumnParallelLinear(
             megatron_config.hidden_size, args.padded_vocab_size, config = megatron_config, init_method = megatron_config.init_method, bias=False, tp_group = tp_groups_enc[-1].group, sp_group = sp_groups_enc[-1].group))
     

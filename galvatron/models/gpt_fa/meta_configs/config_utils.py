@@ -11,10 +11,14 @@ path_dict =  {
 }
 
 def config_from_meta(model_type) -> GPT2Config:
-    global path_dict
-    path_dict = dict_join_dirname(path_dict, os.path.dirname(__file__))
-    with open(path_dict[model_type]) as f:
-        params = json.load(f)
+    if isinstance(model_type, str):
+        global path_dict
+        path_dict = dict_join_dirname(path_dict, os.path.dirname(__file__))
+        with open(path_dict[model_type]) as f:
+            params = json.load(f)
+    else:
+        assert isinstance(model_type, dict), "model_type must be a string or a dictionary"
+        params = model_type
     return GPT2Config(**params)
 
 # ============= Set Model Config and Arguments =============
@@ -44,27 +48,15 @@ def set_model_config(config, args, overwrite_args=True):
     
     # ======= Model Config --> Arguments ======
     # This step is necessary that maintains the consistency of model config and arguments.
-    # Overwrite the model arguments with the model config
-    overwrite_model_args(config, args)
-    
     if overwrite_args: # Overwrite necessary Megatron-LM arguments with the model config
         overwrite_megatron_args(config, args)
     return config
 
 def overwrite_megatron_args(config, args):
-    args.hidden_size = config.hidden_size
     args.num_layers = config.num_hidden_layers
-    args.num_attention_heads = config.num_attention_heads
-    args.ffn_hidden_size = args.hidden_size * 4
-    args.max_position_embeddings = config.max_position_embeddings
-    args.use_cpu_initialization = True
-
-# Need to overwrite the arguments with the model config
-def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
     args.ffn_hidden_size = args.hidden_size * 4
     args.seq_length = config.max_position_embeddings
-    args.num_hidden_layers = config.num_hidden_layers
     args.vocab_size = config.vocab_size
     args.num_attention_heads = config.num_attention_heads
     args.kv_channels = args.hidden_size // args.num_attention_heads
@@ -73,7 +65,6 @@ def overwrite_model_args(config, args):
     args.attention_dropout = config.attn_pdrop
     if getattr(args, "padded_vocab_size", None) is None:
         args.padded_vocab_size = (config.vocab_size + args.make_vocab_size_divisible_by - 1) // args.make_vocab_size_divisible_by * args.make_vocab_size_divisible_by
-
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):

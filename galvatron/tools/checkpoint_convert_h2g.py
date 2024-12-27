@@ -9,25 +9,36 @@ def convert_checkpoints_gpt(input_checkpoint_path, output_dir):
         if filename.endswith('.bin'):
             file_path = os.path.join(input_checkpoint_path, filename)
             checkpoint = torch.load(file_path, mmap=True, map_location='cpu')
-            layer_params = defaultdict(dict)
-            for key, value in checkpoint.items():
-                if len(key.split('.')) > 3:
-                    layer_name = '.'.join(key.split('.')[:3])
-                    key_name = '.'.join(key.split('.')[3:])
-                    layer_params[layer_name][key_name] = value
-                elif key.split('.')[1] == 'ln_f':
-                    layer_name = '.'.join(key.split('.')[:2])
-                    key_name = '.'.join(key.split('.')[2:])
-                    layer_params[layer_name][key_name] = value
-                else:
-                    layer_name = 'transformer.embedding'
-                    key_name = '.'.join(key.split('.')[1:])
-                    layer_params[layer_name][key_name] = value
+        elif filename.endswith('.safetensors'):
+            file_path = os.path.join(input_checkpoint_path, filename)
+            checkpoint = safetensors.torch.load_file(file_path, device='cpu')
+        else:
+            continue
+        layer_params = defaultdict(dict)
+        for key, value in checkpoint.items():
+            if len(key.split('.')) > 3:
+                layer_name = '.'.join(key.split('.')[:3])
+                key_name = '.'.join(key.split('.')[3:])
+                layer_params[layer_name][key_name] = value
+            elif key.split('.')[1] == 'ln_f':
+                layer_name = '.'.join(key.split('.')[:2])
+                key_name = '.'.join(key.split('.')[2:])
+                layer_params[layer_name][key_name] = value
+            else:
+                layer_name = 'transformer.embedding'
+                key_name = '.'.join(key.split('.')[1:])
+                layer_params[layer_name][key_name] = value
 
-            for layer_name, params in layer_params.items():
-                layer_file = os.path.join(output_dir, f"{layer_name.replace('.', '_')}.pt")
-                torch.save(params, layer_file)
-                print(f"Saved parameters for {layer_name} to {layer_file}")
+        for layer_name, params in layer_params.items():
+            layer_file = os.path.join(output_dir, f"{layer_name.replace('.', '_')}.pt")
+            if os.path.exists(layer_file):
+                existing_params = torch.load(layer_file)
+                for key in params:
+                    existing_params[key] = params[key]
+            else:
+                existing_params = params
+            torch.save(existing_params, layer_file)
+            print(f"Saved parameters for {layer_name} to {layer_file}")
 
 def convert_checkpoints_llama(input_checkpoint_path, output_dir):
     os.makedirs(output_dir, exist_ok=True)

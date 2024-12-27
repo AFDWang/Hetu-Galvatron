@@ -77,7 +77,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         'vocab_tp':args.vocab_tp,
         'vocab_sp':args.vocab_sp,
         'default_dp_type':args.default_dp_type,
-        'global_batch_size':args.global_batch_size,
+        'global_train_batch_size':args.global_train_batch_size,
     }
     
     if args.distributed_checkpoint:

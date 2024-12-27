@@ -23,7 +23,7 @@ def train(args):
     device = torch.device("cuda:%d"%args.gpu_id if cuda_condition else "cpu")
 
     config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, False)
+    config = set_model_config(config, args, True)
 
     print("Creating Model...")
     model = GPTLMHeadModel(config)

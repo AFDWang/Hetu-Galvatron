@@ -12,7 +12,7 @@ ln_f_name = "transformer_ln_f.pt"
 cls_name = "transformer_embedding.pt"
 
 @torch.no_grad()
-def load_gpt_module(load, tp_groups, name, submodule, module):
+def load_hf_checkpoint(load, tp_groups, name, submodule, module):
     world_size = dist.get_world_size(tp_groups)
     rank = dist.get_rank(tp_groups)
     if name.endswith("wte"):
@@ -29,15 +29,19 @@ def load_gpt_module(load, tp_groups, name, submodule, module):
     elif name.endswith("wpe"):
         file_path = os.path.join(load, embedding_name)
         checkpoint = torch.load(file_path, mmap=True, map_location='cpu')
+        args = get_args()
         weight = checkpoint["wpe.weight"].to(device = "cuda", dtype = torch.float32)
-        submodule.weight.copy_(weight)
+        seq_start_index, seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
+            args.seq_length, rank, world_size
+        )
+        submodule.weight.copy_(weight[seq_start_index:seq_end_index])
     elif name.endswith("ln_f"):
         file_path = os.path.join(load, ln_f_name)
         checkpoint = torch.load(file_path, mmap=True, map_location='cpu')
         weight = checkpoint["weight"].to(device = "cuda", dtype = torch.float32)
         bias = checkpoint["bias"].to(device = "cuda", dtype = torch.float32)
         submodule.weight.copy_(weight)
-        submodule.bias.copy_(weight)
+        submodule.bias.copy_(bias)
     elif name.endswith("lm_head"):
         file_path = os.path.join(load, cls_name)
         checkpoint = torch.load(file_path, mmap=True, map_location='cpu')
@@ -57,7 +61,7 @@ def load_gpt_module(load, tp_groups, name, submodule, module):
                 weight = checkpoint["ln_1.weight"].to(device = "cuda", dtype = torch.float32)
                 bias = checkpoint["ln_1.bias"].to(device = "cuda", dtype = torch.float32)
                 submodule.weight.copy_(weight)
-                submodule.bias.copy_(weight)
+                submodule.bias.copy_(bias)
             elif name.endswith("query_key_value"):
                 args = get_args()
                 weight = checkpoint["attn.c_attn.weight"].to(device = "cuda", dtype = torch.float32)
@@ -95,7 +99,7 @@ def load_gpt_module(load, tp_groups, name, submodule, module):
                 weight = checkpoint["ln_2.weight"].to(device = "cuda", dtype = torch.float32)
                 bias = checkpoint["ln_2.bias"].to(device = "cuda", dtype = torch.float32)
                 submodule.weight.copy_(weight)
-                submodule.bias.copy_(weight)
+                submodule.bias.copy_(bias)
             elif name.endswith("dense_h_to_4h"):
                 weight = checkpoint["mlp.c_fc.weight"].to(device = "cuda", dtype = torch.float32)
                 bias = checkpoint["mlp.c_fc.bias"].to(device = "cuda", dtype = torch.float32)
@@ -113,4 +117,10 @@ def load_gpt_module(load, tp_groups, name, submodule, module):
                 )
                 submodule.weight.copy_(weight[weight_start_index:weight_end_index].t().contiguous())
                 submodule.bias.copy_(bias.contiguous())
-        
+
+@torch.no_grad()
+def load_gpt_module(load, tp_groups, name, submodule, module, distributed_checkpoint):
+    if distributed_checkpoint:
+        raise NotImplementedError("Distributed checkpoint is not supported for GPT")
+    else:
+        load_hf_checkpoint(load, tp_groups, name, submodule, module)

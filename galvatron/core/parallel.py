@@ -87,7 +87,7 @@ def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_grou
                     mixed_precision=mixed_precision_policy, 
                     # backward_prefetch=backward_prefetch,
                     device_id=pp_device,
-                    param_init_fn=partial(param_init_fn, all_block_name, args.load, args.distributed_checkpoint,tp_groups.group, load_module_func) if 'initialize_on_meta' in args and args.initialize_on_meta else None,
+                    param_init_fn=partial(param_init_fn, all_block_name, args.load, args.distributed_checkpoint,tp_groups.group, load_module_func) if args.initialize_on_meta else None,
                     limit_all_gathers=True)
     # Wrap given block
     if wrap_block_name is not None:
@@ -265,7 +265,7 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
                     mixed_precision=mixed_precision_policy, 
                     # backward_prefetch=backward_prefetch,
                     device_id=pp_devices[0],
-                    param_init_fn=partial(param_init_fn, all_block_name, args.load, args.distributed_checkpoint, None, None) if 'initialize_on_meta' in args and args.initialize_on_meta else None,
+                    param_init_fn=partial(param_init_fn, all_block_name, args.load, args.distributed_checkpoint, None, None) if args.initialize_on_meta else None,
                     limit_all_gathers=True)
     module_list = FSDP(module_list, **fsdp_args)
     return module_list

@@ -157,6 +157,8 @@ def construct_hybrid_parallel_model_api(
     if args.initialize_on_meta and args.shape_order == "SBH":
         with init_empty_weights(True):
             model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole)
+    elif args.shape_order == "SBH":
+        model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole)
     else:
         assert not args.use_ulysses, "FA model does not support ulysses!"
         model = construct_tensor_parallel_model(model, config, tp_groups_whole)

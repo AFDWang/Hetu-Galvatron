@@ -62,14 +62,13 @@ class GPTEmbeddings_(nn.Module):
         # labels = input_ids[:, 1:].contiguous()
         if self.vocab_sp:
             tokens = tokens[:, self.seq_start_index:self.seq_end_index].contiguous()
+            position_ids = position_ids[:, self.seq_start_index:self.seq_end_index].contiguous()
         
         if position_ids == None:
             position_ids = torch.arange(0, tokens.size(-1), dtype=torch.long, device=tokens.device)
             position_ids = position_ids.unsqueeze(0)
         inputs_embeds = self.wte(tokens)
         position_embeds = self.wpe(position_ids)
-        if self.vocab_sp:
-            position_embeds = position_embeds[:, self.seq_start_index:self.seq_end_index].contiguous()
 
         hidden_states = inputs_embeds + position_embeds
         # hidden_states = self.drop(hidden_states)

@@ -22,7 +22,7 @@ def train(args):
     world_size = torch.distributed.get_world_size()
 
     config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, False)
+    config = set_model_config(config, args, True)
     if local_rank == 0:
         print(config)
     

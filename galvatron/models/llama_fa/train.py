@@ -24,7 +24,7 @@ def train(args):
 
     llama_config = config_from_meta(args.model_size)
     config = llama_config_to_gpt2_config(llama_config)
-    config = set_model_config(config, args, False)
+    config = set_model_config(config, args, True)
 
     print("Creating Model...")
     model = GPTLMHeadModel(config)

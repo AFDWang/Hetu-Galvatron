@@ -464,7 +464,7 @@ def train(args):
 
     # Load and set model configuration
     config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, False)
+    config = set_model_config(config, args, True)
     if local_rank == 0:
         print(config)
     
@@ -701,7 +701,7 @@ if __name__ == '__main__':
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='search')
     config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, overwrite_args=False)
+    config = set_model_config(config, args, overwrite_args=True)
     path = os.path.dirname(os.path.abspath(__file__))
     print(args)
     print(config)

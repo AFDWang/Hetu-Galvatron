@@ -3,6 +3,7 @@ from flash_attn.modules.block import Block
 from galvatron.core import construct_hybrid_parallel_model_api, get_hybrid_parallel_configs_api
 from galvatron.models.llama_fa.LlamaModel_sequential import LlamaModelInfo, construct_sequential_model, LlamaEmbeddings_, LlamaPreNorm_, LlamaCls_
 from galvatron.models.llama_fa.LlamaModel_tensor_parallel import construct_tensor_parallel_model
+from galvatron.models.llama_fa.meta_configs import config_from_meta, llama_config_to_gpt2_config, set_model_config
 
 def get_hybrid_parallel_configs(model_config, training_args):
     hybrid_parallel_configs = get_hybrid_parallel_configs_api(model_config, training_args, LlamaModelInfo)
@@ -29,6 +30,14 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
         all_block_name = all_block_name,
     )
     return hp_model
+
+def get_llama_config(args):
+    llama_config = config_from_meta(args.model_size)
+    config = llama_config_to_gpt2_config(llama_config, args)
+    config = set_model_config(config, args)
+    if args.local_rank == 0:
+        print(config)
+    return config
 
 def llama_model_hp(config, args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)

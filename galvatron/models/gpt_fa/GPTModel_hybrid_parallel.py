@@ -5,7 +5,7 @@ from galvatron.models.gpt_fa.GPTModel_sequential import GPTModelInfo, construct_
 from galvatron.models.gpt_fa.GPTModel_tensor_parallel import construct_tensor_parallel_model
 from flash_attn.modules.embedding import VocabParallelEmbedding, ColumnParallelEmbedding
 from galvatron.core import get_args
-
+from galvatron.models.gpt_fa.meta_configs import config_from_meta, set_model_config
 def get_hybrid_parallel_configs(model_config, training_args):
     hybrid_parallel_configs = get_hybrid_parallel_configs_api(model_config, training_args, GPTModelInfo)
     return hybrid_parallel_configs
@@ -33,11 +33,18 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
     )
     return hp_model
 
+def get_gpt_config(args):
+    config = config_from_meta(args.model_size)
+    config = set_model_config(config, args, True)
+    if args.local_rank == 0:
+        print(config)
+    return config
+
 def gpt_model_hp(config, args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if args.local_rank == 0:
         print("Creating Model...")
-    gpt_model = GPTLMHeadModel(config)
+    gpt_model = GPTLMHeadModel(config, device='meta' if args.initialize_on_meta else 'cpu')
     model = construct_hybrid_parallel_model(
         model=gpt_model, 
         model_config=config, 

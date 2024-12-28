@@ -333,7 +333,7 @@ For `module_types`, you need to assign a list where each element sequentially re
 
 The hybrid parallel implementation is realized through the `MyModelModel_hybrid_parallel.py` file. This file acts as a bridge connecting the model with the Galvatron parallel system, mainly responsible for constructing model instances that support hybrid parallelism.
 
-This file primarily implements three functions: `get_hybrid_parallel_configs`, `construct_hybrid_parallel_model`, and `gpt_model_hp`.
+This file primarily implements four functions: `get_hybrid_parallel_configs`, `construct_hybrid_parallel_model`, `get_mymodel_config`, and `mymodel_model_hp`.
 
 ##### 3.1 Getting Hybrid Parallel Configurations
 
@@ -395,18 +395,31 @@ Here, we provide additional explanations for some optional parameters that may c
 
 Note: Although `wrap_block_name`, `wrap_checkpoint_block_name`, `wrap_other_block_name`, and `all_block_name` are optional parameters in `construct_hybrid_parallel_model_api`, to ensure that the model can be initialized correctly, these parameters must be provided.
 
-##### 3.3 Building Hybrid Parallel Model
+##### 3.3 Getting Model Configuration
 
-The `gpt_model_hp` function is used to build a hybrid parallel model, with the implementation format as follows:
+The `get_mymodel_config` function is used to get the model configuration, with the implementation format as follows:
 
 ```python
-def gpt_model_hp(config, args):
+def get_mymodel_config(args):
+    config = config_from_meta(args.model_size)
+    config = set_model_config(config, args, True)
+    if args.local_rank == 0:
+        print(config)
+    return config
+```
+
+##### 3.4 Building Hybrid Parallel Model
+
+The `mymodel_model_hp` function is used to build a hybrid parallel model, with the implementation format as follows:
+
+```python
+def mymodel_model_hp(config, args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if args.local_rank == 0:
         print("Creating Model...")
-    MyModel_model = MyModelModel_huggingface(config)
+    mymodel_model = MyModelModel_huggingface(config)
     model = construct_hybrid_parallel_model(
-        model=MyModel_model, 
+        model=mymodel_model, 
         model_config=config, 
         training_args=args, 
         hybrid_parallel_configs=hybrid_parallel_configs
@@ -462,31 +475,8 @@ def train(args):
     device = torch.device("cuda", local_rank)
     world_size = torch.distributed.get_world_size()
 
-    # Load and set model configuration
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, True)
-    if local_rank == 0:
-        print(config)
-    
-    # Get hybrid parallel configuration
-    hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
-    if local_rank == 0:
-        print("Creating Model...")
-
-    # Create base model
-    if args.initialize_on_meta:  # Whether to initialize on meta device to save memory
-        with init_empty_weights():
-            llama_model = MyModelModel_huggingface(config)
-    else:
-        llama_model = MyModelModel_huggingface(config)
-    
-    # Construct model supporting hybrid parallelism
-    model = construct_hybrid_parallel_model(
-        model=llama_model, 
-        model_config=config, 
-        training_args=args, 
-        hybrid_parallel_configs=hybrid_parallel_configs
-    )
+    config = get_mymodel_config(args)
+    model = mymodel_model_hp(config, args)
 
     # Create dataset
     if local_rank == 0:

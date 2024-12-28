@@ -6,9 +6,9 @@ from tqdm import tqdm
 import os
 from galvatron.utils import set_seed, distributed_dataloader, print_loss
 from galvatron.core import initialize_galvatron, GalvatronProfiler
-from galvatron.models.gpt_fa.GPTModel_hybrid_parallel import get_hybrid_parallel_configs, construct_hybrid_parallel_model
+from galvatron.models.gpt_fa.GPTModel_hybrid_parallel import gpt_model_hp, get_gpt_config
 from galvatron.models.gpt_fa.dataloader import DataLoaderForGPT, random_collate_fn
-from galvatron.models.gpt_fa.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
+from galvatron.models.gpt_fa.meta_configs import model_name, model_layer_configs
 from galvatron.models.gpt_fa.arguments import model_args
 
 def train(args):
@@ -18,26 +18,9 @@ def train(args):
     device = torch.device("cuda", local_rank)
     world_size = torch.distributed.get_world_size()
 
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args)
-    if local_rank == 0:
-        print(config)
-    
-    hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
-    if local_rank == 0:
-        print("Creating Model...")
-    # gpt_model = GPTLMHeadModel(config)
-    gpt_model = GPTLMHeadModel(config, device='meta' if args.initialize_on_meta else 'cpu')
-    model = construct_hybrid_parallel_model(
-        model=gpt_model, 
-        model_config=config, 
-        training_args=args, 
-        hybrid_parallel_configs=hybrid_parallel_configs
-    )
-    
-    # from galvatron.models.gpt_fa import gpt_model_hp
-    # model = gpt_model_hp(config, args)
-    # print(model)
+    config = get_gpt_config(args)
+    model = gpt_model_hp(config, args)
+
     if local_rank == 0:
         print("Creating Dataset...")
     trainloader = distributed_dataloader(

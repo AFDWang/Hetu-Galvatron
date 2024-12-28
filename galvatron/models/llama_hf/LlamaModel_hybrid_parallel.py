@@ -3,7 +3,8 @@ from galvatron.core import construct_hybrid_parallel_model_api, get_hybrid_paral
 from galvatron.models.llama_hf.LlamaModel_sequential import LlamaModelInfo, construct_sequential_model, LlamaEmbeddings_, LlamaPreNorm_, LlamaCls_
 from galvatron.models.llama_hf.LlamaModel_tensor_parallel import construct_tensor_parallel_model, LlamaLayer_tp
 from galvatron.models.llama_hf.LlamaModel_checkpoint import load_llama_module
-
+from galvatron.core.initialize import init_empty_weights
+from galvatron.models.llama_hf.meta_configs import config_from_meta, set_model_config
 # from megatron.legacy.model.rms_norm import RMSNorm as LlamaRMSNorm
 
 def get_hybrid_parallel_configs(model_config, training_args):
@@ -33,11 +34,24 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
     )
     return hp_model
 
+def get_llama_config(args):
+    config = config_from_meta(args.model_size)
+    config = set_model_config(config, args, True)
+    if args.local_rank == 0:
+        print(config)
+    return config
+
 def llama_model_hp(config, args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if args.local_rank == 0:
         print("Creating Model...")
-    llama_model = LlamaForCausalLM(config)
+
+    if args.initialize_on_meta:
+        with init_empty_weights():
+            llama_model = LlamaForCausalLM(config)
+    else:
+        llama_model = LlamaForCausalLM(config)
+    
     model = construct_hybrid_parallel_model(
         model=llama_model, 
         model_config=config, 

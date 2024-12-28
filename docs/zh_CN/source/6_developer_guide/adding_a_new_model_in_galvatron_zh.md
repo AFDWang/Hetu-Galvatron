@@ -331,7 +331,7 @@ class MyModelModelInfo(ModelInfo):
 
 混合并行实现通过`MyModelModel_hybrid_parallel.py`文件实现，该文件是连接模型与Galvatron并行系统的桥梁，主要负责构建支持混合并行的模型实例。
 
-该文件主要实现了三个函数：`get_hybrid_parallel_configs`，`construct_hybrid_parallel_model`，`gpt_model_hp`。
+该文件主要实现了四个函数：`get_hybrid_parallel_configs`，`construct_hybrid_parallel_model`，`get_mymodel_config`，`mymodel_model_hp`。
 
 ##### 3.1 获取混合并行配置
 
@@ -392,18 +392,32 @@ def construct_hybrid_parallel_model_api(
 - `load_module_func`：加载模块的函数，通常是定义在`MyModelModel_checkpoint.py`文件中的`load_MyModel_module`函数。
 
 注意：虽然`wrap_block_name`、`wrap_checkpoint_block_name`、`wrap_other_block_name`、`all_block_name`这些参数在`construct_hybrid_parallel_model_api`中是可选参数，但为了保证模型可以正确初始化，这些参数必须传入。
-##### 3.3 构建混合并行模型
 
-`gpt_model_hp`函数用于构建混合并行模型，其实现格式如下：
+##### 3.3 获取模型配置
+
+`get_mymodel_config`函数用于获取模型配置，其实现格式如下：
 
 ```python
-def gpt_model_hp(config, args):
+def get_mymodel_config(args):
+    config = config_from_meta(args.model_size)
+    config = set_model_config(config, args, True)
+    if args.local_rank == 0:
+        print(config)
+    return config
+```
+
+##### 3.4 构建混合并行模型
+
+`mymodel_model_hp`函数用于构建混合并行模型，其实现格式如下：
+
+```python
+def mymodel_model_hp(config, args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if args.local_rank == 0:
         print("Creating Model...")
-    MyModel_model = MyModelModel_huggingface(config)
+    mymodel_model = MyModelModel_huggingface(config)
     model = construct_hybrid_parallel_model(
-        model=MyModel_model, 
+        model=mymodel_model, 
         model_config=config, 
         training_args=args, 
         hybrid_parallel_configs=hybrid_parallel_configs
@@ -459,31 +473,8 @@ def train(args):
     device = torch.device("cuda", local_rank)
     world_size = torch.distributed.get_world_size()
 
-    # 加载和设置模型配置
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, True)
-    if local_rank == 0:
-        print(config)
-    
-    # 获取混合并行配置
-    hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
-    if local_rank == 0:
-        print("Creating Model...")
-
-    # 创建基础模型
-    if args.initialize_on_meta:  # 是否使用meta设备初始化以节省内存
-        with init_empty_weights():
-            llama_model = MyModelModel_huggingface(config)
-    else:
-        llama_model = MyModelModel_huggingface(config)
-    
-    # 构建支持混合并行的模型
-    model = construct_hybrid_parallel_model(
-        model=llama_model, 
-        model_config=config, 
-        training_args=args, 
-        hybrid_parallel_configs=hybrid_parallel_configs
-    )
+    config = get_mymodel_config(args)
+    model = mymodel_model_hp(config, args)
 
     # 创建数据集
     if local_rank == 0:

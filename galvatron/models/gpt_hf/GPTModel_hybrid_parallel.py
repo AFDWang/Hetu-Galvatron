@@ -6,6 +6,8 @@ from galvatron.models.gpt_hf.GPTModel_tensor_parallel import construct_tensor_pa
 from galvatron.core.tensor_parallel import ParallelMLP, ParallelAttention
 from galvatron.models.gpt_hf.GPTModel_checkpoint import load_gpt_module
 from galvatron.core import get_args
+from galvatron.core.initialize import init_empty_weights
+from galvatron.models.gpt_hf.meta_configs import config_from_meta, set_model_config
 
 def get_hybrid_parallel_configs(model_config, training_args):
     hybrid_parallel_configs = get_hybrid_parallel_configs_api(model_config, training_args, GPTModelInfo)
@@ -35,11 +37,23 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
     )
     return hp_model
 
+def get_gpt_config(args):
+    config = config_from_meta(args.model_size)
+    config = set_model_config(config, args, True)
+    if args.local_rank == 0:
+        print(config)
+    return config
+
 def gpt_model_hp(config, args):
     hybrid_parallel_configs = get_hybrid_parallel_configs(model_config=config, training_args=args)
     if args.local_rank == 0:
         print("Creating Model...")
-    gpt_model = GPT2LMHeadModel(config)
+    if args.initialize_on_meta:
+        with init_empty_weights():
+            gpt_model = GPT2LMHeadModel(config)
+    else:
+        gpt_model = GPT2LMHeadModel(config)
+
     model = construct_hybrid_parallel_model(
         model=gpt_model, 
         model_config=config, 

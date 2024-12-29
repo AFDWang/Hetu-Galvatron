@@ -201,7 +201,7 @@ class GalvatronProfiler():
                         iter_time * 1e3,
                         self.args.lr if learning_rate is None else learning_rate,
                         loss.item(),
-                        grad_norm
+                        0.0 if grad_norm is None else grad_norm
                     ))
     
     def profile_time_python(self, iter):

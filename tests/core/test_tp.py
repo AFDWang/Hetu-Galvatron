@@ -13,12 +13,14 @@ from megatron.training.global_vars import set_args
 from megatron.core.tensor_parallel import random
 from megatron.core.parallel_state import initialize_model_parallel
 from torch.optim import Adam
+from torch.cuda.amp import autocast, GradScaler
 
 def _run_test(args: Dict[str, Any]):
     """Run data parallel correctness test"""
     rank, world_size = init_dist_env()
-    dp_size = args["dp_size"]
-    assert dp_size == world_size, "Distributed environment is not correctly initialized"
+    tp_size = args["tp_size"]
+    sp_type = args["sp"]
+    dp_size = world_size // tp_size
     model_type = args["model_type"]
     backend = args["backend"]
     batch_size = args["batch_size"]
@@ -41,9 +43,21 @@ def _run_test(args: Dict[str, Any]):
     # Set custom args
     args.global_train_batch_size = batch_size
     args.chunks = chunks
+    args.mixed_precision = "bf16"
+    args.use_flash_attn = True
+    args.default_dp_type = "zero2"
+    args.tp_deg = tp_size
+    args.vocab_tp = tp_size
+    if sp_type == "megatron-sp":
+        args.sequence_parallel = True
+    elif sp_type == "ulysses-sp":
+        args.sequence_parallel = True
+        args.use_ulysses = True
+        args.vocap_sp = 1
+
     set_args(args)
 
-    if rank == 0:
+    if rank == world_size - 1:
         baseline_model = components.ModelClass(config)
         baseline_optimizer = Adam(baseline_model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
         baseline_model.save_pretrained(checkpoint_dir["baseline"])
@@ -62,74 +76,79 @@ def _run_test(args: Dict[str, Any]):
         collate_fn = components.collate_fn
     )
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
-
+    
     for i, batch in enumerate(trainloader):
         tokens, kwargs, loss_func = batch
         input_ids = tokens
         batch = [input_ids]
-        if rank == 0:
-            gathered_input_ids = [torch.zeros_like(input_ids) for _ in range(world_size)]
-            gathered_labels = [torch.zeros_like(kwargs["labels"]) for _ in range(world_size)]
-        else:
-            gathered_input_ids = None
-            gathered_labels = None
-        torch.distributed.gather(input_ids, gathered_input_ids, dst=0)
-        torch.distributed.gather(kwargs["labels"], gathered_labels, dst=0)
-        
+        if input_ids is not None:
+            gathered_input_ids = [torch.zeros_like(input_ids) for _ in range(dp_size)]
+            gathered_labels = [torch.zeros_like(kwargs["labels"]) for _ in range(dp_size)]
+            torch.distributed.all_gather(gathered_input_ids, input_ids, group=model.dp_groups_whole[0].group)
+            torch.distributed.all_gather(gathered_labels, kwargs["labels"], group=model.dp_groups_whole[0].group)
         loss = model.forward_backward(batch, i, None, 
                                     loss_func=loss_func,
                                     **kwargs)
-        loss = torch.tensor(loss, device=device, dtype=torch.float)
         optimizer.step()
         optimizer.zero_grad()
 
-        torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG)
+        if loss is not None:
+            loss = torch.tensor(loss, device=device, dtype=torch.float)
+            torch.distributed.all_reduce(loss, op=torch.distributed.ReduceOp.AVG, group=model.dp_groups_whole[0].group)
 
-        if rank == 0:
+        if rank == world_size - 1:
             full_batch = torch.cat(gathered_input_ids, dim=0)
             full_labels = torch.cat(gathered_labels, dim=0)
-            shift_logits = baseline_model(input_ids=full_batch).logits
-            from torch.nn import CrossEntropyLoss
-            loss_fct = CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-            shift_labels = full_labels.view(-1)
-            shift_labels = shift_labels.to(shift_logits.device)
-            baseline_loss = loss_fct(shift_logits, shift_labels)
+            with autocast(dtype = torch.bfloat16):
+                shift_logits = baseline_model(input_ids=full_batch).logits
+                from torch.nn import CrossEntropyLoss
+                loss_fct = CrossEntropyLoss()
+                shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+                shift_labels = full_labels.view(-1)
+                shift_labels = shift_labels.to(shift_logits.device)
+                baseline_loss = loss_fct(shift_logits, shift_labels)
+            
             baseline_loss.backward()
             baseline_optimizer.step()
             baseline_optimizer.zero_grad()
+        else:
+            baseline_loss = torch.tensor(0.0, device=device, dtype=torch.float)
+            loss = torch.tensor(0.0, device=device, dtype=torch.float)
 
-            # print(f"loss: {loss}, baseline_loss: {baseline_loss}")
+        torch.distributed.broadcast(baseline_loss, src=world_size-1)
+        torch.distributed.broadcast(loss, src=world_size-1)
 
-            assert torch.allclose(loss, baseline_loss, atol=1e-4), f"Loss is not correct in iteration {i}: {loss} vs {baseline_loss}"
-        
+        assert torch.allclose(loss, baseline_loss, atol=5e-3), f"Loss is not correct in iteration {i}: {loss} vs {baseline_loss}"
+
+        torch.distributed.barrier()
         if i == num_steps - 1:
             break
 
 @pytest.mark.distributed
-@pytest.mark.model
-@pytest.mark.parametrize("model_type", ["gpt", "llama", "llama2"])
+@pytest.mark.parallel
+@pytest.mark.parametrize("model_type", ["gpt"])
 @pytest.mark.parametrize("backend", ["hf"])
-@pytest.mark.parametrize("dp_size", [8])
-# @pytest.mark.parametrize("model_type", ["gpt", "llama", "llama2"])
-# @pytest.mark.parametrize("backend", ["hf", "fa"])
-# @pytest.mark.parametrize("dp_size", [8])
-def test_dp_correctness(run_distributed, model_type, backend, dp_size, checkpoint_dir):
-    """Test data parallel training correctness"""
+@pytest.mark.parametrize("world_size", [8])
+@pytest.mark.parametrize("tp_size", [2, 4])
+@pytest.mark.parametrize("sp", ["no_sp", "megatron-sp", "ulysses-sp"])
+@pytest.mark.parametrize("chunks", [2])   
+def test_tp(run_distributed, model_type, backend, world_size, tp_size, sp, chunks, checkpoint_dir):
+    """Test tensor parallel training correctness"""
     config = {
         "model_type": model_type,
         "backend": backend,
-        "dp_size": dp_size,
-        "batch_size": 16,
-        "chunks": 2,
+        "tp_size": tp_size,
+        "sp": sp,
+        "batch_size": 32,
+        "chunks": chunks,
         "num_steps": 3,
         "seed": 42,
-        "checkpoint_dir": checkpoint_dir
+        "checkpoint_dir": checkpoint_dir,
     }
     
     run_distributed(
         func_name="_run_test",
-        world_size=dp_size,
+        world_size=world_size,
         args=config,
         script=__file__
     )

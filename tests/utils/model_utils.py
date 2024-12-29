@@ -21,7 +21,7 @@ class ModelFactory:
         Returns:
             ModelComponents containing all necessary model components
         """
-        if model_type == "gpt" and backend == "hf":
+        if model_type.startswith("gpt") and backend == "hf":
             from galvatron.models.gpt_hf.GPTModel_hybrid_parallel import (
                 get_gpt_config as get_model_config,
                 gpt_model_hp as get_model,
@@ -33,7 +33,7 @@ class ModelFactory:
                 random_collate_fn as collate_fn
             )
         
-        elif (model_type == "llama" or model_type == "llama2") and backend == "hf":
+        elif model_type.startswith("llama") and backend == "hf":
             from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import(
                 get_llama_config as get_model_config,
                 llama_model_hp as get_model,
@@ -45,7 +45,7 @@ class ModelFactory:
                 random_collate_fn as collate_fn
             )
 
-        elif model_type == "gpt" and backend == "fa":
+        elif model_type.startswith("gpt") and backend == "fa":
             from galvatron.models.gpt_fa.GPTModel_hybrid_parallel import (
                 get_gpt_config as get_model_config,
                 gpt_model_hp as get_model,
@@ -57,7 +57,7 @@ class ModelFactory:
             )
             convert_checkpoints = None
             
-        elif (model_type == "llama" or model_type == "llama2") and backend == "fa":
+        elif model_type.startswith("llama") and backend == "fa":
             from galvatron.models.llama_fa.LlamaModel_hybrid_parallel import (
                 get_llama_config as get_model_config,
                 llama_model_hp as get_model,

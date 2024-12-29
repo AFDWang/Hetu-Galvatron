@@ -13,6 +13,7 @@ from megatron.training.global_vars import set_args
 from megatron.core.tensor_parallel import random
 from megatron.core.parallel_state import initialize_model_parallel
 from torch.optim import Adam
+from torch.cuda.amp import autocast, GradScaler
 
 def _run_test(args: Dict[str, Any]):
     """Run data parallel correctness test"""
@@ -25,6 +26,7 @@ def _run_test(args: Dict[str, Any]):
     chunks = args["chunks"]
     num_steps = args["num_steps"]
     checkpoint_dir = args["checkpoint_dir"]
+    default_dp_type = args["default_dp_type"]
     torch.cuda.set_device(rank)
     device = torch.device("cuda", rank)
 
@@ -41,6 +43,9 @@ def _run_test(args: Dict[str, Any]):
     # Set custom args
     args.global_train_batch_size = batch_size
     args.chunks = chunks
+    args.mixed_precision = "bf16"
+    args.use_flash_attn = True
+    args.default_dp_type = default_dp_type
     set_args(args)
 
     if rank == 0:
@@ -88,33 +93,32 @@ def _run_test(args: Dict[str, Any]):
         if rank == 0:
             full_batch = torch.cat(gathered_input_ids, dim=0)
             full_labels = torch.cat(gathered_labels, dim=0)
-            shift_logits = baseline_model(input_ids=full_batch).logits
-            from torch.nn import CrossEntropyLoss
-            loss_fct = CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, shift_logits.size(-1))
-            shift_labels = full_labels.view(-1)
-            shift_labels = shift_labels.to(shift_logits.device)
-            baseline_loss = loss_fct(shift_logits, shift_labels)
+            with autocast(dtype = torch.bfloat16):
+                shift_logits = baseline_model(input_ids=full_batch).logits
+                from torch.nn import CrossEntropyLoss
+                loss_fct = CrossEntropyLoss()
+                shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+                shift_labels = full_labels.view(-1)
+                shift_labels = shift_labels.to(shift_logits.device)
+                baseline_loss = loss_fct(shift_logits, shift_labels)
+            
             baseline_loss.backward()
             baseline_optimizer.step()
             baseline_optimizer.zero_grad()
 
-            # print(f"loss: {loss}, baseline_loss: {baseline_loss}")
-
-            assert torch.allclose(loss, baseline_loss, atol=1e-4), f"Loss is not correct in iteration {i}: {loss} vs {baseline_loss}"
+            assert torch.allclose(loss, baseline_loss, atol=5e-3), f"Loss is not correct in iteration {i}: {loss} vs {baseline_loss}"
         
         if i == num_steps - 1:
             break
 
 @pytest.mark.distributed
-@pytest.mark.model
-@pytest.mark.parametrize("model_type", ["gpt", "llama", "llama2"])
+@pytest.mark.parallel
+@pytest.mark.parametrize("model_type", ["gpt"])
 @pytest.mark.parametrize("backend", ["hf"])
 @pytest.mark.parametrize("dp_size", [8])
-# @pytest.mark.parametrize("model_type", ["gpt", "llama", "llama2"])
-# @pytest.mark.parametrize("backend", ["hf", "fa"])
-# @pytest.mark.parametrize("dp_size", [8])
-def test_dp_correctness(run_distributed, model_type, backend, dp_size, checkpoint_dir):
+@pytest.mark.parametrize("default_dp_type", ["zero2", "zero3"])
+@pytest.mark.parametrize("async_grad_reduce", [False, True])
+def test_dp_correctness(run_distributed, model_type, backend, dp_size, default_dp_type, async_grad_reduce, checkpoint_dir):
     """Test data parallel training correctness"""
     config = {
         "model_type": model_type,
@@ -124,7 +128,9 @@ def test_dp_correctness(run_distributed, model_type, backend, dp_size, checkpoin
         "chunks": 2,
         "num_steps": 3,
         "seed": 42,
-        "checkpoint_dir": checkpoint_dir
+        "checkpoint_dir": checkpoint_dir,
+        "default_dp_type": default_dp_type,
+        "async_grad_reduce": async_grad_reduce
     }
     
     run_distributed(

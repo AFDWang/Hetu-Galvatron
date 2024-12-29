@@ -93,17 +93,17 @@ def _allreduce_word_embedding_no_pipeline(wte_model, wte_attr_name, lmhead_model
         wte._handle.flat_param.data.copy_((wte._handle.flat_param.data + lmhead._handle.flat_param.data) / 2)
         lmhead._handle.flat_param.data.copy_((wte._handle.flat_param.data + lmhead._handle.flat_param.data) / 2)
         
-# For Finalization of Model Gradients
+# For Finalization of Model Parameters
 @torch.no_grad()
 def _allreduce_word_embedding(module, tied_wte_attr_name, group):
     word_embedding = rgetattr(module.module, tied_wte_attr_name)
     if hasattr(word_embedding, "_handles"):
         for handle in word_embedding._handles:
             assert handle.flat_param.data is not None
-            dist.all_reduce(handle.flat_param.data, group=group)
+            dist.all_reduce(handle.flat_param.data, op=dist.ReduceOp.AVG, group=group)
     else:
         assert word_embedding._handle.flat_param.data is not None
-        dist.all_reduce(word_embedding._handle.flat_param.data, group=group)
+        dist.all_reduce(word_embedding._handle.flat_param.data, op=dist.ReduceOp.AVG, group=group)
         
 @torch.no_grad()
 def _allreduce_word_embedding_grads_no_pipeline(wte_model, wte_attr_name, lmhead_model, lmhead_attr_name):

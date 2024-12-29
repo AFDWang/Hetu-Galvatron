@@ -56,27 +56,27 @@ except ImportError:
         hyperparameters: transformer hyperparameters
 """
 
-class DropPath(MegatronModule):
-    """Drop paths (Stochastic Depth) per sample
-    (when applied in main path of residual blocks).
-    """
+# class DropPath(MegatronModule):
+#     """Drop paths (Stochastic Depth) per sample
+#     (when applied in main path of residual blocks).
+#     """
 
-    def __init__(self, drop_prob=0.):
-        super(DropPath, self).__init__()
-        self.drop_prob = drop_prob
+#     def __init__(self, drop_prob=0.):
+#         super(DropPath, self).__init__()
+#         self.drop_prob = drop_prob
 
-    def forward(self, hidden_state):
-        if self.drop_prob == 0. or not self.training:
-            return hidden_state
-        keep_prob = 1 - self.drop_prob
-        # work with diff dim tensors, not just 2D ConvNets
-        # hidden_state: [s, b, h]
-        shape = (1,) + (hidden_state.shape[1],) + (1,) * (hidden_state.ndim - 2)
-        random_tensor = keep_prob + \
-            torch.rand(shape, dtype=hidden_state.dtype, device=hidden_state.device)
-        random_tensor.floor_()  # binarize
-        output = hidden_state.div(keep_prob) * random_tensor
-        return output
+#     def forward(self, hidden_state):
+#         if self.drop_prob == 0. or not self.training:
+#             return hidden_state
+#         keep_prob = 1 - self.drop_prob
+#         # work with diff dim tensors, not just 2D ConvNets
+#         # hidden_state: [s, b, h]
+#         shape = (1,) + (hidden_state.shape[1],) + (1,) * (hidden_state.ndim - 2)
+#         random_tensor = keep_prob + \
+#             torch.rand(shape, dtype=hidden_state.dtype, device=hidden_state.device)
+#         random_tensor.floor_()  # binarize
+#         output = hidden_state.div(keep_prob) * random_tensor
+#         return output
 
 class ParallelMLP(MegatronModule):
     """MLP.
@@ -161,148 +161,148 @@ class ParallelMLP(MegatronModule):
         output, output_bias = self.dense_4h_to_h(intermediate_parallel)
         return output, output_bias
 
-def sinkhorn(cost, tol=0.0001):
-    cost = torch.exp(cost)
-    d0 = torch.ones(cost.size(0), device=cost.device, dtype=cost.dtype)
-    d1 = torch.ones(cost.size(1), device=cost.device, dtype=cost.dtype)
+# def sinkhorn(cost, tol=0.0001):
+#     cost = torch.exp(cost)
+#     d0 = torch.ones(cost.size(0), device=cost.device, dtype=cost.dtype)
+#     d1 = torch.ones(cost.size(1), device=cost.device, dtype=cost.dtype)
     
-    eps = 0.00000001
-    error = 1e9
-    d1_old = d1
-    while error > tol:
-        d0 = (1/d0.size(0))*1/(torch.sum(d1*cost,1) + eps)
-        d1 = (1/d1.size(0))*1/(torch.sum(d0.unsqueeze(1)*cost,0)+eps)
-        error = torch.mean(torch.abs(d1_old-d1))
-        d1_old = d1
-    return d1*cost*d0.unsqueeze(1)
+#     eps = 0.00000001
+#     error = 1e9
+#     d1_old = d1
+#     while error > tol:
+#         d0 = (1/d0.size(0))*1/(torch.sum(d1*cost,1) + eps)
+#         d1 = (1/d1.size(0))*1/(torch.sum(d0.unsqueeze(1)*cost,0)+eps)
+#         error = torch.mean(torch.abs(d1_old-d1))
+#         d1_old = d1
+#     return d1*cost*d0.unsqueeze(1)
 
 
-def get_router_linear_layer(config):
-    args = get_args()
-    router = torch.nn.Linear(args.hidden_size, args.num_experts, bias=False)
-    with get_cuda_rng_tracker().fork(get_data_parallel_rng_tracker_name()):
-        config.init_method(router.weight)
-    setattr(router.weight, 'sequence_parallel',config.sequence_parallel)
-    return router
+# def get_router_linear_layer(config):
+#     args = get_args()
+#     router = torch.nn.Linear(args.hidden_size, args.num_experts, bias=False)
+#     with get_cuda_rng_tracker().fork(get_data_parallel_rng_tracker_name()):
+#         config.init_method(router.weight)
+#     setattr(router.weight, 'sequence_parallel',config.sequence_parallel)
+#     return router
 
 
-class SwitchMLP(MegatronModule):
-    """
-    Routes input to one of N MLP "experts"
-    """
-    def __init__(self, config):
-        super(SwitchMLP, self).__init__()
-        args = get_args()
-        self.router = get_router_linear_layer(config)
-        self.expert_parallel_size = mpu.get_expert_model_parallel_world_size()
-        self.sequence_parallel = config.sequence_parallel
-        self.add_bias = config.add_bias_linear
+# class SwitchMLP(MegatronModule):
+#     """
+#     Routes input to one of N MLP "experts"
+#     """
+#     def __init__(self, config):
+#         super(SwitchMLP, self).__init__()
+#         args = get_args()
+#         self.router = get_router_linear_layer(config)
+#         self.expert_parallel_size = mpu.get_expert_model_parallel_world_size()
+#         self.sequence_parallel = config.sequence_parallel
+#         self.add_bias = config.add_bias_linear
 
-        assert args.num_experts % self.expert_parallel_size == 0
-        self.num_local_experts = args.num_experts // self.expert_parallel_size
-        local_expert_indices_offset = mpu.get_expert_model_parallel_rank() * self.num_local_experts
-        self.local_expert_indices = [local_expert_indices_offset + i for i in range(self.num_local_experts)]
+#         assert args.num_experts % self.expert_parallel_size == 0
+#         self.num_local_experts = args.num_experts // self.expert_parallel_size
+#         local_expert_indices_offset = mpu.get_expert_model_parallel_rank() * self.num_local_experts
+#         self.local_expert_indices = [local_expert_indices_offset + i for i in range(self.num_local_experts)]
 
-        self.local_experts = torch.nn.ModuleList()
-        for i in range(self.num_local_experts):
-            self.local_experts.append(ParallelMLP(config, is_expert=True))
+#         self.local_experts = torch.nn.ModuleList()
+#         for i in range(self.num_local_experts):
+#             self.local_experts.append(ParallelMLP(config, is_expert=True))
 
-    def gather_indices(self, local_indices):
-        """ Gather tensors and concatinate along the first dimension."""
-        group = get_tensor_and_expert_parallel_group()
-        world_size = torch.distributed.get_world_size(group=group)
-        # Bypass the function if we are using only 1 GPU.
-        if world_size == 1:
-            return local_indices
+#     def gather_indices(self, local_indices):
+#         """ Gather tensors and concatinate along the first dimension."""
+#         group = get_tensor_and_expert_parallel_group()
+#         world_size = torch.distributed.get_world_size(group=group)
+#         # Bypass the function if we are using only 1 GPU.
+#         if world_size == 1:
+#             return local_indices
 
-        dim_size = list(local_indices.size())
-        dim_size[0] = dim_size[0] * world_size
+#         dim_size = list(local_indices.size())
+#         dim_size[0] = dim_size[0] * world_size
 
-        # TODO pre allocate memory
-        output = torch.empty(dim_size, dtype=local_indices.dtype,
-                             device=torch.cuda.current_device())
-        torch.distributed._all_gather_base(
-            output, local_indices.contiguous(), group=group
-        )
-        return output
+#         # TODO pre allocate memory
+#         output = torch.empty(dim_size, dtype=local_indices.dtype,
+#                              device=torch.cuda.current_device())
+#         torch.distributed._all_gather_base(
+#             output, local_indices.contiguous(), group=group
+#         )
+#         return output
 
-    def forward(self, hidden_states):
-        # hidden_states: [b, s, h]
-        args = get_args()
-        s = hidden_states.size(0)
-        b = hidden_states.size(1)
-        h = hidden_states.size(2)
-        route = self.router(hidden_states).view(-1, args.num_experts)
+#     def forward(self, hidden_states):
+#         # hidden_states: [b, s, h]
+#         args = get_args()
+#         s = hidden_states.size(0)
+#         b = hidden_states.size(1)
+#         h = hidden_states.size(2)
+#         route = self.router(hidden_states).view(-1, args.num_experts)
         
-        # TODO (rprenger) Right now we're just using the sinkhorn algorithm
-        # for load balancing. There should be an option to do no load balancing
-        # and the algorithm and parametets should be further tested
-        if self.training:
-            with torch.no_grad():
-                sinkroute = sinkhorn(route.detach().to(dtype=torch.float32))
-                _, max_ind = torch.max(sinkroute, dim=1)
-            route = torch.sigmoid(route)
-            max_prob = route[torch.arange(route.size(0)), max_ind]
-        else:
-            route = torch.sigmoid(route)
-            max_prob, max_ind = torch.max(route, dim=1)
+#         # TODO (rprenger) Right now we're just using the sinkhorn algorithm
+#         # for load balancing. There should be an option to do no load balancing
+#         # and the algorithm and parametets should be further tested
+#         if self.training:
+#             with torch.no_grad():
+#                 sinkroute = sinkhorn(route.detach().to(dtype=torch.float32))
+#                 _, max_ind = torch.max(sinkroute, dim=1)
+#             route = torch.sigmoid(route)
+#             max_prob = route[torch.arange(route.size(0)), max_ind]
+#         else:
+#             route = torch.sigmoid(route)
+#             max_prob, max_ind = torch.max(route, dim=1)
 
-        max_prob = torch.unsqueeze(max_prob, 1)
-        hidden_states = hidden_states.view(-1, hidden_states.size(2))
+#         max_prob = torch.unsqueeze(max_prob, 1)
+#         hidden_states = hidden_states.view(-1, hidden_states.size(2))
 
-        # TODO (rprenger) TODO this could be made easier to read
-        # Converting [s, b, h] to [s*b, h].
-        # Each vector could be routed differently
-        if self.sequence_parallel or (self.expert_parallel_size > 1):
-            global_hidden_states = \
-                gather_from_sequence_parallel_region_to_moe(hidden_states)
-            global_indices = self.gather_indices(max_ind)
-        else:
-            global_hidden_states = hidden_states
-            global_indices = max_ind
+#         # TODO (rprenger) TODO this could be made easier to read
+#         # Converting [s, b, h] to [s*b, h].
+#         # Each vector could be routed differently
+#         if self.sequence_parallel or (self.expert_parallel_size > 1):
+#             global_hidden_states = \
+#                 gather_from_sequence_parallel_region_to_moe(hidden_states)
+#             global_indices = self.gather_indices(max_ind)
+#         else:
+#             global_hidden_states = hidden_states
+#             global_indices = max_ind
 
-        output_total = torch.zeros_like(global_hidden_states)
-        if self.add_bias:
-            output_bias_total = torch.zeros_like(global_hidden_states)
+#         output_total = torch.zeros_like(global_hidden_states)
+#         if self.add_bias:
+#             output_bias_total = torch.zeros_like(global_hidden_states)
 
-        for expert_num, expert in enumerate(self.local_experts):
-            local_expert_index = self.local_expert_indices[expert_num]
-            local_indices = (global_indices == local_expert_index).nonzero()
-            hidden = global_hidden_states[local_indices, :]
-            output, output_bias = expert(hidden)
-            output_total[local_indices, :] = output
-            if self.add_bias:
-                output_bias = output_bias.expand_as(output)
-                output_bias_total[local_indices, :] = output_bias
+#         for expert_num, expert in enumerate(self.local_experts):
+#             local_expert_index = self.local_expert_indices[expert_num]
+#             local_indices = (global_indices == local_expert_index).nonzero()
+#             hidden = global_hidden_states[local_indices, :]
+#             output, output_bias = expert(hidden)
+#             output_total[local_indices, :] = output
+#             if self.add_bias:
+#                 output_bias = output_bias.expand_as(output)
+#                 output_bias_total[local_indices, :] = output_bias
 
-        if self.sequence_parallel or (self.expert_parallel_size > 1):
-            output_total = \
-                reduce_scatter_to_sequence_parallel_region_from_moe(output_total)
-            if self.add_bias:
-                output_bias_total = \
-                    reduce_scatter_to_sequence_parallel_region_from_moe(output_bias_total)
+#         if self.sequence_parallel or (self.expert_parallel_size > 1):
+#             output_total = \
+#                 reduce_scatter_to_sequence_parallel_region_from_moe(output_total)
+#             if self.add_bias:
+#                 output_bias_total = \
+#                     reduce_scatter_to_sequence_parallel_region_from_moe(output_bias_total)
 
-                # bias is duplicated across tensor parallelism ranks;
-                # reduce scatter reduces bias across tensor parallel_ranks
-                output_bias_total = \
-                    output_bias_total/mpu.get_tensor_model_parallel_world_size()
+#                 # bias is duplicated across tensor parallelism ranks;
+#                 # reduce scatter reduces bias across tensor parallel_ranks
+#                 output_bias_total = \
+#                     output_bias_total/mpu.get_tensor_model_parallel_world_size()
 
-        output_total = output_total*max_prob
-        output_total = output_total.view(s, b, h)
-        if self.add_bias:
-            output_bias_total = output_bias_total*max_prob
-            output_bias_total = output_bias_total.view(s, b, h)
-        else:
-            output_bias_total = None
+#         output_total = output_total*max_prob
+#         output_total = output_total.view(s, b, h)
+#         if self.add_bias:
+#             output_bias_total = output_bias_total*max_prob
+#             output_bias_total = output_bias_total.view(s, b, h)
+#         else:
+#             output_bias_total = None
 
-        return output_total, output_bias_total
+#         return output_total, output_bias_total
 
 
 class CoreAttention(MegatronModule):
 
     def __init__(self, layer_number, config,
                  attn_mask_type=AttnMaskType.padding,
-                 tp_group=None):
+                 tp_group=None, sp_group=None):
         super(CoreAttention, self).__init__()
         self.fp16 = config.fp16
         self.bf16 = config.bf16
@@ -322,6 +322,11 @@ class CoreAttention(MegatronModule):
             world_size = mpu.get_tensor_model_parallel_world_size()
         else:
             world_size = tensor_parallel.get_tensor_model_parallel_world_size_group(tp_group)
+        if sp_group is None:
+            sp_world_size = 1
+        else:
+            sp_world_size = torch.distributed.get_world_size(sp_group)
+        world_size = max(world_size, sp_world_size)
         self.hidden_size_per_partition = core.utils.divide(projection_size,
                                                            world_size)
         self.hidden_size_per_attention_head = core.utils.divide(
@@ -602,7 +607,7 @@ class ParallelAttention(MegatronModule):
                 tp_group=tp_group)
 
         self.core_attention = CoreAttention(self.layer_number, config,
-                                            self.attn_mask_type, tp_group=tp_group)
+                                            self.attn_mask_type, tp_group=tp_group, sp_group=sp_group)
         self.checkpoint_core_attention = config.recompute_granularity == 'selective'
 
         if self.use_flash_attn:
@@ -889,969 +894,969 @@ def bias_dropout_add_fused_inference(x: torch.Tensor,
     return bias_dropout_add(x, bias, residual, prob, False)
 
 
-class ParallelTransformerLayer(MegatronModule):
-    """A single transformer layer.
-
-    Transformer layer takes input with size [s, b, h] and returns an
-    output of the same size.
-    """
-
-    def __init__(self, config,
-                 layer_number, layer_type=LayerType.encoder,
-                 self_attn_mask_type=AttnMaskType.padding,
-                 drop_path_rate=0.):
-        args = get_args()
-
-        super(ParallelTransformerLayer, self).__init__()
-        self.layer_number = layer_number
-        self.layer_type = layer_type
-
-        self.apply_residual_connection_post_norm \
-            = config.apply_residual_connection_post_layernorm
-
-        self.bf16 = config.bf16
-        self.fp32_residual_connection = config.fp32_residual_connection
-
-        # Normalize the input data.
-        self.input_norm = get_norm(config)
-
-        # Self attention.
-        self.self_attention = ParallelAttention(
-            config,
-            layer_number,
-            attention_type=AttnType.self_attn,
-            attn_mask_type=self_attn_mask_type)
-        self.hidden_dropout = config.hidden_dropout
-        self.bias_dropout_fusion = config.bias_dropout_fusion
-        self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0.0 else None
-
-        # Normalize the attention output
-        self.post_attention_norm = get_norm(config)
-
-        # Cross attention.
-        if self.layer_type in (LayerType.decoder,
-                               LayerType.retro_decoder,
-                               LayerType.retro_decoder_with_retriever,
-                               LayerType.retro_encoder):
-            self.inter_attention = ParallelAttention(
-                config,
-                layer_number,
-                attention_type=AttnType.cross_attn)
-            # Normalize the attention output.
-            self.post_inter_attention_norm = get_norm(config)
-
-        # MLP
-        if args.num_experts is not None:
-            self.mlp = SwitchMLP(config)
-        else:
-            self.mlp = ParallelMLP(config)
-
-        # Set bias+dropout+add fusion grad_enable execution handler.
-        TORCH_MAJOR = int(torch.__version__.split('.')[0])
-        TORCH_MINOR = int(torch.__version__.split('.')[1])
-        use_nvfuser = TORCH_MAJOR > 1 or (TORCH_MAJOR == 1 and TORCH_MINOR >= 10)
-        self.bias_dropout_add_exec_handler = \
-                nullcontext if use_nvfuser else torch.enable_grad
-
-        if args.retro_add_retriever:
-            self.retro_num_neighbors = args.retro_num_neighbors
-            self.retro_chunk_length = args.retro_chunk_length
-            self.retro_retrieved_length = \
-                args.retro_num_retrieved_chunks * args.retro_chunk_length
-
-        # Retriever (bi-directional transformer with cross attention)
-        if layer_type == LayerType.retro_decoder_with_retriever:
-            self.retriever = ParallelTransformer(
-                config=config,
-                model_type=ModelType.retro_encoder,
-                self_attn_mask_type=AttnMaskType.padding,
-                pre_process=True,
-                post_process=False,
-            )
-            self._retriever_key = 'retriever'
-        else:
-            self.retriever = None
-
-    def default_decoder_cross_attention(self,
-                                        encoder_output,
-                                        enc_dec_attn_mask,
-                                        norm_input,
-                                        norm_output,
-                                        bias_dropout_add_func):
-        '''Cross attention for a standard encoder-decoder model.'''
-
-        # Attention.
-        attention_output, attention_bias = \
-            self.inter_attention(norm_output,
-                                 enc_dec_attn_mask,
-                                 encoder_output=encoder_output)
-
-        # Residual connection.
-        if self.apply_residual_connection_post_norm:
-            residual = norm_output
-        else:
-            residual = norm_input
-
-        if attention_bias is not None:
-            attention_bias = attention_bias.expand_as(residual)
-
-        # Bias-dropout-add.
-        with self.bias_dropout_add_exec_handler():
-            norm_input = bias_dropout_add_func(
-                attention_output,
-                attention_bias,
-                residual,
-                self.hidden_dropout)
-
-        # Normalize.
-        norm_output = self.post_inter_attention_norm(norm_input)
-
-        return norm_input, norm_output
-
-    def retro_encoder_cross_attention(self,
-                                      retriever_output,
-                                      norm_input,
-                                      norm_output,
-                                      bias_dropout_add_func):
-        """Cross attention for Retro encoder.
-
-        Notation:
-            ns : Sequence length.
-            bs : Batch size.
-            d  : Hidden size.
-            l  : Number of chunks per sample (i.e., seq_length/chunk_length).
-            k  : Number of neighbors.
-            r  : Number of retrieved tokens (neighbors + continuation).
-        """
-
-        ns, bs, d = norm_output.shape # [r, bs * l * k, d]
-
-        # Divide sequence dimension into chunks.
-        chunked_outputs = norm_output.reshape(self.retro_retrieved_length,
-                                              -1,
-                                              self.retro_num_neighbors,
-                                              d)
-        chunked_outputs_before_norm = \
-            norm_input.reshape(self.retro_retrieved_length, -1,
-                               self.retro_num_neighbors, d) # [r, bs*l, k, d]
-
-        # Per-chunk attention.
-        norm_inputs = []
-        norm_outputs = []
-        for k in range(self.retro_num_neighbors):
-
-            # Attention.
-            chunked_output = chunked_outputs[:,:,k].contiguous()
-            attention_output, attention_bias = \
-                self.inter_attention(
-                    chunked_output, # Q (neighbor embedding)
-                    None,
-                    encoder_output=retriever_output) # K, V (hidden act)
-
-            # Residual connection.
-            if self.apply_residual_connection_post_norm:
-                residual = chunked_output
-            else:
-                residual = chunked_outputs_before_norm[:,:,k]
-
-            # Re-enable torch grad to enable fused optimization.
-            with torch.enable_grad():
-                norm_input = bias_dropout_add_func(
-                    attention_output,
-                    None if attention_bias is None else attention_bias.expand_as(residual),
-                    residual,
-                    self.hidden_dropout)
-                norm_inputs.append(norm_input)
-
-            # Layer norm.
-            norm_output = self.post_inter_attention_norm(norm_input)
-            norm_outputs.append(norm_output)
-
-        # Concatenate layer norms.
-        # norm_input : [r, k * bs * l, d]
-        # norm_output : [r, k * bs * l, d]
-        norm_input = torch.stack(norm_inputs, dim=1).reshape(ns, bs, d)
-        norm_output = torch.stack(norm_outputs, dim=1).reshape(ns, bs, d)
-
-        return norm_input, norm_output
-
-    def retro_decoder_cross_attention(self,
-                                      retriever_input,
-                                      retriever_output,
-                                      retriever_attn_mask,
-                                      norm_input,
-                                      norm_output,
-                                      inference_params,
-                                      bias_dropout_add_func):
-        """Cross attention for Retro decoder.
-
-        Notation:
-            ns : Sequence length.
-            bs : Batch size.
-            d  : Hidden size.
-            l  : Number of chunks per sample (i.e., seq_length/chunk_length).
-            m  : Number of tokens per chunk.
-            k  : Number of neighbors.
-            r  : Number of retrieved tokens (neighbors + continuation).
-        """
-
-        ns, bs, d = norm_output.shape
-        l = int(np.ceil(ns / self.retro_chunk_length))
-
-        # Retrieve neighbors.
-        if self.layer_type == LayerType.retro_decoder_with_retriever:
-            first_ns = ns % self.retro_chunk_length
-            if first_ns > 0:
-                first_chunk, rest_chunk = \
-                    norm_output[:first_ns], norm_output[first_ns:]
-                first_chunk = torch.nn.functional.pad(
-                    first_chunk,
-                    (0, 0, 0, 0, 0, self.retro_chunk_length - first_ns),
-                    'constant',
-                    0)
-                chunked_output = \
-                    torch.cat((first_chunk, rest_chunk), dim=0) # [l * m, bs, d]
-            else:
-                chunked_output = norm_output # [l * m, bs, d]
-            chunked_output = chunked_output \
-                .reshape(l, self.retro_chunk_length, bs, d) \
-                .permute(1, 2, 0, 3) \
-                .reshape(self.retro_chunk_length, bs * l, d) \
-                .contiguous()
-
-            # Get Encoder Output
-            retriever_output = self.retriever(
-                hidden_states=retriever_input,
-                attention_mask=retriever_attn_mask,
-                retriever_output=chunked_output,
-                retriever_attn_mask=retriever_attn_mask,
-                inference_params=inference_params) # [r, k * bs * l , d]
-            retriever_output = retriever_output.reshape(
-                self.retro_retrieved_length * self.retro_num_neighbors, bs * l, d) # [r * k, bs * l, d]
-
-        # Chunks.
-        pad = (ns - 1) % self.retro_chunk_length
-        attending_chunks = norm_output[pad:]
-        padded_chunks = torch.nn.functional.pad(
-            attending_chunks,
-            (0, 0, 0, 0, 0, self.retro_chunk_length - 1),
-            'constant', 0)
-        padded_chunked_output = padded_chunks \
-            .reshape(l, self.retro_chunk_length, bs, d) \
-            .permute(1, 2, 0, 3)
-        padded_chunked_output = padded_chunked_output.reshape(
-            self.retro_chunk_length, bs * l, d).contiguous()
-
-        # Encoder output.
-        attention_output, attention_bias = \
-            self.inter_attention(padded_chunked_output,
-                                 None,
-                                 encoder_output=retriever_output)
-
-        # Residual connection.
-        if self.apply_residual_connection_post_norm:
-            residual = norm_output
-        else:
-            residual = norm_input
-
-        # Re-enable torch grad to enable fused optimization.
-        with torch.enable_grad():
-            norm_input = bias_dropout_add_func(
-                attention_output,
-                None if attention_bias is None else attention_bias.expand_as(attention_output),
-                torch.zeros_like(attention_output),
-                self.hidden_dropout)
-            norm_input = norm_input \
-                .reshape(self.retro_chunk_length, bs, l, d) \
-                .permute(2, 0, 1, 3) # [l, m, bs, d]
-            norm_input = norm_input.reshape(self.retro_chunk_length * l, bs, d)
-            norm_input = torch.nn.functional.pad(
-                norm_input,
-                (0, 0, 0, 0, pad, 0),
-                'constant', 0)[:ns] # [ns, b, d]
-            # TODO: better redesign with inference param
-            args = get_args()
-            norm_input = args.retro_attention_gate * norm_input + residual
-
-        # Layer norm post the decoder attention
-        norm_output = self.post_inter_attention_norm(norm_input)
-
-        return retriever_output, norm_input, norm_output
-
-    def forward(self, hidden_states, attention_mask,
-                encoder_output=None, enc_dec_attn_mask=None,
-                retriever_input=None,
-                retriever_output=None,
-                retriever_attn_mask=None,
-                inference_params=None,
-                rotary_pos_emb=None):
-
-        # Update the params in case the retro param changes during inference
-        # TODO: better redesign with inference param
-        args = get_args()
-        if args.retro_add_retriever:
-            self.retro_num_neighbors = args.retro_num_neighbors
-            self.retro_chunk_length = args.retro_chunk_length
-            self.retro_retrieved_length = \
-                args.retro_num_retrieved_chunks * args.retro_chunk_length
-
-        # hidden_states: [s, b, h]
-
-        # Layer norm at the beginning of the transformer layer.
-        norm_output = self.input_norm(hidden_states)
-
-        # Self attention.
-        attention_output, attention_bias = \
-            self.self_attention(
-                norm_output,
-                attention_mask,
-                inference_params=inference_params,
-                rotary_pos_emb=rotary_pos_emb)
-
-        # Residual connection.
-        if self.apply_residual_connection_post_norm:
-            residual = norm_output
-        else:
-            residual = hidden_states
-
-        if self.drop_path is None:
-            # jit scripting for a nn.module (with dropout) is not
-            # trigerring the fusion kernel. For now, we use two
-            # different nn.functional routines to account for varying
-            # dropout semantics during training and inference phases.
-            if self.bias_dropout_fusion:
-                if self.training:
-                    bias_dropout_add_func = bias_dropout_add_fused_train
-                else:
-                    bias_dropout_add_func = bias_dropout_add_fused_inference
-            else:
-                bias_dropout_add_func = get_bias_dropout_add(self.training)
-
-            if attention_bias is not None:
-                attention_bias = attention_bias.expand_as(residual)
-            with self.bias_dropout_add_exec_handler():
-                norm_input = bias_dropout_add_func(
-                    attention_output,
-                    attention_bias,
-                    residual,
-                    self.hidden_dropout)
-        else:
-            out = torch.nn.functional.dropout(attention_output + attention_bias,
-                                              p=self.hidden_dropout,
-                                              training=self.training)
-            norm_input = residual + self.drop_path(out)
-
-        # Layer norm post the self attention.
-        norm_output = self.post_attention_norm(norm_input)
-
-        # Cross attention.
-        if self.layer_type == LayerType.encoder:
-            pass
-        elif self.layer_type == LayerType.decoder:
-            norm_input, norm_output = \
-                self.default_decoder_cross_attention(
-                    encoder_output,
-                    enc_dec_attn_mask,
-                    norm_input,
-                    norm_output,
-                    bias_dropout_add_func)
-        elif self.layer_type == LayerType.retro_encoder:
-            norm_input, norm_output = \
-                self.retro_encoder_cross_attention(
-                    retriever_output,
-                    norm_input,
-                    norm_output,
-                    bias_dropout_add_func)
-        elif self.layer_type in (LayerType.retro_decoder,
-                                 LayerType.retro_decoder_with_retriever):
-            retriever_output, norm_input, norm_output = \
-                self.retro_decoder_cross_attention(
-                    retriever_input,
-                    retriever_output,
-                    retriever_attn_mask,
-                    norm_input,
-                    norm_output,
-                    inference_params,
-                    bias_dropout_add_func)
-        else:
-            raise Exception("Unsupported layer type, '%s'." %
-                            self.layer_type.name)
-
-        # MLP.
-        mlp_output, mlp_bias = self.mlp(norm_output)
-
-        # Second residual connection.
-        if self.apply_residual_connection_post_norm:
-            residual = norm_output
-        else:
-            residual = norm_input
-
-        if self.drop_path is None:
-            if mlp_bias is not None:
-                mlp_bias = mlp_bias.expand_as(residual)
-            with self.bias_dropout_add_exec_handler():
-                output = bias_dropout_add_func(
-                    mlp_output,
-                    mlp_bias,
-                    residual,
-                    self.hidden_dropout)
-
-            # Jit compiled function creates 'view' tensor. This tensor
-            # potentially gets saved in the MPU checkpoint function context,
-            # which rejects view tensors. While making a viewless tensor here
-            # won't result in memory savings (like the data loader, or
-            # p2p_communication), it serves to document the origin of this
-            # 'view' tensor.
-            output = core.utils.make_viewless_tensor(inp = output,
-                                                     requires_grad = output.requires_grad,
-                                                     keep_graph = True)
-
-        else:
-            if mlp_bias is not None:
-                mlp_output = mlp_output + mlp_bias
-            out = torch.nn.functional.dropout(mlp_output,
-                                              p=self.hidden_dropout,
-                                              training=self.training)
-            output = residual + self.drop_path(out)
-
-        if self.layer_type == LayerType.retro_decoder_with_retriever:
-            return output, retriever_output
-        else:
-            return output
-
-
-class NoopTransformerLayer(MegatronModule):
-    """A single 'no-op' transformer layer.
-
-    The sole purpose of this layer is for when a standalone embedding layer
-    is used (i.e., args.standalone_embedding_stage == True). In this case,
-    zero transformer layers are assigned when pipeline rank == 0. Additionally,
-    when virtual pipeline rank >= 1, zero total model parameters are created
-    (virtual rank 0 contains the input embedding). This results in the model's
-    input and output tensors being the same, which causes an error when
-    performing certain memory optimiations on the output tensor (e.g.,
-    deallocating it). Thus, this layer disconnects the input from the output
-    via a clone. Since ranks containing a no-op layer are generally under-
-    utilized (both compute and memory), there's no worry of any performance
-    degredation.
-    """
-
-    def __init__(self, layer_number):
-        super().__init__()
-        self.layer_number = layer_number
-
-    def forward(self, hidden_states, attention_mask,
-                encoder_output=None, enc_dec_attn_mask=None,
-                inference_params=None):
-        return hidden_states.clone()
-
-
-def _get_num_layers(args, model_type, is_decoder=False):
-    """Compute the number of transformer layers resident on the current rank."""
-    is_encoder_and_decoder_model = (model_type == ModelType.encoder_and_decoder)
-    if model_type == ModelType.retro_encoder:
-        num_layers = args.retro_encoder_layers
-    elif mpu.get_pipeline_model_parallel_world_size() > 1:
-        if is_encoder_and_decoder_model:
-            assert args.pipeline_model_parallel_split_rank is not None
-
-            # When a standalone embedding stage is used, a rank is taken from
-            # the encoder's ranks, to be used for the encoder's embedding
-            # layer. This way, the rank referenced by the 'split rank' remains
-            # the same whether or not a standalone embedding stage is used.
-            num_ranks_in_encoder = (
-                args.pipeline_model_parallel_split_rank - 1
-                if args.standalone_embedding_stage else
-                args.pipeline_model_parallel_split_rank
-            )
-            num_ranks_in_decoder = args.transformer_pipeline_model_parallel_size - num_ranks_in_encoder
-            assert args.encoder_num_layers % num_ranks_in_encoder == 0, \
-                    'encoder_num_layers (%d) must be divisible by number of ranks given to encoder (%d)' % (args.encoder_num_layers, num_ranks_in_encoder)
-            assert args.decoder_num_layers % num_ranks_in_decoder == 0, \
-                    'decoder_num_layers (%d) must be divisible by number of ranks given to decoder (%d)' % (args.decoder_num_layers, num_ranks_in_decoder)
-            if mpu.is_pipeline_stage_before_split():
-                num_layers = (
-                    0
-                    if args.standalone_embedding_stage
-                    and mpu.get_pipeline_model_parallel_rank() == 0 else
-                    args.encoder_num_layers // num_ranks_in_encoder
-                )
-            else:
-                num_layers = args.decoder_num_layers // num_ranks_in_decoder
-        else:
-            assert args.num_layers == args.encoder_num_layers
-            assert args.num_layers % args.transformer_pipeline_model_parallel_size == 0, \
-                'num_layers must be divisible by transformer_pipeline_model_parallel_size'
-
-            # When a standalone embedding stage is used, all transformer layers
-            # are divided among pipeline rank >= 1, while on pipeline rank 0,
-            # ranks either contain the input embedding layer (virtual pp rank 0),
-            # or no layers at all (virtual pp rank >= 1).
-            num_layers = (
-                0
-                if args.standalone_embedding_stage
-                and mpu.get_pipeline_model_parallel_rank() == 0 else
-                args.num_layers // args.transformer_pipeline_model_parallel_size
-            )
-    else:
-        if not is_decoder:
-            num_layers = args.encoder_num_layers
-        else:
-            num_layers = args.decoder_num_layers
-    return num_layers
-
-
-def _get_layer_type(model_type, default_layer_type, retro_layer_numbers,
-                    layer_number):
-    args = get_args()
-    if args.retro_add_retriever and layer_number in retro_layer_numbers:
-        if model_type == ModelType.retro_decoder:
-            return LayerType.retro_decoder_with_retriever \
-                if layer_number == retro_layer_numbers[0] \
-                   else LayerType.retro_decoder
-        elif model_type == ModelType.retro_encoder:
-            return LayerType.retro_encoder
-        else:
-            raise Exception("Unsupported model type, '%s'." % model_type)
-    else:
-        return default_layer_type
-
-
-class ParallelTransformer(MegatronModule):
-    """Transformer class."""
-
-    def __init__(self, config,
-                 model_type, layer_type=LayerType.encoder,
-                 self_attn_mask_type=AttnMaskType.padding,
-                 post_norm=True,
-                 pre_process=True,
-                 post_process=True,
-                 drop_path_rate=0.0):
-        super(ParallelTransformer, self).__init__()
-        args = get_args()
-
-        self.layer_type = layer_type
-        self.model_type = model_type
-        self.bf16 = config.bf16
-        self.fp32_residual_connection = config.fp32_residual_connection
-        self.post_norm = post_norm
-        self.pre_process = pre_process
-        self.post_process = post_process
-        self.input_tensor = None
-        self.drop_path_rate = drop_path_rate
-        self.transformer_impl = args.transformer_impl
-        self.retro_add_retriever = args.retro_add_retriever
-
-        # Store activation checkpoiting flag.
-        self.recompute_granularity = config.recompute_granularity
-        self.recompute_method = config.recompute_method
-        self.recompute_num_layers = config.recompute_num_layers
-        self.distribute_saved_activations = \
-            config.distribute_saved_activations and not config.sequence_parallel
-
-        self.sequence_parallel = config.sequence_parallel
-
-        # Transformer Engine Init.
-        self.transformer_engine_v_0_10 = False
-        self.transformer_engine_v_0_11 = False
-        self.transformer_engine_v_0_8 = False
-        if self.transformer_impl == 'transformer_engine':
-            global transformer_engine
-            import transformer_engine
-            from importlib.metadata import version
-            from pkg_resources import packaging
-
-            te_version = packaging.version.Version(version("transformer-engine"))
-            if te_version >= packaging.version.Version("0.8.0"):
-                self.transformer_engine_v_0_8 = True
-            if te_version >= packaging.version.Version("0.10.0"):
-                self.transformer_engine_v_0_10 = True
-            if te_version >= packaging.version.Version("0.11.0"):
-                self.transformer_engine_v_0_11 = True
-
-            del version, packaging
-
-            assert not args.squared_relu, "TransformerEngine does not support squared relu activation."
-
-        self.use_fp8 = args.fp8 is not None
-        self.fp8_recipe = None
-        self.fp8_group = None
-        if self.use_fp8:
-            assert args.transformer_impl == 'transformer_engine', \
-                'transformer-engine required for fp8 training and inference'
-            self.fp8_group = mpu.get_amax_reduction_group()
-            if args.fp8 == "e4m3":
-                fp8_format = transformer_engine.common.recipe.Format.E4M3
-            elif args.fp8 == "hybrid":
-                fp8_format = transformer_engine.common.recipe.Format.HYBRID
-            else:
-                raise ValueError("The DelayedScaling recipe only supports E4M3 and HYBRID formats.")
-            self.fp8_recipe = transformer_engine.common.recipe.DelayedScaling(
-                margin=args.fp8_margin,
-                interval=args.fp8_interval,
-                fp8_format=fp8_format,
-                amax_history_len=args.fp8_amax_history_len,
-                amax_compute_algo=args.fp8_amax_compute_algo,
-                override_linear_precision=(False, False, not args.fp8_wgrad),
-            )
-
-        self.num_microbatches_in_previous_step = -1
-        self.microbatch_count = 0
-        self.checkpoint_core_attention = config.recompute_granularity == 'selective'
-
-        # Number of layers.
-        self.num_layers = _get_num_layers(args, model_type,
-                                          layer_type==LayerType.decoder)
-
-        self.drop_path_rates = [
-            rate.item() for rate in
-            torch.linspace(0, self.drop_path_rate, config.num_layers)]
-
-        self.retro_layer_numbers = None
-        if model_type == ModelType.retro_decoder:
-            retro_layer_start = 6 if config.num_layers <= 15 else 9
-            self.retro_layer_numbers = \
-                np.arange(retro_layer_start, args.num_layers + 1, 3).tolist()
-        if model_type == ModelType.retro_encoder:
-            self.retro_layer_numbers = [1]
-
-        # Transformer layers.
-        if args.retro_add_retriever:
-            assert self.recompute_granularity != 'full', \
-                "Full recompute not supported for Retro."
-            assert args.transformer_impl == 'local', \
-                "Transformer engine does not support Retro layers."
-        def build_layer(layer_number):
-            if args.transformer_impl == 'local':
-                current_layer_type = _get_layer_type(
-                    model_type, layer_type, self.retro_layer_numbers,
-                    layer_number)
-                return ParallelTransformerLayer(
-                    config,
-                    layer_number,
-                    layer_type=current_layer_type,
-                    self_attn_mask_type=self_attn_mask_type,
-                    drop_path_rate=self.drop_path_rates[layer_number - 1])
-            else:
-                # This argument is only available from TE v0.10 onwards.
-                extra_transformer_engine_kwargs = {}
-                if self.transformer_engine_v_0_8:
-                    extra_transformer_engine_kwargs["bias"] = args.add_bias_linear
-                if self.transformer_engine_v_0_10:
-                    extra_transformer_engine_kwargs["activation"] = "swiglu" if args.swiglu else "gelu"
-                if self.transformer_engine_v_0_11:
-                    extra_transformer_engine_kwargs["normalization"] = args.normalization
-                assert config.attention_softmax_in_fp32, "TransformerEngine only supports softmax compute in FP32."
-                assert (
-                    (bool(int(os.getenv("NVTE_APPLY_QK_LAYER_SCALING", "0"))) and args.fp16) == config.apply_query_key_layer_scaling
-                ), "Unsupported config for apply_query_key_layer_scaling in TransformerEngine."
-                return transformer_engine.pytorch.TransformerLayer(
-                    config.hidden_size,
-                    config.ffn_hidden_size,
-                    config.num_attention_heads,
-                    layernorm_epsilon=config.layernorm_epsilon,
-                    hidden_dropout=config.hidden_dropout,
-                    attention_dropout=config.attention_dropout,
-                    init_method=config.init_method,
-                    output_layer_init_method=config.output_layer_init_method,
-                    layer_number=layer_number,
-                    kv_channels=config.kv_channels,
-                    self_attn_mask_type=self_attn_mask_type.name,
-                    tp_group=mpu.get_tensor_model_parallel_group(),
-                    get_rng_state_tracker=tensor_parallel.get_cuda_rng_tracker,
-                    fuse_wgrad_accumulation=config.gradient_accumulation_fusion,
-                    seq_length=args.seq_length,
-                    micro_batch_size=args.micro_batch_size,
-                    sequence_parallel=config.sequence_parallel,
-                    params_dtype=config.params_dtype,
-                    apply_residual_connection_post_layernorm=config.apply_residual_connection_post_layernorm,
-                    output_layernorm=False,
-                    layer_type="encoder",
-                    drop_path_rate=self.drop_path_rates[layer_number - 1],
-                    set_parallel_mode=True,
-                    fuse_qkv_params=True,
-                    **extra_transformer_engine_kwargs)
-
-        if config.virtual_pipeline_model_parallel_size is not None:
-            assert config.num_layers % config.virtual_pipeline_model_parallel_size == 0, \
-                'num_layers_per_stage must be divisible by ' \
-                'virtual_pipeline_model_parallel_size'
-            assert args.model_type != ModelType.encoder_and_decoder
-            # Number of layers in each model chunk is the number of layers in the stage,
-            # divided by the number of model chunks in a stage.
-            self.num_layers = self.num_layers // config.virtual_pipeline_model_parallel_size
-            # With 8 layers, 2 stages, and 4 model chunks, we want an assignment of
-            # layers to stages like (each list is a model chunk):
-            # Stage 0: [0]  [2]  [4]  [6]
-            # Stage 1: [1]  [3]  [5]  [7]
-            # With 8 layers, 2 stages, and 2 virtual stages, we want an assignment of
-            # layers to stages like (each list is a model chunk):
-            # Stage 0: [0, 1]  [4, 5]
-            # Stage 1: [2, 3]  [6, 7]
-            offset = mpu.get_virtual_pipeline_model_parallel_rank() * (
-                config.num_layers // config.virtual_pipeline_model_parallel_size) + \
-                (mpu.get_pipeline_model_parallel_rank() * self.num_layers)
-        else:
-            # Each stage gets a contiguous set of layers.
-            if args.model_type == ModelType.encoder_and_decoder and \
-                    mpu.get_pipeline_model_parallel_world_size() > 1:
-                pipeline_rank = mpu.get_pipeline_model_parallel_rank()
-                if layer_type == LayerType.encoder:
-                    offset = pipeline_rank * self.num_layers
-                else:
-                    num_ranks_in_enc = args.pipeline_model_parallel_split_rank
-                    offset = (pipeline_rank - num_ranks_in_enc) * self.num_layers
-            else:
-                offset = mpu.get_pipeline_model_parallel_rank() * self.num_layers
-
-        if self.num_layers == 0:
-            # When a standalone embedding stage is used (e.g.,
-            # args.standalone_embedding_stage == True), virtual pipeline ranks
-            # on pipeline rank 0 will have zero transformer layers assigned to
-            # them. This results in the model's input and output tensors to be
-            # the same, which will cause failure for certain output tensor
-            # optimizations (e.g., pipeline output deallocation). To remedy
-            # this, we assign a 'no-op' layer on these ranks, which will
-            # disconnect the input tensor from the output tensor.
-            self.num_layers = 1
-            self.layers = torch.nn.ModuleList([ NoopTransformerLayer(1) ])
-        else:
-            self.layers = torch.nn.ModuleList(
-                [build_layer(i + 1 + offset) for i in range(self.num_layers)])
-
-            # Update dropout rate for Retro encoder.
-            if model_type == ModelType.retro_encoder:
-                for layer in self.layers:
-                    if layer.self_attention.use_flash_attn:
-                        layer.self_attention.core_attention_flash.dropout_p = \
-                            torch.nn.Dropout(args.retro_encoder_attention_dropout)
-                    else:
-                        layer.self_attention.core_attention.attention_dropout.p =\
-                            args.retro_encoder_attention_dropout
-                    layer.hidden_dropout = args.retro_encoder_hidden_dropout
-
-        if self.post_process and self.post_norm:
-            # Final layer norm before output.
-            self.final_norm = get_norm(config)
-
-    def _get_layer(self, layer_number):
-        return self.layers[layer_number]
-
-    def _checkpointed_forward(self, hidden_states, attention_mask,
-                              encoder_output, enc_dec_attn_mask,
-                              rotary_pos_emb, is_first_microbatch):
-        """Forward method with activation checkpointing."""
-        def custom(start, end):
-            def custom_forward(*args, **kwargs):
-                x_, *args = args
-                for index in range(start, end):
-                    layer = self._get_layer(index)
-                    x_ = layer(x_, *args, **kwargs)
-                return x_
-            return custom_forward
-
-        te_forward_kwargs = {}
-        if self.transformer_impl == 'transformer_engine':
-            te_forward_kwargs['is_first_microbatch'] = is_first_microbatch
-            if self.transformer_engine_v_0_10:
-                te_forward_kwargs['rotary_pos_emb'] = rotary_pos_emb
-
-        if self.recompute_method == 'uniform':
-            # Uniformly divide the total number of Transformer layers and
-            # checkpoint the input activation of each divided chunk.
-            # A method to further reduce memory usage reducing checkpoints.
-            l = 0
-            while l < self.num_layers:
-                if self.transformer_impl == 'transformer_engine':
-                    hidden_states = transformer_engine.pytorch.checkpoint(
-                        custom(l, l + self.recompute_num_layers),
-                        self.distribute_saved_activations,
-                        tensor_parallel.get_cuda_rng_tracker,
-                        mpu.get_tensor_model_parallel_group(),
-                        hidden_states, attention_mask, encoder_output,
-                        enc_dec_attn_mask, **te_forward_kwargs)
-                else:
-                    hidden_states = tensor_parallel.checkpoint(
-                        custom(l, l + self.recompute_num_layers),
-                        self.distribute_saved_activations,
-                        hidden_states, attention_mask,
-                        encoder_output, enc_dec_attn_mask,
-                        None, None, None, None, rotary_pos_emb)
-
-                l += self.recompute_num_layers
-
-        elif self.recompute_method == 'block':
-            # Checkpoint the input activation of only a set number of individual
-            # Transformer layers and skip the rest.
-            # A method fully use the device memory removing redundant re-computation.
-            for l in range(self.num_layers):
-                if l < self.recompute_num_layers:
-                    if self.transformer_impl == 'transformer_engine':
-                        hidden_states = transformer_engine.pytorch.checkpoint(
-                            custom(l, l + 1),
-                            self.distribute_saved_activations,
-                            tensor_parallel.get_cuda_rng_tracker,
-                            mpu.get_tensor_model_parallel_group(),
-                            hidden_states, attention_mask, encoder_output,
-                            enc_dec_attn_mask, **te_forward_kwargs)
-                    else:
-                        hidden_states = tensor_parallel.checkpoint(
-                            custom(l, l + 1),
-                            self.distribute_saved_activations,
-                            hidden_states, attention_mask,
-                            encoder_output, enc_dec_attn_mask,
-                            None, None, None, None, rotary_pos_emb)
-                else:
-                    if self.transformer_impl == 'transformer_engine':
-                        hidden_states = custom(l, l + 1)(
-                            hidden_states, attention_mask, encoder_output,
-                            enc_dec_attn_mask, **te_forward_kwargs)
-                    else:
-                        hidden_states = custom(l, l + 1)(
-                            hidden_states, attention_mask,
-                            encoder_output, enc_dec_attn_mask,
-                            None, None, None, None, rotary_pos_emb)
-        else:
-            raise ValueError("Invalid activation recompute method.")
-
-        return hidden_states
-
-    def set_input_tensor(self, input_tensor):
-        """Set input tensor to be used instead of forward()'s input.
-
-        When doing pipeline parallelism the input from the previous
-        stage comes from communication, not from the input, so the
-        model's forward_step_func won't have it. This function is thus
-        used by internal code to bypass the input provided by the
-        forward_step_func"""
-        self.input_tensor = input_tensor
-
-    def forward(self, hidden_states, attention_mask,
-                encoder_output=None, enc_dec_attn_mask=None,
-                retriever_input=None,
-                retriever_output=None,
-                retriever_attn_mask=None,
-                inference_params=None,
-                rotary_pos_emb=None):
-        # hidden_states: [s, b, h]
-
-        # Checks.
-        if inference_params:
-            assert self.recompute_granularity is None, \
-                'inference does not work with activation checkpointing'
-
-        if not self.pre_process:
-            # See set_input_tensor()
-            hidden_states = self.input_tensor
-
-        # Viewless tensor.
-        # - We only need to create a viewless tensor in the case of micro batch
-        #   size (mbs) == 1, since in this case, 'hidden_states.transpose()'
-        #   above creates a view tensor, and '.contiguous()' is a pass-through.
-        #   For mbs >= 2, '.contiguous()' creates a new tensor, eliminating
-        #   the need to make it viewless.
-        #
-        #   However, we don't explicitly check mbs == 1 here because
-        #   make_viewless_tensor() has negligible overhead when its input
-        #   is already viewless.
-        #
-        # - For the 'else' case above, calling make_viewless_tensor() here is
-        #   likely redundant, since p2p_communication.py (likely originator)
-        #   already creates viewless tensors. That said, make_viewless_tensor()
-        #   is called here to be future-proof and corner-case-proof.
-        hidden_states = core.utils.make_viewless_tensor(
-            hidden_states,
-            requires_grad=True,
-            keep_graph=True,
-        )
-
-        # RNG context.
-        if self.sequence_parallel:
-            rng_context = tensor_parallel.get_cuda_rng_tracker().fork()
-        else:
-            rng_context = nullcontext()
-
-        # Forward layers.
-        with rng_context:
-            # The fp8_autocast context manager is a no-op when enabled=True
-            # The if...else serves to short circuit name resolution for fp8_autocast
-            with transformer_engine.pytorch.fp8_autocast(
-                enabled=self.use_fp8,
-                fp8_recipe=self.fp8_recipe,
-                fp8_group=self.fp8_group
-            ) if self.use_fp8 else nullcontext():
-                # Determine if the current iteration is first microbatch
-                if self.num_microbatches_in_previous_step != get_num_microbatches():
-                    self.microbatch_count = 0 # Reset count on new batch size rampup interval
-                self.num_microbatches_in_previous_step = get_num_microbatches()
-                is_first_microbatch = self.microbatch_count % get_num_microbatches() == 0
-
-                # Forward pass.
-                if self.recompute_granularity == 'full':
-                    hidden_states = self._checkpointed_forward(hidden_states,
-                                                               attention_mask,
-                                                               encoder_output,
-                                                               enc_dec_attn_mask,
-                                                               rotary_pos_emb,
-                                                               is_first_microbatch)
-                else:
-                    forward_kwargs = {
-                        'encoder_output': encoder_output,
-                        'enc_dec_attn_mask': enc_dec_attn_mask,
-                        'inference_params': inference_params,
-                    }
-
-                    if self.transformer_impl == 'transformer_engine':
-                        forward_kwargs['is_first_microbatch'] = is_first_microbatch
-                        forward_kwargs['checkpoint_core_attention'] = self.checkpoint_core_attention
-                        if self.transformer_engine_v_0_10:
-                            forward_kwargs['rotary_pos_emb'] = rotary_pos_emb
-                    else:
-                        forward_kwargs['rotary_pos_emb'] = rotary_pos_emb
-                        forward_kwargs['retriever_input'] = retriever_input
-                        forward_kwargs['retriever_output'] = retriever_output
-                        forward_kwargs['retriever_attn_mask'] = retriever_attn_mask
-
-                    for index in range(self.num_layers):
-                        layer = self._get_layer(index)
-
-                        hidden_states = layer(
-                            hidden_states,
-                            attention_mask,
-                            **forward_kwargs)
-
-                        # First Retro decoder layer returns both hidden_states
-                        # and retriever_output. Make retriever_output available
-                        # to subsequence Retro layers.
-                        if isinstance(hidden_states, tuple):
-                            assert len(hidden_states) == 2
-                            hidden_states, retriever_output = hidden_states
-                            forward_kwargs["retriever_output"] = retriever_output
-
-                # Skip counter update for eval and activation checkpointing
-                if torch.is_grad_enabled() and self.training:
-                    self.microbatch_count += 1
-
-        # Final layer norm.
-        if self.post_process and self.post_norm:
-            hidden_states = self.final_norm(hidden_states)
-
-        return hidden_states
-
-    def load_state_dict(self, state_dict, strict=True):
-        """Customize load."""
-
-        # Handle renaming layernorm -> norm in component names
-        state_dict_ = {}
-        for key in state_dict.keys():
-            # Bypass TransformerEngine module parameters.
-            if "layernorm_qkv" in key or "layernorm_mlp" in key:
-                state_dict_[key] = state_dict[key]
-                continue
-            newkey = key.replace("layernorm", "norm")
-            state_dict_[newkey] = state_dict[key]
-
-        super().load_state_dict(state_dict_, strict)
+# class ParallelTransformerLayer(MegatronModule):
+#     """A single transformer layer.
+
+#     Transformer layer takes input with size [s, b, h] and returns an
+#     output of the same size.
+#     """
+
+#     def __init__(self, config,
+#                  layer_number, layer_type=LayerType.encoder,
+#                  self_attn_mask_type=AttnMaskType.padding,
+#                  drop_path_rate=0.):
+#         args = get_args()
+
+#         super(ParallelTransformerLayer, self).__init__()
+#         self.layer_number = layer_number
+#         self.layer_type = layer_type
+
+#         self.apply_residual_connection_post_norm \
+#             = config.apply_residual_connection_post_layernorm
+
+#         self.bf16 = config.bf16
+#         self.fp32_residual_connection = config.fp32_residual_connection
+
+#         # Normalize the input data.
+#         self.input_norm = get_norm(config)
+
+#         # Self attention.
+#         self.self_attention = ParallelAttention(
+#             config,
+#             layer_number,
+#             attention_type=AttnType.self_attn,
+#             attn_mask_type=self_attn_mask_type)
+#         self.hidden_dropout = config.hidden_dropout
+#         self.bias_dropout_fusion = config.bias_dropout_fusion
+#         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0.0 else None
+
+#         # Normalize the attention output
+#         self.post_attention_norm = get_norm(config)
+
+#         # Cross attention.
+#         if self.layer_type in (LayerType.decoder,
+#                                LayerType.retro_decoder,
+#                                LayerType.retro_decoder_with_retriever,
+#                                LayerType.retro_encoder):
+#             self.inter_attention = ParallelAttention(
+#                 config,
+#                 layer_number,
+#                 attention_type=AttnType.cross_attn)
+#             # Normalize the attention output.
+#             self.post_inter_attention_norm = get_norm(config)
+
+#         # MLP
+#         if args.num_experts is not None:
+#             self.mlp = SwitchMLP(config)
+#         else:
+#             self.mlp = ParallelMLP(config)
+
+#         # Set bias+dropout+add fusion grad_enable execution handler.
+#         TORCH_MAJOR = int(torch.__version__.split('.')[0])
+#         TORCH_MINOR = int(torch.__version__.split('.')[1])
+#         use_nvfuser = TORCH_MAJOR > 1 or (TORCH_MAJOR == 1 and TORCH_MINOR >= 10)
+#         self.bias_dropout_add_exec_handler = \
+#                 nullcontext if use_nvfuser else torch.enable_grad
+
+#         if args.retro_add_retriever:
+#             self.retro_num_neighbors = args.retro_num_neighbors
+#             self.retro_chunk_length = args.retro_chunk_length
+#             self.retro_retrieved_length = \
+#                 args.retro_num_retrieved_chunks * args.retro_chunk_length
+
+#         # Retriever (bi-directional transformer with cross attention)
+#         if layer_type == LayerType.retro_decoder_with_retriever:
+#             self.retriever = ParallelTransformer(
+#                 config=config,
+#                 model_type=ModelType.retro_encoder,
+#                 self_attn_mask_type=AttnMaskType.padding,
+#                 pre_process=True,
+#                 post_process=False,
+#             )
+#             self._retriever_key = 'retriever'
+#         else:
+#             self.retriever = None
+
+#     def default_decoder_cross_attention(self,
+#                                         encoder_output,
+#                                         enc_dec_attn_mask,
+#                                         norm_input,
+#                                         norm_output,
+#                                         bias_dropout_add_func):
+#         '''Cross attention for a standard encoder-decoder model.'''
+
+#         # Attention.
+#         attention_output, attention_bias = \
+#             self.inter_attention(norm_output,
+#                                  enc_dec_attn_mask,
+#                                  encoder_output=encoder_output)
+
+#         # Residual connection.
+#         if self.apply_residual_connection_post_norm:
+#             residual = norm_output
+#         else:
+#             residual = norm_input
+
+#         if attention_bias is not None:
+#             attention_bias = attention_bias.expand_as(residual)
+
+#         # Bias-dropout-add.
+#         with self.bias_dropout_add_exec_handler():
+#             norm_input = bias_dropout_add_func(
+#                 attention_output,
+#                 attention_bias,
+#                 residual,
+#                 self.hidden_dropout)
+
+#         # Normalize.
+#         norm_output = self.post_inter_attention_norm(norm_input)
+
+#         return norm_input, norm_output
+
+#     def retro_encoder_cross_attention(self,
+#                                       retriever_output,
+#                                       norm_input,
+#                                       norm_output,
+#                                       bias_dropout_add_func):
+#         """Cross attention for Retro encoder.
+
+#         Notation:
+#             ns : Sequence length.
+#             bs : Batch size.
+#             d  : Hidden size.
+#             l  : Number of chunks per sample (i.e., seq_length/chunk_length).
+#             k  : Number of neighbors.
+#             r  : Number of retrieved tokens (neighbors + continuation).
+#         """
+
+#         ns, bs, d = norm_output.shape # [r, bs * l * k, d]
+
+#         # Divide sequence dimension into chunks.
+#         chunked_outputs = norm_output.reshape(self.retro_retrieved_length,
+#                                               -1,
+#                                               self.retro_num_neighbors,
+#                                               d)
+#         chunked_outputs_before_norm = \
+#             norm_input.reshape(self.retro_retrieved_length, -1,
+#                                self.retro_num_neighbors, d) # [r, bs*l, k, d]
+
+#         # Per-chunk attention.
+#         norm_inputs = []
+#         norm_outputs = []
+#         for k in range(self.retro_num_neighbors):
+
+#             # Attention.
+#             chunked_output = chunked_outputs[:,:,k].contiguous()
+#             attention_output, attention_bias = \
+#                 self.inter_attention(
+#                     chunked_output, # Q (neighbor embedding)
+#                     None,
+#                     encoder_output=retriever_output) # K, V (hidden act)
+
+#             # Residual connection.
+#             if self.apply_residual_connection_post_norm:
+#                 residual = chunked_output
+#             else:
+#                 residual = chunked_outputs_before_norm[:,:,k]
+
+#             # Re-enable torch grad to enable fused optimization.
+#             with torch.enable_grad():
+#                 norm_input = bias_dropout_add_func(
+#                     attention_output,
+#                     None if attention_bias is None else attention_bias.expand_as(residual),
+#                     residual,
+#                     self.hidden_dropout)
+#                 norm_inputs.append(norm_input)
+
+#             # Layer norm.
+#             norm_output = self.post_inter_attention_norm(norm_input)
+#             norm_outputs.append(norm_output)
+
+#         # Concatenate layer norms.
+#         # norm_input : [r, k * bs * l, d]
+#         # norm_output : [r, k * bs * l, d]
+#         norm_input = torch.stack(norm_inputs, dim=1).reshape(ns, bs, d)
+#         norm_output = torch.stack(norm_outputs, dim=1).reshape(ns, bs, d)
+
+#         return norm_input, norm_output
+
+#     def retro_decoder_cross_attention(self,
+#                                       retriever_input,
+#                                       retriever_output,
+#                                       retriever_attn_mask,
+#                                       norm_input,
+#                                       norm_output,
+#                                       inference_params,
+#                                       bias_dropout_add_func):
+#         """Cross attention for Retro decoder.
+
+#         Notation:
+#             ns : Sequence length.
+#             bs : Batch size.
+#             d  : Hidden size.
+#             l  : Number of chunks per sample (i.e., seq_length/chunk_length).
+#             m  : Number of tokens per chunk.
+#             k  : Number of neighbors.
+#             r  : Number of retrieved tokens (neighbors + continuation).
+#         """
+
+#         ns, bs, d = norm_output.shape
+#         l = int(np.ceil(ns / self.retro_chunk_length))
+
+#         # Retrieve neighbors.
+#         if self.layer_type == LayerType.retro_decoder_with_retriever:
+#             first_ns = ns % self.retro_chunk_length
+#             if first_ns > 0:
+#                 first_chunk, rest_chunk = \
+#                     norm_output[:first_ns], norm_output[first_ns:]
+#                 first_chunk = torch.nn.functional.pad(
+#                     first_chunk,
+#                     (0, 0, 0, 0, 0, self.retro_chunk_length - first_ns),
+#                     'constant',
+#                     0)
+#                 chunked_output = \
+#                     torch.cat((first_chunk, rest_chunk), dim=0) # [l * m, bs, d]
+#             else:
+#                 chunked_output = norm_output # [l * m, bs, d]
+#             chunked_output = chunked_output \
+#                 .reshape(l, self.retro_chunk_length, bs, d) \
+#                 .permute(1, 2, 0, 3) \
+#                 .reshape(self.retro_chunk_length, bs * l, d) \
+#                 .contiguous()
+
+#             # Get Encoder Output
+#             retriever_output = self.retriever(
+#                 hidden_states=retriever_input,
+#                 attention_mask=retriever_attn_mask,
+#                 retriever_output=chunked_output,
+#                 retriever_attn_mask=retriever_attn_mask,
+#                 inference_params=inference_params) # [r, k * bs * l , d]
+#             retriever_output = retriever_output.reshape(
+#                 self.retro_retrieved_length * self.retro_num_neighbors, bs * l, d) # [r * k, bs * l, d]
+
+#         # Chunks.
+#         pad = (ns - 1) % self.retro_chunk_length
+#         attending_chunks = norm_output[pad:]
+#         padded_chunks = torch.nn.functional.pad(
+#             attending_chunks,
+#             (0, 0, 0, 0, 0, self.retro_chunk_length - 1),
+#             'constant', 0)
+#         padded_chunked_output = padded_chunks \
+#             .reshape(l, self.retro_chunk_length, bs, d) \
+#             .permute(1, 2, 0, 3)
+#         padded_chunked_output = padded_chunked_output.reshape(
+#             self.retro_chunk_length, bs * l, d).contiguous()
+
+#         # Encoder output.
+#         attention_output, attention_bias = \
+#             self.inter_attention(padded_chunked_output,
+#                                  None,
+#                                  encoder_output=retriever_output)
+
+#         # Residual connection.
+#         if self.apply_residual_connection_post_norm:
+#             residual = norm_output
+#         else:
+#             residual = norm_input
+
+#         # Re-enable torch grad to enable fused optimization.
+#         with torch.enable_grad():
+#             norm_input = bias_dropout_add_func(
+#                 attention_output,
+#                 None if attention_bias is None else attention_bias.expand_as(attention_output),
+#                 torch.zeros_like(attention_output),
+#                 self.hidden_dropout)
+#             norm_input = norm_input \
+#                 .reshape(self.retro_chunk_length, bs, l, d) \
+#                 .permute(2, 0, 1, 3) # [l, m, bs, d]
+#             norm_input = norm_input.reshape(self.retro_chunk_length * l, bs, d)
+#             norm_input = torch.nn.functional.pad(
+#                 norm_input,
+#                 (0, 0, 0, 0, pad, 0),
+#                 'constant', 0)[:ns] # [ns, b, d]
+#             # TODO: better redesign with inference param
+#             args = get_args()
+#             norm_input = args.retro_attention_gate * norm_input + residual
+
+#         # Layer norm post the decoder attention
+#         norm_output = self.post_inter_attention_norm(norm_input)
+
+#         return retriever_output, norm_input, norm_output
+
+#     def forward(self, hidden_states, attention_mask,
+#                 encoder_output=None, enc_dec_attn_mask=None,
+#                 retriever_input=None,
+#                 retriever_output=None,
+#                 retriever_attn_mask=None,
+#                 inference_params=None,
+#                 rotary_pos_emb=None):
+
+#         # Update the params in case the retro param changes during inference
+#         # TODO: better redesign with inference param
+#         args = get_args()
+#         if args.retro_add_retriever:
+#             self.retro_num_neighbors = args.retro_num_neighbors
+#             self.retro_chunk_length = args.retro_chunk_length
+#             self.retro_retrieved_length = \
+#                 args.retro_num_retrieved_chunks * args.retro_chunk_length
+
+#         # hidden_states: [s, b, h]
+
+#         # Layer norm at the beginning of the transformer layer.
+#         norm_output = self.input_norm(hidden_states)
+
+#         # Self attention.
+#         attention_output, attention_bias = \
+#             self.self_attention(
+#                 norm_output,
+#                 attention_mask,
+#                 inference_params=inference_params,
+#                 rotary_pos_emb=rotary_pos_emb)
+
+#         # Residual connection.
+#         if self.apply_residual_connection_post_norm:
+#             residual = norm_output
+#         else:
+#             residual = hidden_states
+
+#         if self.drop_path is None:
+#             # jit scripting for a nn.module (with dropout) is not
+#             # trigerring the fusion kernel. For now, we use two
+#             # different nn.functional routines to account for varying
+#             # dropout semantics during training and inference phases.
+#             if self.bias_dropout_fusion:
+#                 if self.training:
+#                     bias_dropout_add_func = bias_dropout_add_fused_train
+#                 else:
+#                     bias_dropout_add_func = bias_dropout_add_fused_inference
+#             else:
+#                 bias_dropout_add_func = get_bias_dropout_add(self.training)
+
+#             if attention_bias is not None:
+#                 attention_bias = attention_bias.expand_as(residual)
+#             with self.bias_dropout_add_exec_handler():
+#                 norm_input = bias_dropout_add_func(
+#                     attention_output,
+#                     attention_bias,
+#                     residual,
+#                     self.hidden_dropout)
+#         else:
+#             out = torch.nn.functional.dropout(attention_output + attention_bias,
+#                                               p=self.hidden_dropout,
+#                                               training=self.training)
+#             norm_input = residual + self.drop_path(out)
+
+#         # Layer norm post the self attention.
+#         norm_output = self.post_attention_norm(norm_input)
+
+#         # Cross attention.
+#         if self.layer_type == LayerType.encoder:
+#             pass
+#         elif self.layer_type == LayerType.decoder:
+#             norm_input, norm_output = \
+#                 self.default_decoder_cross_attention(
+#                     encoder_output,
+#                     enc_dec_attn_mask,
+#                     norm_input,
+#                     norm_output,
+#                     bias_dropout_add_func)
+#         elif self.layer_type == LayerType.retro_encoder:
+#             norm_input, norm_output = \
+#                 self.retro_encoder_cross_attention(
+#                     retriever_output,
+#                     norm_input,
+#                     norm_output,
+#                     bias_dropout_add_func)
+#         elif self.layer_type in (LayerType.retro_decoder,
+#                                  LayerType.retro_decoder_with_retriever):
+#             retriever_output, norm_input, norm_output = \
+#                 self.retro_decoder_cross_attention(
+#                     retriever_input,
+#                     retriever_output,
+#                     retriever_attn_mask,
+#                     norm_input,
+#                     norm_output,
+#                     inference_params,
+#                     bias_dropout_add_func)
+#         else:
+#             raise Exception("Unsupported layer type, '%s'." %
+#                             self.layer_type.name)
+
+#         # MLP.
+#         mlp_output, mlp_bias = self.mlp(norm_output)
+
+#         # Second residual connection.
+#         if self.apply_residual_connection_post_norm:
+#             residual = norm_output
+#         else:
+#             residual = norm_input
+
+#         if self.drop_path is None:
+#             if mlp_bias is not None:
+#                 mlp_bias = mlp_bias.expand_as(residual)
+#             with self.bias_dropout_add_exec_handler():
+#                 output = bias_dropout_add_func(
+#                     mlp_output,
+#                     mlp_bias,
+#                     residual,
+#                     self.hidden_dropout)
+
+#             # Jit compiled function creates 'view' tensor. This tensor
+#             # potentially gets saved in the MPU checkpoint function context,
+#             # which rejects view tensors. While making a viewless tensor here
+#             # won't result in memory savings (like the data loader, or
+#             # p2p_communication), it serves to document the origin of this
+#             # 'view' tensor.
+#             output = core.utils.make_viewless_tensor(inp = output,
+#                                                      requires_grad = output.requires_grad,
+#                                                      keep_graph = True)
+
+#         else:
+#             if mlp_bias is not None:
+#                 mlp_output = mlp_output + mlp_bias
+#             out = torch.nn.functional.dropout(mlp_output,
+#                                               p=self.hidden_dropout,
+#                                               training=self.training)
+#             output = residual + self.drop_path(out)
+
+#         if self.layer_type == LayerType.retro_decoder_with_retriever:
+#             return output, retriever_output
+#         else:
+#             return output
+
+
+# class NoopTransformerLayer(MegatronModule):
+#     """A single 'no-op' transformer layer.
+
+#     The sole purpose of this layer is for when a standalone embedding layer
+#     is used (i.e., args.standalone_embedding_stage == True). In this case,
+#     zero transformer layers are assigned when pipeline rank == 0. Additionally,
+#     when virtual pipeline rank >= 1, zero total model parameters are created
+#     (virtual rank 0 contains the input embedding). This results in the model's
+#     input and output tensors being the same, which causes an error when
+#     performing certain memory optimiations on the output tensor (e.g.,
+#     deallocating it). Thus, this layer disconnects the input from the output
+#     via a clone. Since ranks containing a no-op layer are generally under-
+#     utilized (both compute and memory), there's no worry of any performance
+#     degredation.
+#     """
+
+#     def __init__(self, layer_number):
+#         super().__init__()
+#         self.layer_number = layer_number
+
+#     def forward(self, hidden_states, attention_mask,
+#                 encoder_output=None, enc_dec_attn_mask=None,
+#                 inference_params=None):
+#         return hidden_states.clone()
+
+
+# def _get_num_layers(args, model_type, is_decoder=False):
+#     """Compute the number of transformer layers resident on the current rank."""
+#     is_encoder_and_decoder_model = (model_type == ModelType.encoder_and_decoder)
+#     if model_type == ModelType.retro_encoder:
+#         num_layers = args.retro_encoder_layers
+#     elif mpu.get_pipeline_model_parallel_world_size() > 1:
+#         if is_encoder_and_decoder_model:
+#             assert args.pipeline_model_parallel_split_rank is not None
+
+#             # When a standalone embedding stage is used, a rank is taken from
+#             # the encoder's ranks, to be used for the encoder's embedding
+#             # layer. This way, the rank referenced by the 'split rank' remains
+#             # the same whether or not a standalone embedding stage is used.
+#             num_ranks_in_encoder = (
+#                 args.pipeline_model_parallel_split_rank - 1
+#                 if args.standalone_embedding_stage else
+#                 args.pipeline_model_parallel_split_rank
+#             )
+#             num_ranks_in_decoder = args.transformer_pipeline_model_parallel_size - num_ranks_in_encoder
+#             assert args.encoder_num_layers % num_ranks_in_encoder == 0, \
+#                     'encoder_num_layers (%d) must be divisible by number of ranks given to encoder (%d)' % (args.encoder_num_layers, num_ranks_in_encoder)
+#             assert args.decoder_num_layers % num_ranks_in_decoder == 0, \
+#                     'decoder_num_layers (%d) must be divisible by number of ranks given to decoder (%d)' % (args.decoder_num_layers, num_ranks_in_decoder)
+#             if mpu.is_pipeline_stage_before_split():
+#                 num_layers = (
+#                     0
+#                     if args.standalone_embedding_stage
+#                     and mpu.get_pipeline_model_parallel_rank() == 0 else
+#                     args.encoder_num_layers // num_ranks_in_encoder
+#                 )
+#             else:
+#                 num_layers = args.decoder_num_layers // num_ranks_in_decoder
+#         else:
+#             assert args.num_layers == args.encoder_num_layers
+#             assert args.num_layers % args.transformer_pipeline_model_parallel_size == 0, \
+#                 'num_layers must be divisible by transformer_pipeline_model_parallel_size'
+
+#             # When a standalone embedding stage is used, all transformer layers
+#             # are divided among pipeline rank >= 1, while on pipeline rank 0,
+#             # ranks either contain the input embedding layer (virtual pp rank 0),
+#             # or no layers at all (virtual pp rank >= 1).
+#             num_layers = (
+#                 0
+#                 if args.standalone_embedding_stage
+#                 and mpu.get_pipeline_model_parallel_rank() == 0 else
+#                 args.num_layers // args.transformer_pipeline_model_parallel_size
+#             )
+#     else:
+#         if not is_decoder:
+#             num_layers = args.encoder_num_layers
+#         else:
+#             num_layers = args.decoder_num_layers
+#     return num_layers
+
+
+# def _get_layer_type(model_type, default_layer_type, retro_layer_numbers,
+#                     layer_number):
+#     args = get_args()
+#     if args.retro_add_retriever and layer_number in retro_layer_numbers:
+#         if model_type == ModelType.retro_decoder:
+#             return LayerType.retro_decoder_with_retriever \
+#                 if layer_number == retro_layer_numbers[0] \
+#                    else LayerType.retro_decoder
+#         elif model_type == ModelType.retro_encoder:
+#             return LayerType.retro_encoder
+#         else:
+#             raise Exception("Unsupported model type, '%s'." % model_type)
+#     else:
+#         return default_layer_type
+
+
+# class ParallelTransformer(MegatronModule):
+#     """Transformer class."""
+
+#     def __init__(self, config,
+#                  model_type, layer_type=LayerType.encoder,
+#                  self_attn_mask_type=AttnMaskType.padding,
+#                  post_norm=True,
+#                  pre_process=True,
+#                  post_process=True,
+#                  drop_path_rate=0.0):
+#         super(ParallelTransformer, self).__init__()
+#         args = get_args()
+
+#         self.layer_type = layer_type
+#         self.model_type = model_type
+#         self.bf16 = config.bf16
+#         self.fp32_residual_connection = config.fp32_residual_connection
+#         self.post_norm = post_norm
+#         self.pre_process = pre_process
+#         self.post_process = post_process
+#         self.input_tensor = None
+#         self.drop_path_rate = drop_path_rate
+#         self.transformer_impl = args.transformer_impl
+#         self.retro_add_retriever = args.retro_add_retriever
+
+#         # Store activation checkpoiting flag.
+#         self.recompute_granularity = config.recompute_granularity
+#         self.recompute_method = config.recompute_method
+#         self.recompute_num_layers = config.recompute_num_layers
+#         self.distribute_saved_activations = \
+#             config.distribute_saved_activations and not config.sequence_parallel
+
+#         self.sequence_parallel = config.sequence_parallel
+
+#         # Transformer Engine Init.
+#         self.transformer_engine_v_0_10 = False
+#         self.transformer_engine_v_0_11 = False
+#         self.transformer_engine_v_0_8 = False
+#         if self.transformer_impl == 'transformer_engine':
+#             global transformer_engine
+#             import transformer_engine
+#             from importlib.metadata import version
+#             from pkg_resources import packaging
+
+#             te_version = packaging.version.Version(version("transformer-engine"))
+#             if te_version >= packaging.version.Version("0.8.0"):
+#                 self.transformer_engine_v_0_8 = True
+#             if te_version >= packaging.version.Version("0.10.0"):
+#                 self.transformer_engine_v_0_10 = True
+#             if te_version >= packaging.version.Version("0.11.0"):
+#                 self.transformer_engine_v_0_11 = True
+
+#             del version, packaging
+
+#             assert not args.squared_relu, "TransformerEngine does not support squared relu activation."
+
+#         self.use_fp8 = args.fp8 is not None
+#         self.fp8_recipe = None
+#         self.fp8_group = None
+#         if self.use_fp8:
+#             assert args.transformer_impl == 'transformer_engine', \
+#                 'transformer-engine required for fp8 training and inference'
+#             self.fp8_group = mpu.get_amax_reduction_group()
+#             if args.fp8 == "e4m3":
+#                 fp8_format = transformer_engine.common.recipe.Format.E4M3
+#             elif args.fp8 == "hybrid":
+#                 fp8_format = transformer_engine.common.recipe.Format.HYBRID
+#             else:
+#                 raise ValueError("The DelayedScaling recipe only supports E4M3 and HYBRID formats.")
+#             self.fp8_recipe = transformer_engine.common.recipe.DelayedScaling(
+#                 margin=args.fp8_margin,
+#                 interval=args.fp8_interval,
+#                 fp8_format=fp8_format,
+#                 amax_history_len=args.fp8_amax_history_len,
+#                 amax_compute_algo=args.fp8_amax_compute_algo,
+#                 override_linear_precision=(False, False, not args.fp8_wgrad),
+#             )
+
+#         self.num_microbatches_in_previous_step = -1
+#         self.microbatch_count = 0
+#         self.checkpoint_core_attention = config.recompute_granularity == 'selective'
+
+#         # Number of layers.
+#         self.num_layers = _get_num_layers(args, model_type,
+#                                           layer_type==LayerType.decoder)
+
+#         self.drop_path_rates = [
+#             rate.item() for rate in
+#             torch.linspace(0, self.drop_path_rate, config.num_layers)]
+
+#         self.retro_layer_numbers = None
+#         if model_type == ModelType.retro_decoder:
+#             retro_layer_start = 6 if config.num_layers <= 15 else 9
+#             self.retro_layer_numbers = \
+#                 np.arange(retro_layer_start, args.num_layers + 1, 3).tolist()
+#         if model_type == ModelType.retro_encoder:
+#             self.retro_layer_numbers = [1]
+
+#         # Transformer layers.
+#         if args.retro_add_retriever:
+#             assert self.recompute_granularity != 'full', \
+#                 "Full recompute not supported for Retro."
+#             assert args.transformer_impl == 'local', \
+#                 "Transformer engine does not support Retro layers."
+#         def build_layer(layer_number):
+#             if args.transformer_impl == 'local':
+#                 current_layer_type = _get_layer_type(
+#                     model_type, layer_type, self.retro_layer_numbers,
+#                     layer_number)
+#                 return ParallelTransformerLayer(
+#                     config,
+#                     layer_number,
+#                     layer_type=current_layer_type,
+#                     self_attn_mask_type=self_attn_mask_type,
+#                     drop_path_rate=self.drop_path_rates[layer_number - 1])
+#             else:
+#                 # This argument is only available from TE v0.10 onwards.
+#                 extra_transformer_engine_kwargs = {}
+#                 if self.transformer_engine_v_0_8:
+#                     extra_transformer_engine_kwargs["bias"] = args.add_bias_linear
+#                 if self.transformer_engine_v_0_10:
+#                     extra_transformer_engine_kwargs["activation"] = "swiglu" if args.swiglu else "gelu"
+#                 if self.transformer_engine_v_0_11:
+#                     extra_transformer_engine_kwargs["normalization"] = args.normalization
+#                 assert config.attention_softmax_in_fp32, "TransformerEngine only supports softmax compute in FP32."
+#                 assert (
+#                     (bool(int(os.getenv("NVTE_APPLY_QK_LAYER_SCALING", "0"))) and args.fp16) == config.apply_query_key_layer_scaling
+#                 ), "Unsupported config for apply_query_key_layer_scaling in TransformerEngine."
+#                 return transformer_engine.pytorch.TransformerLayer(
+#                     config.hidden_size,
+#                     config.ffn_hidden_size,
+#                     config.num_attention_heads,
+#                     layernorm_epsilon=config.layernorm_epsilon,
+#                     hidden_dropout=config.hidden_dropout,
+#                     attention_dropout=config.attention_dropout,
+#                     init_method=config.init_method,
+#                     output_layer_init_method=config.output_layer_init_method,
+#                     layer_number=layer_number,
+#                     kv_channels=config.kv_channels,
+#                     self_attn_mask_type=self_attn_mask_type.name,
+#                     tp_group=mpu.get_tensor_model_parallel_group(),
+#                     get_rng_state_tracker=tensor_parallel.get_cuda_rng_tracker,
+#                     fuse_wgrad_accumulation=config.gradient_accumulation_fusion,
+#                     seq_length=args.seq_length,
+#                     micro_batch_size=args.micro_batch_size,
+#                     sequence_parallel=config.sequence_parallel,
+#                     params_dtype=config.params_dtype,
+#                     apply_residual_connection_post_layernorm=config.apply_residual_connection_post_layernorm,
+#                     output_layernorm=False,
+#                     layer_type="encoder",
+#                     drop_path_rate=self.drop_path_rates[layer_number - 1],
+#                     set_parallel_mode=True,
+#                     fuse_qkv_params=True,
+#                     **extra_transformer_engine_kwargs)
+
+#         if config.virtual_pipeline_model_parallel_size is not None:
+#             assert config.num_layers % config.virtual_pipeline_model_parallel_size == 0, \
+#                 'num_layers_per_stage must be divisible by ' \
+#                 'virtual_pipeline_model_parallel_size'
+#             assert args.model_type != ModelType.encoder_and_decoder
+#             # Number of layers in each model chunk is the number of layers in the stage,
+#             # divided by the number of model chunks in a stage.
+#             self.num_layers = self.num_layers // config.virtual_pipeline_model_parallel_size
+#             # With 8 layers, 2 stages, and 4 model chunks, we want an assignment of
+#             # layers to stages like (each list is a model chunk):
+#             # Stage 0: [0]  [2]  [4]  [6]
+#             # Stage 1: [1]  [3]  [5]  [7]
+#             # With 8 layers, 2 stages, and 2 virtual stages, we want an assignment of
+#             # layers to stages like (each list is a model chunk):
+#             # Stage 0: [0, 1]  [4, 5]
+#             # Stage 1: [2, 3]  [6, 7]
+#             offset = mpu.get_virtual_pipeline_model_parallel_rank() * (
+#                 config.num_layers // config.virtual_pipeline_model_parallel_size) + \
+#                 (mpu.get_pipeline_model_parallel_rank() * self.num_layers)
+#         else:
+#             # Each stage gets a contiguous set of layers.
+#             if args.model_type == ModelType.encoder_and_decoder and \
+#                     mpu.get_pipeline_model_parallel_world_size() > 1:
+#                 pipeline_rank = mpu.get_pipeline_model_parallel_rank()
+#                 if layer_type == LayerType.encoder:
+#                     offset = pipeline_rank * self.num_layers
+#                 else:
+#                     num_ranks_in_enc = args.pipeline_model_parallel_split_rank
+#                     offset = (pipeline_rank - num_ranks_in_enc) * self.num_layers
+#             else:
+#                 offset = mpu.get_pipeline_model_parallel_rank() * self.num_layers
+
+#         if self.num_layers == 0:
+#             # When a standalone embedding stage is used (e.g.,
+#             # args.standalone_embedding_stage == True), virtual pipeline ranks
+#             # on pipeline rank 0 will have zero transformer layers assigned to
+#             # them. This results in the model's input and output tensors to be
+#             # the same, which will cause failure for certain output tensor
+#             # optimizations (e.g., pipeline output deallocation). To remedy
+#             # this, we assign a 'no-op' layer on these ranks, which will
+#             # disconnect the input tensor from the output tensor.
+#             self.num_layers = 1
+#             self.layers = torch.nn.ModuleList([ NoopTransformerLayer(1) ])
+#         else:
+#             self.layers = torch.nn.ModuleList(
+#                 [build_layer(i + 1 + offset) for i in range(self.num_layers)])
+
+#             # Update dropout rate for Retro encoder.
+#             if model_type == ModelType.retro_encoder:
+#                 for layer in self.layers:
+#                     if layer.self_attention.use_flash_attn:
+#                         layer.self_attention.core_attention_flash.dropout_p = \
+#                             torch.nn.Dropout(args.retro_encoder_attention_dropout)
+#                     else:
+#                         layer.self_attention.core_attention.attention_dropout.p =\
+#                             args.retro_encoder_attention_dropout
+#                     layer.hidden_dropout = args.retro_encoder_hidden_dropout
+
+#         if self.post_process and self.post_norm:
+#             # Final layer norm before output.
+#             self.final_norm = get_norm(config)
+
+#     def _get_layer(self, layer_number):
+#         return self.layers[layer_number]
+
+#     def _checkpointed_forward(self, hidden_states, attention_mask,
+#                               encoder_output, enc_dec_attn_mask,
+#                               rotary_pos_emb, is_first_microbatch):
+#         """Forward method with activation checkpointing."""
+#         def custom(start, end):
+#             def custom_forward(*args, **kwargs):
+#                 x_, *args = args
+#                 for index in range(start, end):
+#                     layer = self._get_layer(index)
+#                     x_ = layer(x_, *args, **kwargs)
+#                 return x_
+#             return custom_forward
+
+#         te_forward_kwargs = {}
+#         if self.transformer_impl == 'transformer_engine':
+#             te_forward_kwargs['is_first_microbatch'] = is_first_microbatch
+#             if self.transformer_engine_v_0_10:
+#                 te_forward_kwargs['rotary_pos_emb'] = rotary_pos_emb
+
+#         if self.recompute_method == 'uniform':
+#             # Uniformly divide the total number of Transformer layers and
+#             # checkpoint the input activation of each divided chunk.
+#             # A method to further reduce memory usage reducing checkpoints.
+#             l = 0
+#             while l < self.num_layers:
+#                 if self.transformer_impl == 'transformer_engine':
+#                     hidden_states = transformer_engine.pytorch.checkpoint(
+#                         custom(l, l + self.recompute_num_layers),
+#                         self.distribute_saved_activations,
+#                         tensor_parallel.get_cuda_rng_tracker,
+#                         mpu.get_tensor_model_parallel_group(),
+#                         hidden_states, attention_mask, encoder_output,
+#                         enc_dec_attn_mask, **te_forward_kwargs)
+#                 else:
+#                     hidden_states = tensor_parallel.checkpoint(
+#                         custom(l, l + self.recompute_num_layers),
+#                         self.distribute_saved_activations,
+#                         hidden_states, attention_mask,
+#                         encoder_output, enc_dec_attn_mask,
+#                         None, None, None, None, rotary_pos_emb)
+
+#                 l += self.recompute_num_layers
+
+#         elif self.recompute_method == 'block':
+#             # Checkpoint the input activation of only a set number of individual
+#             # Transformer layers and skip the rest.
+#             # A method fully use the device memory removing redundant re-computation.
+#             for l in range(self.num_layers):
+#                 if l < self.recompute_num_layers:
+#                     if self.transformer_impl == 'transformer_engine':
+#                         hidden_states = transformer_engine.pytorch.checkpoint(
+#                             custom(l, l + 1),
+#                             self.distribute_saved_activations,
+#                             tensor_parallel.get_cuda_rng_tracker,
+#                             mpu.get_tensor_model_parallel_group(),
+#                             hidden_states, attention_mask, encoder_output,
+#                             enc_dec_attn_mask, **te_forward_kwargs)
+#                     else:
+#                         hidden_states = tensor_parallel.checkpoint(
+#                             custom(l, l + 1),
+#                             self.distribute_saved_activations,
+#                             hidden_states, attention_mask,
+#                             encoder_output, enc_dec_attn_mask,
+#                             None, None, None, None, rotary_pos_emb)
+#                 else:
+#                     if self.transformer_impl == 'transformer_engine':
+#                         hidden_states = custom(l, l + 1)(
+#                             hidden_states, attention_mask, encoder_output,
+#                             enc_dec_attn_mask, **te_forward_kwargs)
+#                     else:
+#                         hidden_states = custom(l, l + 1)(
+#                             hidden_states, attention_mask,
+#                             encoder_output, enc_dec_attn_mask,
+#                             None, None, None, None, rotary_pos_emb)
+#         else:
+#             raise ValueError("Invalid activation recompute method.")
+
+#         return hidden_states
+
+#     def set_input_tensor(self, input_tensor):
+#         """Set input tensor to be used instead of forward()'s input.
+
+#         When doing pipeline parallelism the input from the previous
+#         stage comes from communication, not from the input, so the
+#         model's forward_step_func won't have it. This function is thus
+#         used by internal code to bypass the input provided by the
+#         forward_step_func"""
+#         self.input_tensor = input_tensor
+
+#     def forward(self, hidden_states, attention_mask,
+#                 encoder_output=None, enc_dec_attn_mask=None,
+#                 retriever_input=None,
+#                 retriever_output=None,
+#                 retriever_attn_mask=None,
+#                 inference_params=None,
+#                 rotary_pos_emb=None):
+#         # hidden_states: [s, b, h]
+
+#         # Checks.
+#         if inference_params:
+#             assert self.recompute_granularity is None, \
+#                 'inference does not work with activation checkpointing'
+
+#         if not self.pre_process:
+#             # See set_input_tensor()
+#             hidden_states = self.input_tensor
+
+#         # Viewless tensor.
+#         # - We only need to create a viewless tensor in the case of micro batch
+#         #   size (mbs) == 1, since in this case, 'hidden_states.transpose()'
+#         #   above creates a view tensor, and '.contiguous()' is a pass-through.
+#         #   For mbs >= 2, '.contiguous()' creates a new tensor, eliminating
+#         #   the need to make it viewless.
+#         #
+#         #   However, we don't explicitly check mbs == 1 here because
+#         #   make_viewless_tensor() has negligible overhead when its input
+#         #   is already viewless.
+#         #
+#         # - For the 'else' case above, calling make_viewless_tensor() here is
+#         #   likely redundant, since p2p_communication.py (likely originator)
+#         #   already creates viewless tensors. That said, make_viewless_tensor()
+#         #   is called here to be future-proof and corner-case-proof.
+#         hidden_states = core.utils.make_viewless_tensor(
+#             hidden_states,
+#             requires_grad=True,
+#             keep_graph=True,
+#         )
+
+#         # RNG context.
+#         if self.sequence_parallel:
+#             rng_context = tensor_parallel.get_cuda_rng_tracker().fork()
+#         else:
+#             rng_context = nullcontext()
+
+#         # Forward layers.
+#         with rng_context:
+#             # The fp8_autocast context manager is a no-op when enabled=True
+#             # The if...else serves to short circuit name resolution for fp8_autocast
+#             with transformer_engine.pytorch.fp8_autocast(
+#                 enabled=self.use_fp8,
+#                 fp8_recipe=self.fp8_recipe,
+#                 fp8_group=self.fp8_group
+#             ) if self.use_fp8 else nullcontext():
+#                 # Determine if the current iteration is first microbatch
+#                 if self.num_microbatches_in_previous_step != get_num_microbatches():
+#                     self.microbatch_count = 0 # Reset count on new batch size rampup interval
+#                 self.num_microbatches_in_previous_step = get_num_microbatches()
+#                 is_first_microbatch = self.microbatch_count % get_num_microbatches() == 0
+
+#                 # Forward pass.
+#                 if self.recompute_granularity == 'full':
+#                     hidden_states = self._checkpointed_forward(hidden_states,
+#                                                                attention_mask,
+#                                                                encoder_output,
+#                                                                enc_dec_attn_mask,
+#                                                                rotary_pos_emb,
+#                                                                is_first_microbatch)
+#                 else:
+#                     forward_kwargs = {
+#                         'encoder_output': encoder_output,
+#                         'enc_dec_attn_mask': enc_dec_attn_mask,
+#                         'inference_params': inference_params,
+#                     }
+
+#                     if self.transformer_impl == 'transformer_engine':
+#                         forward_kwargs['is_first_microbatch'] = is_first_microbatch
+#                         forward_kwargs['checkpoint_core_attention'] = self.checkpoint_core_attention
+#                         if self.transformer_engine_v_0_10:
+#                             forward_kwargs['rotary_pos_emb'] = rotary_pos_emb
+#                     else:
+#                         forward_kwargs['rotary_pos_emb'] = rotary_pos_emb
+#                         forward_kwargs['retriever_input'] = retriever_input
+#                         forward_kwargs['retriever_output'] = retriever_output
+#                         forward_kwargs['retriever_attn_mask'] = retriever_attn_mask
+
+#                     for index in range(self.num_layers):
+#                         layer = self._get_layer(index)
+
+#                         hidden_states = layer(
+#                             hidden_states,
+#                             attention_mask,
+#                             **forward_kwargs)
+
+#                         # First Retro decoder layer returns both hidden_states
+#                         # and retriever_output. Make retriever_output available
+#                         # to subsequence Retro layers.
+#                         if isinstance(hidden_states, tuple):
+#                             assert len(hidden_states) == 2
+#                             hidden_states, retriever_output = hidden_states
+#                             forward_kwargs["retriever_output"] = retriever_output
+
+#                 # Skip counter update for eval and activation checkpointing
+#                 if torch.is_grad_enabled() and self.training:
+#                     self.microbatch_count += 1
+
+#         # Final layer norm.
+#         if self.post_process and self.post_norm:
+#             hidden_states = self.final_norm(hidden_states)
+
+#         return hidden_states
+
+#     def load_state_dict(self, state_dict, strict=True):
+#         """Customize load."""
+
+#         # Handle renaming layernorm -> norm in component names
+#         state_dict_ = {}
+#         for key in state_dict.keys():
+#             # Bypass TransformerEngine module parameters.
+#             if "layernorm_qkv" in key or "layernorm_mlp" in key:
+#                 state_dict_[key] = state_dict[key]
+#                 continue
+#             newkey = key.replace("layernorm", "norm")
+#             state_dict_[newkey] = state_dict[key]
+
+#         super().load_state_dict(state_dict_, strict)
 
 from typing import Any, Tuple
 from torch import Tensor

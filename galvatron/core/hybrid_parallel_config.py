@@ -34,12 +34,18 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
             args.vocab_sp = 0
             use_sp = [0] * total_layer_num
     else:
-        galvatron_config = read_json_config(args.galvatron_config_path)
+        if isinstance(args.galvatron_config_path, str):
+            galvatron_config = read_json_config(args.galvatron_config_path)
+        else:
+            galvatron_config = args.galvatron_config_path
         pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp = config2strategy(galvatron_config)
         bsz, chunks = galvatron_config['global_bsz'], galvatron_config['chunks']
         checkpoint_flags_enc = str2array(galvatron_config['checkpoint']) if 'checkpoint' in galvatron_config.keys() else [0] * len(tp_sizes_enc)
         pp_divide = str2array(galvatron_config['pp_division']) if 'pp_division' in galvatron_config.keys() else None
-        config_source = 'Galvatron JSON config %s'%args.galvatron_config_path
+        if isinstance(args.galvatron_config_path, str):
+            config_source = 'Galvatron JSON config %s'%args.galvatron_config_path
+        else:
+            config_source = 'Galvatron JSON config'
         args.pipeline_type = galvatron_config['pipeline_type'] if 'pipeline_type' in galvatron_config.keys() else args.pipeline_type
         args.default_dp_type = galvatron_config['default_dp_type'] if 'default_dp_type' in galvatron_config.keys() else args.default_dp_type
         args.embed_sdp = galvatron_config['embed_sdp'] if 'embed_sdp' in galvatron_config.keys() else args.embed_sdp

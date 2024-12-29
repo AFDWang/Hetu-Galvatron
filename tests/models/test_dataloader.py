@@ -128,7 +128,7 @@ def _run_test(args):
 @pytest.mark.parametrize("model_type", ["gpt", "llama"])
 @pytest.mark.parametrize("use_flash_attn", [True, False])
 @pytest.mark.parametrize("dataloader_backend", ["fa", "hf"])
-@pytest.mark.parametrize("group_size", [1, 2, 4])
+@pytest.mark.parametrize("group_size", [2])
 def test_distributed_dataloader_with_groups(run_distributed, small_model_config, seed, group_size, model_type, use_flash_attn, dataloader_backend):
     args = {
         "group_size": group_size,

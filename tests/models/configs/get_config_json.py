@@ -21,6 +21,9 @@ class ConfigFactory:
         if model_type == "gpt":
             from tests.models.configs.gpt import GPTConfig
             return GPTConfig().to_dict()
+        elif model_type == "gpt256":
+            from tests.models.configs.gpt import GPTConfig256
+            return GPTConfig256().to_dict()
         elif model_type == "llama":
             from tests.models.configs.llama import LlamaConfig
             return LlamaConfig().to_dict()

@@ -69,7 +69,7 @@ class GPTLayers_(nn.Module):
             hidden_states = self.dropout1(hidden_states)
             hidden_states = hidden_states + residual
         else:
-            hidden_states = layer(hidden_states, mixer_kwargs=mixer_kwargs)
+            hidden_states = self.layer(hidden_states, mixer_kwargs=mixer_kwargs)
         return hidden_states
 
 class GPTPreNorm_(nn.Module):

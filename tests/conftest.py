@@ -4,6 +4,7 @@ import torch
 import torch.distributed as dist
 import os, sys, json, subprocess
 from typing import Dict, Callable
+import tempfile
 
 @pytest.fixture
 def small_model_config():
@@ -67,3 +68,12 @@ def run_distributed():
                 pytest.fail(f"Distributed test failed with return code {retcode}")
     
     return _run_distributed
+
+@pytest.fixture
+def checkpoint_dir():
+    with tempfile.TemporaryDirectory() as baseline_dir, \
+         tempfile.TemporaryDirectory() as converted_dir:
+        yield {
+            "baseline": baseline_dir,
+            "converted": converted_dir
+        }

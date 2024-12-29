@@ -101,7 +101,7 @@ def get_layernorm_offset(model, layernorm_name=[]):
             for param_name, param in _named_parameters_with_duplicates(
                 submodule, recurse=False
             ):
-                if is_ln:
+                if is_ln or getattr(param, 'sequence_parallel', False):
                     ln_offset.append(offset)
                     ln_size.append(param.numel())
                 offset += param.numel()

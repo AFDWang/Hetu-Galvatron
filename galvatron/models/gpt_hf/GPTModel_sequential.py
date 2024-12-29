@@ -57,16 +57,14 @@ class GPTEmbeddings_(nn.Module):
                 )
         
     def forward(self, tokens, position_ids=None, attention_mask=None, labels=None):
+        if position_ids == None:
+            position_ids = torch.arange(0, tokens.size(-1), dtype=torch.long, device=tokens.device)
+            position_ids = position_ids.unsqueeze(0)
 
-        # tokens = input_ids[:, :-1].contiguous()
-        # labels = input_ids[:, 1:].contiguous()
         if self.vocab_sp:
             tokens = tokens[:, self.seq_start_index:self.seq_end_index].contiguous()
             position_ids = position_ids[:, self.seq_start_index:self.seq_end_index].contiguous()
         
-        if position_ids == None:
-            position_ids = torch.arange(0, tokens.size(-1), dtype=torch.long, device=tokens.device)
-            position_ids = position_ids.unsqueeze(0)
         inputs_embeds = self.wte(tokens)
         position_embeds = self.wpe(position_ids)
 

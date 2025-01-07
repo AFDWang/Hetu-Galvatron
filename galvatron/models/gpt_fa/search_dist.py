@@ -1,12 +1,12 @@
 from galvatron.core import initialize_galvatron, GalvatronSearchEngine
 from galvatron.models.gpt_fa.arguments import model_args
-from galvatron.models.gpt_fa.meta_configs import config_from_meta, set_model_config, model_name, model_layer_configs
+from galvatron.models.gpt_fa.GPTModel_hybrid_parallel import get_gpt_config
+from galvatron.models.gpt_fa.meta_configs import model_name, model_layer_configs
 import os
 
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='search')
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, overwrite_args=True)
+    config = get_gpt_config(args)
     path = os.path.dirname(os.path.abspath(__file__))
     print(args)
     print(config)

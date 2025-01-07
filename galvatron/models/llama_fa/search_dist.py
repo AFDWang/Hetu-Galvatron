@@ -1,13 +1,12 @@
 from galvatron.core import initialize_galvatron, GalvatronSearchEngine
 from galvatron.models.llama_fa.arguments import model_args
-from galvatron.models.llama_fa.meta_configs import config_from_meta, llama_config_to_gpt2_config, set_model_config, model_name, model_layer_configs
+from galvatron.models.llama_fa.meta_configs import model_name, model_layer_configs
+from galvatron.models.llama_fa.LlamaModel_hybrid_parallel import get_llama_config
 import os
 
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='search')
-    llama_config = config_from_meta(args.model_size)
-    config = llama_config_to_gpt2_config(llama_config)
-    config = set_model_config(config, args, overwrite_args=True)
+    config = get_llama_config(args)
     path = os.path.dirname(os.path.abspath(__file__))
     print(args)
     print(config)

@@ -1,13 +1,12 @@
 from galvatron.core import GalvatronProfiler, initialize_galvatron
 from galvatron.models.llama_fa.arguments import model_args, layernum_arg_names
-from galvatron.models.llama_fa.meta_configs import config_from_meta, llama_config_to_gpt2_config, set_model_config, model_name
+from galvatron.models.llama_fa.meta_configs import model_name
+from galvatron.models.llama_fa.LlamaModel_hybrid_parallel import get_llama_config
 import os
 
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='profile')
-    llama_config = config_from_meta(args.model_size)
-    config = llama_config_to_gpt2_config(llama_config, args)
-    config = set_model_config(config, args, overwrite_args=False)
+    config = get_llama_config(args, overwrite_args=False)
     
     profiler = GalvatronProfiler(args)
     path = os.path.dirname(os.path.abspath(__file__))

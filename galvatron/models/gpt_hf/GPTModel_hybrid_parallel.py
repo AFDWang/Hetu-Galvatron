@@ -37,10 +37,10 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
     )
     return hp_model
 
-def get_gpt_config(args):
+def get_gpt_config(args, overwrite_args=True):
     config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, True)
-    if args.local_rank == 0:
+    config = set_model_config(config, args, overwrite_args)
+    if hasattr(args, 'local_rank') and args.local_rank == 0:
         print(config)
     return config
 

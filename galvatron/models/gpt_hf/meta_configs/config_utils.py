@@ -43,10 +43,18 @@ def set_model_config(config, args, overwrite_args=True):
             config.max_position_embeddings = args.seq_length
     
     # ======= Model Config --> Arguments ======
+    overwrite_model_args(config, args)
     # This step is necessary that maintains the consistency of model config and arguments.
     if overwrite_args: # Overwrite necessary Megatron-LM arguments with the model config
         overwrite_megatron_args(config, args)
     return config
+
+def overwrite_model_args(config, args):
+    args.hidden_size = config.hidden_size
+    args.num_hidden_layers = config.num_hidden_layers
+    args.num_attention_heads = config.num_attention_heads
+    args.seq_length = config.max_position_embeddings
+    args.vocab_size = config.vocab_size
 
 def overwrite_megatron_args(config, args):
     args.num_layers = config.num_hidden_layers

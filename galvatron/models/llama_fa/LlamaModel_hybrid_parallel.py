@@ -31,11 +31,11 @@ def construct_hybrid_parallel_model(model, model_config, training_args, hybrid_p
     )
     return hp_model
 
-def get_llama_config(args):
+def get_llama_config(args, overwrite_args=True):
     llama_config = config_from_meta(args.model_size)
     config = llama_config_to_gpt2_config(llama_config, args)
-    config = set_model_config(config, args)
-    if args.local_rank == 0:
+    config = set_model_config(config, args, overwrite_args)
+    if hasattr(args, 'local_rank') and args.local_rank == 0:
         print(config)
     return config
 

@@ -30,5 +30,8 @@ class ConfigFactory:
         elif model_type == "llama2":
             from tests.models.configs.llama import Llama2Config
             return Llama2Config().to_dict()
+        elif model_type == "llama_search":
+            from tests.models.configs.llama import LlamaConfigSearch
+            return LlamaConfigSearch().to_dict()
         else:
             raise ValueError(f"Unsupported model type: {model_type}")

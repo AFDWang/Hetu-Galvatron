@@ -82,6 +82,30 @@ class ModelFactory:
         )
 
     @staticmethod
+    def get_meta_configs(model_type: str, backend: str):
+        if model_type.startswith("gpt") and backend == "hf":
+            from galvatron.models.gpt_hf.meta_configs import model_layer_configs, model_name
+        elif model_type.startswith("llama") and backend == "hf":
+            from galvatron.models.llama_hf.meta_configs import model_layer_configs, model_name
+        elif model_type.startswith("gpt") and backend == "fa":
+            from galvatron.models.gpt_fa.meta_configs import model_layer_configs, model_name
+        elif model_type.startswith("llama") and backend == "fa":
+            from galvatron.models.llama_fa.meta_configs import model_layer_configs, model_name
+        return model_layer_configs, model_name
+
+    @staticmethod
+    def get_layernum_arg_names(model_type: str, backend: str):
+        if model_type.startswith("gpt") and backend == "hf":
+            from galvatron.models.gpt_hf.arguments import layernum_arg_names
+        elif model_type.startswith("llama") and backend == "hf":
+            from galvatron.models.llama_hf.arguments import layernum_arg_names
+        elif model_type.startswith("gpt") and backend == "fa":
+            from galvatron.models.gpt_fa.arguments import layernum_arg_names
+        elif model_type.startswith("llama") and backend == "fa":
+            from galvatron.models.llama_fa.arguments import layernum_arg_names
+        return layernum_arg_names
+    
+    @staticmethod
     def create_model(model_type: str, backend: str, config, args):
         """Factory method to create a model instance.
         
@@ -98,7 +122,7 @@ class ModelFactory:
         return components.get_model(config, args)
 
     @staticmethod
-    def create_config(model_type: str, backend: str, args):
+    def create_config(model_type: str, backend: str, args, overwrite_args=True):
         """Factory method to create model configuration.
         
         Args:
@@ -110,4 +134,4 @@ class ModelFactory:
             Model configuration
         """
         components = ModelFactory.get_components(model_type, backend)
-        return components.get_model_config(args)
+        return components.get_model_config(args, overwrite_args)

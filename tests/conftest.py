@@ -3,8 +3,9 @@ import pytest
 import torch
 import torch.distributed as dist
 import os, sys, json, subprocess
-from typing import Dict, Callable
+from typing import Dict, Callable, Tuple    
 import tempfile
+from pathlib import Path
 
 @pytest.fixture
 def small_model_config():
@@ -77,3 +78,11 @@ def checkpoint_dir():
             "baseline": baseline_dir,
             "converted": converted_dir
         }
+
+@pytest.fixture
+def base_config_dirs(tmp_path: Path) -> Tuple[Path, Path]:
+    """Create and return config directories"""
+    configs_dir = tmp_path / "configs"
+    hardware_dir = tmp_path / "hardware_configs"
+    output_dir = tmp_path / "output"
+    return configs_dir, hardware_dir, output_dir

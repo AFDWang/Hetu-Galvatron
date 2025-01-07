@@ -51,7 +51,10 @@ def strategy2config(strategy_list):
     return config
 
 def read_allreduce_bandwidth_config(config_path, gpu_num):
-    env_config = read_json_config(config_path)
+    if isinstance(config_path, str):
+        env_config = read_json_config(config_path)
+    else:
+        env_config = config_path
     comm_coe_dict, bandwidth_dict = {}, {}
     max_dp = gpu_num
     if max_dp >= 2:
@@ -69,7 +72,10 @@ def read_allreduce_bandwidth_config(config_path, gpu_num):
     return bandwidth_dict, comm_coe_dict
 
 def read_p2p_bandwidth_config(config_path):
-    env_config = read_json_config(config_path)
+    if isinstance(config_path, str):
+        env_config = read_json_config(config_path)
+    else:
+        env_config = config_path
     pp_deg = 2
     p2p_dict,comm_coe_dict={},{}
     for key, val in env_config.items():

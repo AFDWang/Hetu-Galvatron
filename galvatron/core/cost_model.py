@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 
 class MemoryCostModel:
     def __init__(self,
@@ -52,17 +51,20 @@ class MemoryCostModel:
             chunks = optimal_chunk_func(global_batch_size//self.dp_size, strategy, mbsz, min_tp) # if microbatch else 1
         max_chunks = global_batch_size // (self.tp_size*self.dp_size // min_tp)
         max_chunks = 1 if max_chunks == 0 else max_chunks
-        chunks = max_chunks if chunks > max_chunks else chunks
-        chunks = int(chunks)
+        self.chunks = max_chunks if chunks > max_chunks else chunks
+        self.chunks = int(self.chunks)
         
         if (pipeline_type == 'pipedream_flush' and self.pp_size > 1) or self.pp_size==1:
-            microbatches = [t.shape[0] for t in torch.arange(int(global_batch_size/self.dp_size/(self.tp_size//min_tp))).chunk(chunks)]
-            chunks = len(microbatches)
-            end = self.pp_size-stage_idx if self.pp_size-stage_idx <= chunks else chunks
+            microbatches = [t.shape[0] for t in chunk_like_torch(int(global_batch_size/self.dp_size/(self.tp_size//min_tp)), self.chunks)]
+            assert self.chunks == len(microbatches)
+            end = self.pp_size-stage_idx if self.pp_size-stage_idx <= self.chunks else self.chunks
             act_1f1b_ratio = np.sum(microbatches[:end]) / np.sum(microbatches)
-            act_1f1b_ratio_first = np.sum(microbatches[:min(self.pp_size, chunks)]) / np.sum(microbatches)
+            act_1f1b_ratio_first = np.sum(microbatches[:min(self.pp_size, self.chunks)]) / np.sum(microbatches)
             act_1f1b_ratio_last = microbatches[0] / np.sum(microbatches)
             self.bsz = act_1f1b_ratio * self.bsz
+        else:
+            microbatches = [t.shape[0] for t in chunk_like_torch(int(global_batch_size/self.dp_size/(self.tp_size//min_tp)), self.chunks)]
+            self.bsz = microbatches[0]
         
         if 'cpt' in self.strategy[-1].keys() and self.strategy[-1]['cpt']:
             assert(tp_activation_per_bsz_dict['checkpoint'] is not None)
@@ -72,7 +74,7 @@ class MemoryCostModel:
         else:
             self.activation_size = tp_activation_per_bsz_dict[self.tp_size] * self.bsz
         
-        if chunks == 1:
+        if self.chunks == 1:
             zero2_ratio = (lambda d: (7/8 * (1/d + 0.003) + 1/8)) if mixed_precision else (lambda d: (3/4 * (1/d + 0.003) + 1/4))
             zero3_ratio = lambda d: (1/d+0.003)
         else:
@@ -119,35 +121,32 @@ class MemoryCostModel:
             
             # print(other_memory_pp_off['model_states'])
             if self.pp_size == 1:
-                tp_other_memcosts[0] += other_memory_pp_off['model_states'][model_tp] * other_ms_zero2_ratio + other_memory_pp_off['activation'][tp] * other_layers_bsz * act_1f1b_ratio
+                tp_other_memcosts[0] += (
+                    other_memory_pp_off['model_states'][model_tp] * 
+                    other_ms_zero2_ratio + 
+                    other_memory_pp_off['activation'][tp] * 
+                    other_layers_bsz * 
+                    act_1f1b_ratio
+                )
             else:
                 if pipeline_type == 'pipedream_flush':
                     other_layers_bsz_first = other_layers_bsz * act_1f1b_ratio_first
                     other_layers_bsz_last = other_layers_bsz * act_1f1b_ratio_last
                 else:
                     other_layers_bsz_first = other_layers_bsz_last = other_layers_bsz
-                # Model type may affect other memory performance (embedding, cls, etc.)
-                if model_type in ['bert', 't5']:
-                    tp_other_memcosts[0] += other_memory_pp_on['first_stage']['model_states'][model_tp] * other_ms_zero2_ratio + other_memory_pp_on['first_stage']['activation'][tp] * (other_layers_bsz_first/self.pp_size)
-                elif model_type in ['vit', 'swin', 'gpt']:
-                    tp_other_memcosts[0] += other_memory_pp_on['first_stage']['model_states'][model_tp] * other_ms_zero2_ratio + other_memory_pp_on['first_stage']['activation'][tp] * other_layers_bsz_first
-                    # When chunks get larger, peak memory may reduce. Adjust peak memory if needed.
-                    if peak_reduction_with_chunks is not None: 
-                        if isinstance(peak_reduction_with_chunks, dict):
-                            tp_other_memcosts[0] -= peak_reduction_with_chunks['first'] * other_layers_bsz_first * (1 - 1 / chunks)
-                        else:
-                            tp_other_memcosts[0] -= peak_reduction_with_chunks * other_layers_bsz_first * (1 - 1 / chunks)
-                if model_type in ['swin']:
-                    tp_other_memcosts[-1] += other_memory_pp_on['last_stage']['model_states'][model_tp] * other_ms_zero2_ratio + other_memory_pp_on['last_stage']['activation'][tp] * (other_layers_bsz_last/self.pp_size)
-                elif model_type in ['bert', 't5', 'vit', 'gpt']:
-                    tp_other_memcosts[-1] += other_memory_pp_on['last_stage']['model_states'][model_tp] * other_ms_zero2_ratio + other_memory_pp_on['last_stage']['activation'][tp] * other_layers_bsz_last
-                    # When chunks get larger, peak memory may reduce. Adjust peak memory if needed.
-                    if peak_reduction_with_chunks is not None: 
-                        if isinstance(peak_reduction_with_chunks, dict):
-                            tp_other_memcosts[-1] -= peak_reduction_with_chunks['last'] * other_layers_bsz_last * (1 - 1 / chunks)
-                        else:
-                            tp_other_memcosts[-1] -= peak_reduction_with_chunks * other_layers_bsz_last * (1 - 1 / chunks)
-
+                # TODO: check the correctness of other memory cost for first stage and last stage
+                tp_other_memcosts[0] += (
+                    other_memory_pp_on['first_stage']['model_states'][model_tp] * 
+                    other_ms_zero2_ratio + 
+                    other_memory_pp_on['first_stage']['activation'][tp] * 
+                    other_layers_bsz_first
+                )
+                tp_other_memcosts[-1] += (
+                    other_memory_pp_on['last_stage']['model_states'][model_tp] * 
+                    other_ms_zero2_ratio + 
+                    other_memory_pp_on['last_stage']['activation'][tp] * 
+                    other_layers_bsz_last
+                )
             # if checkpoint:
             #     for i in range(len(tp_other_memcosts)):
             #         tp_other_memcosts[i] += tp_activation_per_bsz_dict[self.tp_size] * mbsz
@@ -185,7 +184,6 @@ class TimeCostModel:
             bct_overlap_coe=1.3,
             p2p_comm_coe_dict=None,
             layer_num=None,
-            layer_type='enc',
             use_zero2_for_dp=0,
             mixed_precision=False,
             no_comm=False,
@@ -195,6 +193,7 @@ class TimeCostModel:
             all2all_dict = None,
             sp_space = 'tp'):
         # TODO: align time cost model when async_grad_reduce is False
+        assert microbatch == False
         self.s = strategy[:3]
         self.sl = sequence_length
         self.hs = hidden_size
@@ -255,8 +254,6 @@ class TimeCostModel:
         self.dc_overlap = self.dc*dp_overlap_coe
 
         self.bs = global_batch_size/self.dp_size 
-        self.layer_type = layer_type
-        assert(layer_type in ['enc', 'dec'])
         self.optimal_microbatch = optimal_chunk_func(self.bs, self.s) if microbatch else 1
 
         # Dummy layer_num, can be any multiple of 8.
@@ -284,20 +281,20 @@ class TimeCostModel:
         
         if self.sp_space == 'tp+sp':
             self.per_tp_message_size = self.bs*self.sl*self.hs * (2 if mixed_precision else 4)
-            self.tp_comm_num = 4 if layer_type=='enc' else 6
+            self.tp_comm_num = 4
             self.tp_comm_num *= self.layer_num
 
             if self.tp_size == 1:
                 self.per_tp_message_time = 0
             else:
                 if self.per_tp_message_size in self.sp_dict:
-                    self.per_tp_message_time = self.sp_dict[self.per_tp_message_size]
+                    self.per_tp_message_time = self.sp_dict[self.per_tp_message_size // self.tp_size]
                 else:
                     def linear_func(x, m, c):
                         return m * x + c
-                    self.per_tp_message_time = linear_func( 1 / 1024 / 1024 * self.per_tp_message_size, *self.sp_dict["popt"] )
+                    self.per_tp_message_time = linear_func( 1 / 1024 / 1024 * self.per_tp_message_size / self.tp_size, *self.sp_dict["popt"] )
         else:
-            tp_comm_times = 4 if layer_type=='enc' else 6
+            tp_comm_times = 4
             self.tp_message_size = 2*(self.tp_size-1)/self.tp_size*(self.bs*self.sl*self.hs*tp_comm_times*4/1024/1024) * self.layer_num
 
         # if self.fsdp:
@@ -389,12 +386,8 @@ class TimeCostModel:
                     result = self.pipe_with_microbatch(overall_overhead, 0)
             else: # pp+dp+tp
                 if self.tp_size < self.tp_size * self.dp_size // 2:
-                    if self.layer_type == 'enc':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
-                        overall_overhead = self.fct + overlap_part + rest_part + self.tp_time + self.eo
-                    elif self.layer_type == 'dec':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-                        overall_overhead = self.fct + 1/3*self.bct + overlap_part + rest_part +self.tp_time+self.eo
+                    overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
+                    overall_overhead = self.fct + overlap_part + rest_part + self.tp_time + self.eo
                     if self.microbatch == False:
                         result = overall_overhead
                     else:
@@ -402,12 +395,8 @@ class TimeCostModel:
                         communication_overhead = overall_overhead-computation_overhead
                         result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
                 else:
-                    if self.layer_type == 'enc':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*1/2)
-                        overall_overhead = self.fct + 1/2*self.bct + overlap_part + rest_part + self.tp_time + self.eo
-                    elif self.layer_type == 'dec':
-                        overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*2/3)
-                        overall_overhead = self.fct + 1/3*self.bct + overlap_part + rest_part + self.tp_time + self.eo
+                    overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct*1/2)
+                    overall_overhead = self.fct + 1/2*self.bct + overlap_part + rest_part + self.tp_time + self.eo
                     if self.microbatch == False:
                         result = overall_overhead
                     else:
@@ -415,22 +404,10 @@ class TimeCostModel:
                         communication_overhead = overall_overhead-computation_overhead
                         result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
 
-
-
         # For fsdp, add allgather time of forward and backward
         if self.fsdp:
-            # forward_allgather_time = self.dp_message_size * self.dc 
-            # # if self.checkpoint:
-            # #     forward_allgather_time *= 2
-            # backward_allgather_time = self.dp_message_size * self.dc 
-            # result = result + (forward_allgather_time + backward_allgather_time)*self.optimal_microbatch
-
-            # forward_allgather_time = self.dp_message_size * 0.5 * self.dc
             forward_allgather_time = self.fsdp_allgather_message_size * self.dc
             result = result + forward_allgather_time*self.optimal_microbatch
-
-            # forward_allgather_time = self.dp_message_size_ori * 0.5 * self.dc
-            # result = result + forward_allgather_time*(self.optimal_microbatch-1)
 
         if self.pp_size > 1 and self.p2p_comm_coe is not None:
             result = result + self.p2p_meg_size * self.p2p_comm_coe
@@ -492,7 +469,7 @@ class OtherTimeCostModel:
                 else:
                     dp_size = world_size // pp_deg // k
                     if k == 1 or dp_size == 1:
-                        tp_coe = self.comm_coe_dict['%d'%k] if '%d'%k in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%dp_size]
+                        tp_coe = self.comm_coe_dict['%d'%k] if '%d'%k in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%k]
                     else:
                         tp_coe = self.comm_coe_dict['%d_0'%k]
 
@@ -561,18 +538,31 @@ class OtherTimeCostModel:
                 other_time_cost[k][0] = 0.001 * (self.dp_size[k][0] * self.dp_coe[k] + self.fct[k][0] * 3 + self.tp_time[k][0]) # + 2 * self.sp_time[k]
                 other_time_cost[k][-1] = 0.001 * (self.dp_size[k][-1] * self.dp_coe[k] + self.fct[k][-1] * 3 + self.tp_time[k][-1]) # + 2 * self.sp_time[k]
         return other_time_cost
+
+def chunk_like_torch(size, chunks):
+    """Implement torch.arange(size).chunk(chunks) behavior using numpy"""
+    if chunks <= 0:
+        raise ValueError("chunks must be positive")
     
-def check_optimal_chunks(world_size, strategies, optimal_chunk_func, bsz):
-    chunk_dict = {}
-    for pp_deg in sorted(set([s[0] for s in strategies])):
-        chunk_dict[pp_deg] = optimal_chunk_func(bsz/(world_size//pp_deg), [pp_deg,1,world_size//pp_deg,{'fsdp':0,'cpt':0}])
-    return chunk_dict
+    # Calculate chunk size like PyTorch does
+    chunk_size = (size + chunks - 1) // chunks  # ceiling division
+    
+    # Create splits
+    splits = []
+    for i in range(chunks):
+        start = i * chunk_size
+        if start >= size:
+            break
+        end = min(start + chunk_size, size)
+        splits.append(np.arange(start, end))
+    
+    return splits
 
 def get_real_chunk(local_bsz, chunk):
     if chunk == 1:
         return 1
     chunk = int(chunk)
-    re = [t.shape[0] for t in torch.arange(int(local_bsz)).chunk(chunk)]
+    re = [t.shape[0] for t in chunk_like_torch(int(local_bsz), chunk)]
     return len(re)
 
 def get_time_cost_all_stages(layer_timecosts, pp_stage_division):

@@ -400,13 +400,36 @@ def galvatron_search_args(parser):
         'Ensure Zero3 memory cost when chunk > 1.',
         dest='async_grad_reduce'
     )
-    
+    group.add_argument(
+        "--memory_profiling_path", type=str, default=None, help="Path to memory profiling config."
+    )
+    group.add_argument(
+        "--time_profiling_path", type=str, default=None, help="Path to time profiling config."
+    )
+    group.add_argument(
+        "--allreduce_bandwidth_config_path", type=str, default=None, help="Path to allreduce bandwidth config."
+    )
+    group.add_argument(
+        "--p2p_bandwidth_config_path", type=str, default=None, help="Path to p2p bandwidth config."
+    )
+    group.add_argument(
+        "--overlap_coe_path", type=str, default=None, help="Path to overlap coefficient config."
+    )
+    group.add_argument(
+        "--sp_time_path", type=str, default=None, help="Path to sequence parallelism time config."
+    )
+    group.add_argument(
+        "--output_config_path", type=str, default=None, help="Path to output config."
+    )
     group.add_argument('--make-vocab-size-divisible-by', type=int, default=128,
                        help='Pad the vocab size to be divisible by this value.'
                        'This is added for computational efficieny reasons.')
     
     group.add_argument("--fine_grained_mode", type=int, default=1, help="Enable fine-grained search.")
     group.add_argument(
-        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
+        "--time_profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
+    )
+    group.add_argument(
+        "--memory_profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
     )
     return parser

@@ -3,40 +3,6 @@ from tqdm import trange
 from .cost_model import pipeline_costmodel
 from .cost_model import OtherTimeCostModel
 
-def estimate_bsz_start_gpunum(type,scale,max_bsz_estimator,gpu_num):
-    prune_percent = 0.65
-    if type == 'full':
-        # baselines = [[1,1,gpu_num,{'fsdp':0}],[1,gpu_num,1,{'fsdp':0}],[gpu_num,1,1,{}],[1,1,gpu_num,{'fsdp':1}]]
-        baselines = [[1,1,gpu_num,{'fsdp':0}],[1,1,gpu_num,{'fsdp':1}]]
-    elif type == 'dp+tp':
-        baselines = [[1,1,gpu_num,{'fsdp':0}],[1,gpu_num,1,{'fsdp':0}]]
-    elif type == 'dp+pp':
-        # baselines = [[1,1,gpu_num,{'fsdp':0}],[gpu_num,1,1,{}]]
-        baselines = [[1,1,gpu_num,{'fsdp':0}]]
-        prune_percent = 0
-    max_bsz_baselines = [max_bsz_estimator([s]) for s in baselines]
-    # print(max_bsz_baselines)
-    max_bsz, min_bsz = np.max(max_bsz_baselines), np.min(max_bsz_baselines)
-    bsz_start = int((min_bsz*(1-prune_percent)+max_bsz*prune_percent)//scale*scale)
-    bsz_start = bsz_start if bsz_start > scale else scale
-    return bsz_start
-
-def estimate_bsz_start_16gpus(type,scale,max_bsz_estimator):
-    prune_percent = 0.65
-    if type == 'full':
-        baselines = [[1,1,16,{'fsdp':0}],[1,16,1,{'fsdp':0}],[16,1,1,{}],[1,1,16,{'fsdp':1}]]
-    elif type == 'dp+tp':
-        baselines = [[1,1,16,{'fsdp':0}],[1,16,1,{'fsdp':0}]]
-    elif type == 'dp+pp':
-        baselines = [[1,1,16,{'fsdp':0}],[16,1,1,{}]]
-        prune_percent = 0
-    max_bsz_baselines = [max_bsz_estimator([s]) for s in baselines]
-    # print(max_bsz_baselines)
-    max_bsz, min_bsz = np.max(max_bsz_baselines), np.min(max_bsz_baselines)
-    bsz_start = int((min_bsz*(1-prune_percent)+max_bsz*prune_percent)//scale*scale)
-    bsz_start = bsz_start if bsz_start > scale else scale
-    return bsz_start
-
 class DPAlg():
     def __init__(self, max_mem=8200, other_mem_cost=None, other_time_cost = None, layer_num=24, strategy_num=4, strategy_set=None, fine_grained_mode=True, use_cpp_core=True) -> None:
         assert(other_mem_cost != None)
@@ -231,129 +197,6 @@ class DpOnModel:
                     return False
         return True
 
-    def _build_dp_and_run(self, pp_deg, bsz, mbsz, min_tp, max_tp):
-        if isinstance(self.timecost_model_args, list):
-            self.timecost_model_args = self.timecost_model_args[0]
-        if isinstance(self.memcost_model_args, list):
-            self.memcost_model_args = self.memcost_model_args[0]
-            
-        # Look for results in search history
-        key = (bsz, mbsz, pp_deg, min_tp, max_tp)
-        from_history = False
-        if self.search_history is not None and key in self.search_history.keys() and self.search_history[key]['mem_cost'] <= self.max_mem:
-            re = self.search_history[key]
-            comm_cost, res_list, mem_remain, mem_cost = \
-                re['comm_cost'], re['res_list'], self.max_mem-re['mem_cost'], re['mem_cost']
-            best_strategy_flag, from_history = True, True
-            return comm_cost, res_list, mem_remain, mem_cost, best_strategy_flag, from_history
-
-        strategy_set = list(filter(lambda s: s[0] == pp_deg, self.strategies_set))
-        strategy_num = len(strategy_set)
-        layer_num = self.layer_num[0] // pp_deg
-
-        if self.model_microbatch_after_dp:
-            dp_size = self.gpu_num//pp_deg
-            chunks = self.timecost_model_args['optimal_chunk_func'](bsz // dp_size, [pp_deg, min_tp, dp_size], mbsz, min_tp)
-            intra_layer_cost = [self.timecost_model(strategy, bsz/chunks, **self.timecost_model_args).gen_result() for strategy in strategy_set]
-        else:
-            intra_layer_cost = [self.timecost_model(strategy, bsz, **self.timecost_model_args).gen_result() for strategy in strategy_set]
-        intra_layer_cost = np.array(intra_layer_cost, dtype=np.float64).reshape(1, -1).repeat(layer_num, axis=0)
-        min_cost_strategy_ids = np.argmin(intra_layer_cost, axis=1)
-
-        if self.pipeline_type == "pipedream_flush":
-            mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, stage_idx = 0, **self.memcost_model_args).get_memory_cost() for strategy in strategy_set]
-        else:
-            mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, **self.memcost_model_args).get_memory_cost() for strategy in strategy_set]
-
-        other_mem_cost = {}
-        other_time_cost = {}
-        for k, v in mem_cost_list[0]['other'].items():
-            other_mem_cost[k] = int(np.ceil(np.max(v)))
-            if k == 1 or k == self.n_gpu:
-                other_time_cost[k] = 2*(k-1)/k*(mbsz*k*self.timecost_model_args["sequence_length"]*(self.timecost_model_args["hidden_size"] + self.timecost_model_args["vocab_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args['comm_coe_dict']['%d'%k])
-            else:
-                other_time_cost[k] = 2*(k-1)/k*(mbsz*k*self.timecost_model_args["sequence_length"]*(self.timecost_model_args["hidden_size"] + self.timecost_model_args["vocab_size"]) * 2 * 4/1024/1024/1024 * self.timecost_model_args['comm_coe_dict']['%d_0'%k])
-            if self.config.mixed_precision:
-                other_time_cost[k] /= 2
-        # = {int(np.ceil(np.max(mem_cost_list[0]['other'])))}
-        v = [cost['enc_total'] for cost in mem_cost_list]
-        v = np.ceil(np.array(v)).astype(np.int32)
-        v = v.reshape(1, -1).repeat(layer_num, axis=0)
-
-        inter_layer_cost = np.zeros((strategy_num, strategy_num))
-        for i in range(strategy_num):
-            for j in range(strategy_num):
-                case1 = strategy_set[j][1] > strategy_set[i][1] # need allgather
-                case2 = False
-                case3 = False
-                if 'tp' in strategy_set[j][-1].keys() and 'tp' in strategy_set[i][-1].keys():
-                    case2 = (strategy_set[j][1] == strategy_set[i][1] and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp']) # tp consec different
-                    world_size = strategy_set[i][1] * strategy_set[i][2]
-                    case3 = ( strategy_set[j][1] < strategy_set[i][1] and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'] and strategy_set[j][1] > 1 and strategy_set[i][1] < world_size) # split but tp consec different
-                # In ring allreduce, allreduce = scatter-redcue + allgather, so we can assume coe_allgather = 2 * coe_allreduce
-                sample_num = self.config.seq_length * self.config.hidden_size * (4 if self.config.mixed_precision == "fp32" else 2)
-                if case1 or case2 or case3:
-                    inter_layer_cost[i, j] = (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / 2
-                if self.config.sequence_parallel:
-                    if strategy_set[j][1] != strategy_set[i][1]:
-                        inter_layer_cost[i, j] += (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / strategy_set[j][1] / 2
-        # find corresponding communication coefficient
-        for i in range(strategy_num):
-            for j in range(strategy_num):
-                tp_size, dp_size = strategy_set[j][1], strategy_set[j][2]
-                if tp_size == 1 or dp_size == 1:
-                    coe = self.comm_coe_dict['%d'%tp_size] if '%d'%tp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%tp_size]
-                else:
-                    # In this case, strategy[-1]['tp'] represents tp_consecutive_flag
-                    info = strategy_set[j][-1]
-                    assert 'tp' in info.keys() and info['tp'] in [0, 1]
-                    if info['tp']:
-                        coe = self.comm_coe_dict['%d_1'%tp_size]
-                    else:
-                        coe = self.comm_coe_dict['%d_0'%tp_size]
-                inter_layer_cost[i, j] = inter_layer_cost[i, j] * coe * 1e-9
-
-                # add a small bias to sort fsdp and dp
-                strategy0, strategy1 = strategy_set[i], strategy_set[j]
-                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp']):
-                    if 'fsdp' in strategy0[-1] and strategy0[-1]['fsdp']:
-                        inter_layer_cost[i, j] = 1e-9
-        
-                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['cpt']):
-                    if 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
-                        inter_layer_cost[i, j] = 1e-9
-
-        inter_layer_cost = np.expand_dims(inter_layer_cost, axis=0).repeat(layer_num, axis=0)
-        inter_layer_cost[0, :, :] = 0 # no inter-layer communication cost in first layer
-
-        # if self.max_mem - other_mem_cost <= 0:
-        #     return np.inf, None, -1, np.inf, False, False
-        
-        dp = DPAlg(self.max_mem, other_mem_cost, other_time_cost, layer_num, strategy_num, strategy_set, self.config.fine_grained_mode)
-        dp.set_v_and_cost(v, intra_layer_cost, inter_layer_cost)
-
-        comm_cost, res_list, mem_remain, vtp = dp.fit()
-        best_strategy_flag = res_list is not None and (np.array(res_list) == min_cost_strategy_ids).all()
-        if res_list is not None:
-            res_list = list(map(lambda x: strategy_set[x], res_list))
-        mem_cost = self.max_mem - mem_remain if mem_remain >= 0 else np.inf
-        if self.model_microbatch_after_dp:
-            if res_list is not None:
-                pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, [self.timecost_model_args], res_list*pp_deg, [self.layer_num//pp_deg]*pp_deg, chunks, bsz, min_tp)
-                # print(comm_cost*pp_deg,pipeline_cost)
-                # print(res_list)
-                comm_cost = pipeline_cost
-                comm_cost += other_time_cost[vtp]
-            else:
-                comm_cost = np.inf
-        else:
-            comm_cost = comm_cost * pp_deg
-
-        # Write search result into history
-        if self.search_history is not None and best_strategy_flag:
-            self.search_history[key]={'comm_cost': comm_cost, 'res_list': res_list, 'mem_cost': mem_cost, "min_tp": min_tp, "max_tp": max_tp, "vtp": vtp}
-        return comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history
-
     def _build_dp_and_run_multi_layer_type(self, pp_deg, bsz, mbsz, min_tp, max_tp, vsp, sp_search):
         # Look for results in search history
         # history_results = []
@@ -389,7 +232,7 @@ class DpOnModel:
         if self.pipeline_type == "gpipe":
             v_list = []
             for i in range(len(self.layer_num)):
-                mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, max_tp = max_tp, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
+                mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
                 # TODO: mulitple layer type
                 if i == 0:
                     for k, v in mem_cost_list[0]['other'].items():
@@ -410,6 +253,7 @@ class DpOnModel:
                 v = v.reshape(1, -1).repeat(self.layer_num[i], axis=0)
                 v_list.append(v)
             v = np.concatenate(v_list, axis = 0)
+            v_list_stage_idx = v
         elif self.pipeline_type == "pipedream_flush":
             v_list_stage_idx = []
             for stage_idx in range(pp_deg):
@@ -601,6 +445,8 @@ class DpOnModel:
             dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], strategy_num, strategy_set, self.config.fine_grained_mode)
             if self.pipeline_type == "pipedream_flush":
                 v = v_list_stage_idx[i]
+            else:
+                v = v_list_stage_idx
             dp.set_v_and_cost(v[start_layer:start_layer+pp_stage_list[i]], 
                                 intra_layer_cost[start_layer:start_layer+pp_stage_list[i]], 
                                 inter_layer_cost[start_layer:start_layer+pp_stage_list[i]])
@@ -670,10 +516,8 @@ class DpOnModel:
                     print('Best strategy:', best_strategy_flag, '\nFrom history:', from_history)
                     print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
                 continue
-            if self.multi_layer_type:
-                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, sp_search)
-            else:
-                comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, sp_search)
+            assert self.multi_layer_type
+            comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, sp_search)
             mem_cost = [m + self.mem_cache for m in mem_cost] if isinstance(mem_cost, list) else mem_cost + self.mem_cache
             if print_:
                 print('Best strategy:', best_strategy_flag, '\nFrom history:', from_history)

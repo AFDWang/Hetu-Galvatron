@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 from tests.utils.search_args import SearchArgs
 from galvatron.core.search_engine import GalvatronSearchEngine
-from tests.utils.mock_configs import initialize_search_engine
+from tests.utils.search_configs import initialize_search_engine
 
 @pytest.fixture
 def base_engine():

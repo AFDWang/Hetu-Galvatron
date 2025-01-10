@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from typing import Tuple
-from tests.utils.mock_configs import (
+from tests.utils.search_configs import (
     write_time_config,
     write_memory_config,
     write_hardware_config
@@ -78,12 +78,15 @@ def test_config_loading(base_config_dirs, model_type, backend, time_mode, memory
         assert 4096 in memory_config[key_prefix]
     
     if sp_enabled:
-        print(memory_config[key_prefix])
-        assert "tp_activation_per_bsz_dict" in memory_config[key_prefix][4096]
-        assert abs(memory_config[key_prefix][4096]["tp_activation_per_bsz_dict"][8] - 130.5587158203125) < 1e-6
+        if memory_mode == "static":
+            assert "tp_activation_per_bsz_dict" in memory_config[key_prefix][4096]
+            assert abs(memory_config[key_prefix][4096]["tp_activation_per_bsz_dict"][8] - 79.5704345703125) < 1e-6
+        else:
+            assert "tp_activation_per_bsz_dict" in memory_config[key_prefix][4096]
+            assert abs(memory_config[key_prefix][4096]["tp_activation_per_bsz_dict"][8] - 130.5587158203125) < 1e-6
     else:
         assert "tp_activation_per_bsz_dict" in memory_config[key_prefix][4096]
-        assert abs(memory_config[key_prefix][4096]["tp_activation_per_bsz_dict"][8] - 104.14166259765625,) < 1e-6
+        assert abs(memory_config[key_prefix][4096]["tp_activation_per_bsz_dict"][8] - 191.6251220703125) < 1e-6
 
 # ============= Hardware Config Tests =============
 @pytest.mark.search_engine

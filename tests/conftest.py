@@ -80,9 +80,26 @@ def checkpoint_dir():
         }
 
 @pytest.fixture
-def base_config_dirs(tmp_path: Path) -> Tuple[Path, Path]:
+def base_config_dirs(tmp_path: Path) -> Tuple[Path, Path, Path]:
     """Create and return config directories"""
     configs_dir = tmp_path / "configs"
     hardware_dir = tmp_path / "hardware_configs"
     output_dir = tmp_path / "output"
     return configs_dir, hardware_dir, output_dir
+
+@pytest.fixture
+def profiler_model_configs_dir(tmp_path: Path) -> Path:
+    """Create and return profiler config directories"""
+    configs_dir = tmp_path / "configs"
+    os.makedirs(configs_dir, exist_ok=True)
+    return configs_dir
+
+@pytest.fixture
+def profiler_hardware_configs_dir(tmp_path: Path) -> Path:
+    """Create and return profiler config directories"""
+    hardware_configs_dir = tmp_path / "hardware_configs"
+    scripts_dir = tmp_path / "scripts"
+    os.makedirs(hardware_configs_dir, exist_ok=True)
+    os.makedirs(scripts_dir, exist_ok=True)
+    return tmp_path
+

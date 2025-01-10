@@ -75,21 +75,24 @@ def train(args):
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
     time_list = []
-    for _ in range(10):
-        input = np.random.rand(*(bs, 512 // tp_size, 1024))
+    for _ in range(5):
+        input = np.random.rand(*(bs, 512, 1024))
         input = torch.tensor(input, dtype=torch.bfloat16, device=device)
         output = single_all_to_all(input, tp_groups[0].group)
-        
-    for _ in range(100):
-        input = np.random.rand(*(bs, 512 // tp_size, 1024))
+    
+    torch.cuda.cudart().cudaProfilerStart()
+    for _ in range(20):
+        input = np.random.rand(*(bs, 512, 1024))
         input = torch.tensor(input, dtype=torch.bfloat16, device=device)
         torch.cuda.synchronize()
+        torch.distributed.barrier(group=tp_groups[0].group)
         start.record()
         output = single_all_to_all(input, tp_groups[0].group)
         end.record()
         torch.cuda.synchronize()
+        print(f"device: {local_rank}, time: {start.elapsed_time(end)}")
         time_list.append(start.elapsed_time(end))
-
+    torch.cuda.cudart().cudaProfilerStop()
     
     if args.profile_time == 0:
         assert False

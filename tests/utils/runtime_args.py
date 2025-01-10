@@ -1,6 +1,6 @@
 import torch
 
-class DummyArgs:
+class RuntimeArgs:
     def __init__(self, model_type, rank, checkpoint_dir=None, backend="hf"):
         self.use_flash_attn = False
         self.global_train_batch_size = 16

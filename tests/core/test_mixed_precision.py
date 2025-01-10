@@ -6,7 +6,7 @@ import tempfile
 from typing import Dict, Any
 from galvatron.utils.training_utils import set_seed, distributed_dataloader
 from tests.utils.init_dist import init_dist_env
-from tests.utils.dummy_args import DummyArgs
+from tests.utils.runtime_args import RuntimeArgs
 from tests.utils.model_utils import ModelFactory
 from tests.models.configs.get_config_json import ConfigFactory
 from megatron.training.global_vars import set_args
@@ -36,7 +36,7 @@ def _run_test(args: Dict[str, Any]):
     initialize_model_parallel(tensor_model_parallel_size=1, pipeline_model_parallel_size=1)
     random.model_parallel_cuda_manual_seed(args["seed"])
     
-    args = DummyArgs(model_type=model_type, rank=rank, checkpoint_dir=checkpoint_dir, backend=backend)
+    args = RuntimeArgs(model_type=model_type, rank=rank, checkpoint_dir=checkpoint_dir, backend=backend)
     config_json = ConfigFactory.get_config_json(model_type)
     args.model_size = config_json
     components = ModelFactory.get_components(model_type, backend)

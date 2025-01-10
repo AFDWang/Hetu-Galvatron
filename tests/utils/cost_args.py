@@ -1,6 +1,6 @@
 from dataclasses import dataclass, asdict
 from typing import Dict, Any, Callable, Optional
-from tests.utils.mock_configs import (
+from tests.utils.search_configs import (
     create_static_memory_config,
     create_static_time_config,
     create_batch_time_config,

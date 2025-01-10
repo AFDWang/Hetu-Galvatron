@@ -24,13 +24,13 @@ class GalvatronProfiler():
         self.set_model_layer_configs(model_layer_configs)
         self.set_path(path)
         self.set_memory_profiler(rank, profile_ranks)
-        exit_ = self.args.exit_after_profiling if 'exit_after_profiling' in self.args else True
+        exit_ = self.args.exit_after_profiling if hasattr(self.args, 'exit_after_profiling') else True
         self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=exit_)
         self.set_model_name(model_name)
     
     def set_profiler_single(self, start_iter=10, end_iter=20):
         self.set_memory_profiler(0)
-        exit_ = self.args.exit_after_profiling if 'exit_after_profiling' in self.args else True
+        exit_ = self.args.exit_after_profiling if hasattr(self.args, 'exit_after_profiling') else True
         self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=exit_)
     
     def set_profiler_launcher(self, path, layernum_arg_names=None, model_name=None, layernum_listed=False):
@@ -91,8 +91,8 @@ class GalvatronProfiler():
         args, rank, profile_ranks, mem_dict, max_profile_iter = \
             self.args, self.rank, self.profile_ranks, self.mem_dict, self.max_profile_iter
         if args.profile and rank in profile_ranks and iter <= max_profile_iter:
-            local_rank = args.local_rank if 'local_rank' in args else 0
-            profile_type = args.profile_type if 'profile_type' in args else 'allocated'
+            local_rank = args.local_rank if hasattr(args, 'local_rank') else 0
+            profile_type = args.profile_type if hasattr(args, 'profile_type') else 'allocated'
             if stage == "Before Forward":
                 torch.cuda.reset_peak_memory_stats(local_rank)
                 _, cur_mem = print_peak_memory("\n"+stage, local_rank, profile_type)
@@ -112,17 +112,17 @@ class GalvatronProfiler():
             self.args, self.rank, self.profile_ranks, self.mem_dict, self.max_profile_iter
         if args.profile and iter == max_profile_iter:
             if rank in profile_ranks:
-                mem_dict['model_states'] = mem_dict['iter_4_after_backward']
-                if 'pipeline_type' not in args or args.pipeline_type == "gpipe":
-                    mem_dict['model_states_and_activation'] = mem_dict['iter_4_after_forward']
-                    mem_dict['activation'] = mem_dict['iter_4_after_forward'] - mem_dict['iter_4_before_forward']
-                mem_dict['model_states_and_peak_activation'] = mem_dict['iter_4_after_backward_max']
-                mem_dict['peak_activation'] = mem_dict['iter_4_after_backward_max'] - mem_dict['iter_4_after_backward']
+                mem_dict['model_states'] = mem_dict['iter_%d_after_backward'%(max_profile_iter-1)]
+                if not hasattr(args, 'pipeline_type') or args.pipeline_type == "gpipe":
+                    mem_dict['model_states_and_activation'] = mem_dict['iter_%d_after_forward'%(max_profile_iter-1)]
+                    mem_dict['activation'] = mem_dict['iter_%d_after_forward'%(max_profile_iter-1)] - mem_dict['iter_%d_before_forward'%(max_profile_iter-1)]
+                mem_dict['model_states_and_peak_activation'] = mem_dict['iter_%d_after_backward_max'%(max_profile_iter-1)]
+                mem_dict['peak_activation'] = mem_dict['iter_%d_after_backward_max'%(max_profile_iter-1)] - mem_dict['iter_%d_after_backward'%(max_profile_iter-1)]
                 time.sleep(0.2*rank)
                 print('[Profiled memory for rank %d]:'%rank)
                 for key, val in mem_dict.items():
                     print("\t%s: %.2f MB"%(key, val))
-                if 'save_profiled_memory' in args and args.save_profiled_memory:
+                if hasattr(args, 'save_profiled_memory') and args.save_profiled_memory:
                     assert self.layernum_list is not None
                     world_size = torch.distributed.get_world_size()
                     memory_config_path = self.memory_profiling_path()
@@ -140,7 +140,7 @@ class GalvatronProfiler():
                                          args.sequence_parallel, 
                                          args.vocab_tp,
                                          args.seq_length)
-            if 'save_profiled_memory' in args and args.save_profiled_memory:
+            if hasattr(args, 'save_profiled_memory') and args.save_profiled_memory:
                 exit(0)
     
     # =============== For Runtime Time Profiling ===============
@@ -164,7 +164,7 @@ class GalvatronProfiler():
             avg_time = sum(self.time_list) / len(self.time_list)
             print("Average iteration time is: %.4f s"%avg_time)
             args = self.args
-            if 'profile_forward' in args and args.profile_forward:
+            if hasattr(args, 'profile_forward') and args.profile_forward:
                 assert self.layernum_list is not None
                 time_config_path = self.time_profiling_path()
                 save_profiled_time(time_config_path, avg_time*1e3, args.global_train_batch_size, self.layernum_list, args.seq_length)
@@ -214,7 +214,7 @@ class GalvatronProfiler():
             avg_time = (self.total_end_time-self.total_start_time)/(self.end_iter-self.start_iter)
             print("Average iteration time is: %.4f s"%avg_time)
             args = self.args
-            if args.profile_forward:
+            if hasattr(args, 'profile_forward') and args.profile_forward:
                 assert self.layernum_list is not None
                 time_config_path = self.time_profiling_path()
                 save_profiled_time(time_config_path, avg_time, args.global_train_batch_size, self.layernum_list, args.seq_length)
@@ -387,6 +387,7 @@ class GalvatronProfiler():
                 pp_deg, tp_deg = 1, 1
                 param_result_list, act_result_list, param_list = [dict() for _ in range(layertype)], [dict() for _ in range(layertype)], [-1]*layertype
                 print('Sequence length:%d'%seq)
+                # get tp act memory cost
                 while True:
                     if pp_deg * tp_deg > world_size:
                         break
@@ -419,7 +420,8 @@ class GalvatronProfiler():
                     print('param:', param)
                     # print('param_dict:', param_result)
                     print('act_dict:', act_result)
-                    
+
+                # get checkpoint act memory cost
                 act_dict_c_list, act_cpt_list = [dict() for _ in range(layertype)], [-1]*layertype
                 pp_deg, tp_deg = 1, 1
                 while True:
@@ -451,6 +453,7 @@ class GalvatronProfiler():
                     print('act_cpt:', act_cpt)
                     act_result_list[l]['checkpoint'] = act_cpt
 
+                # get tp memory cost & other memory cost
                 inf=1e6
                 other_memory_pp_off, other_memory_pp_on_first, other_memory_pp_on_last = \
                     {'model_states': defaultdict(lambda: inf), 'activation': defaultdict(lambda: inf)}, {'model_states': defaultdict(lambda: inf), 'activation': defaultdict(lambda: inf)}, {'model_states': defaultdict(lambda: inf), 'activation': defaultdict(lambda: inf)}
@@ -489,29 +492,24 @@ class GalvatronProfiler():
                             for l in range(layertype):
                                 ms_cost.append(param_result_list[l][tp_deg]*4)
                                 act_cost.append(act_result_list[l][tp_deg])
+                            # get other memory cost by subtracting transformer layer memory cost from total memory cost
                             layer_ms_costs_first = self.total_memcost(pp_deg, layernum, layertype, ms_cost, 0)
                             layer_ms_costs_last = self.total_memcost(pp_deg, layernum, layertype, ms_cost, pp_deg-1)
+
                             layer_act_costs_first = self.total_memcost(pp_deg, layernum, layertype, act_cost, 0)
                             layer_act_costs_last = self.total_memcost(pp_deg, layernum, layertype, act_cost, pp_deg-1)
+
                             other_ms_first = re[self.key_format(layernum_list, bsz, seq, 0, 'ms')] - layer_ms_costs_first
-                            if args.profile_dp_type == 'zero3':
-                                other_ms_first = (re[self.key_format(layernum_list, bsz, seq, 0, 'ms')] - layer_ms_costs_first / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
-                                # layer_ms_costs_first / (world_size//pp_deg//tp_deg) layer memory cost
-                                # (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1) real dp
                             other_ms_last = re[self.key_format(layernum_list, bsz, seq, world_size-1, 'ms')] - layer_ms_costs_last
                             if args.profile_dp_type == 'zero3':
+                                other_ms_first = (re[self.key_format(layernum_list, bsz, seq, 0, 'ms')] - layer_ms_costs_first / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
                                 other_ms_last = (re[self.key_format(layernum_list, bsz, seq, world_size-1, 'ms')] - layer_ms_costs_last / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
+                            
                             act_peak_first = max(re[self.key_format(layernum_list, bsz, seq, 0, 'act_peak')], re[self.key_format(layernum_list, bsz, seq, 0, 'act')])
                             act_peak_last = max(re[self.key_format(layernum_list, bsz, seq, world_size-1, 'act_peak')], re[self.key_format(layernum_list, bsz, seq, world_size-1, 'act')])
-                            act_first = re[self.key_format(layernum_list, bsz, seq, 0, 'act')]
-                            act_last = re[self.key_format(layernum_list, bsz, seq, world_size-1, 'act')]
-                            other_act_first = (act_peak_first * world_size / bsz  - layer_act_costs_first * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
-                            other_act_last = (act_peak_last * world_size / bsz - layer_act_costs_last * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
-                            # other_act_first = act_peak_first - act_first
-                            # other_act_last = act_peak_last - act_last
-                            # embed_act_first = (act_first * world_size / bsz  - layer_act_costs_first * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
-                            # embed_act_last = (act_last * world_size / bsz  - layer_act_costs_last * (pp_deg*tp_deg)) / (tp_deg if enable_vocab_tp == 1 else 1)
-                            # print(other_ms_first, other_act_first, other_ms_last, other_act_last)
+                            other_act_first = (act_peak_first - layer_act_costs_first * (bsz / (world_size // (pp_deg * tp_deg)))) / (bsz / world_size * pp_deg * (tp_deg if enable_vocab_tp == 1 else 1))
+                            other_act_last = (act_peak_last - layer_act_costs_last * (bsz / (world_size // (pp_deg * tp_deg)))) / (bsz / world_size * pp_deg * (tp_deg if enable_vocab_tp == 1 else 1))
+                            
                             other_ms_first = other_ms_first if other_ms_first > 0 else 0
                             other_ms_last = other_ms_last if other_ms_last > 0 else 0
                             other_act_first = other_act_first if other_act_first > 0 else 0
@@ -521,28 +519,29 @@ class GalvatronProfiler():
                                 other_memory_pp_off['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_off['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_first)
                             else:
                                 other_memory_pp_on_first['model_states'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_first['model_states'][tp_deg if enable_vocab_tp == 1 else 1], other_ms_first)
-                                other_memory_pp_on_first['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_first['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_first / pp_deg)
+                                other_memory_pp_on_first['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_first['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_first)
                                 other_memory_pp_on_last['model_states'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_last['model_states'][tp_deg if enable_vocab_tp == 1 else 1], other_ms_last)
-                                other_memory_pp_on_last['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_last['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_last / pp_deg)
+                                other_memory_pp_on_last['activation'][tp_deg if enable_vocab_tp == 1 else 1] = min(other_memory_pp_on_last['activation'][tp_deg if enable_vocab_tp == 1 else 1], other_act_last)
                         tp_deg *= 2
                     pp_deg *=2
 
-                for tp in [2,4,8]:
-                    if tp not in act_result:
-                        act_result[tp] = act_result[tp//2] / 2
-                    if tp not in other_memory_pp_off['model_states']:
-                        other_memory_pp_off['model_states'][tp] = other_memory_pp_off['model_states'][tp // 2] / 2
-                    if tp not in other_memory_pp_off['activation']:
-                        other_memory_pp_off['activation'][tp] = other_memory_pp_off['activation'][tp // 2] / 2
-                    if tp not in other_memory_pp_on_first['model_states']:
-                        other_memory_pp_on_first['model_states'][tp] = other_memory_pp_on_first['model_states'][tp // 2] / 2
-                    if tp not in other_memory_pp_on_first['activation']:
-                        other_memory_pp_on_first['activation'][tp] = other_memory_pp_on_first['activation'][tp // 2] / 2
-                    if tp not in other_memory_pp_on_last['model_states']:
-                        other_memory_pp_on_last['model_states'][tp] = other_memory_pp_on_last['model_states'][tp // 2] / 2
-                    if tp not in other_memory_pp_on_last['activation']:
-                        other_memory_pp_on_last['activation'][tp] = other_memory_pp_on_last['activation'][tp // 2] / 2
-                
+                if args.sequence_parallel:
+                    for tp in [2,4,8]:
+                        if tp not in act_result:
+                            act_result[tp] = act_result[tp//2] / 2
+                        if tp not in other_memory_pp_off['model_states']:
+                            other_memory_pp_off['model_states'][tp] = other_memory_pp_off['model_states'][tp // 2] / 2
+                        if tp not in other_memory_pp_off['activation']:
+                            other_memory_pp_off['activation'][tp] = other_memory_pp_off['activation'][tp // 2] / 2
+                        if tp not in other_memory_pp_on_first['model_states']:
+                            other_memory_pp_on_first['model_states'][tp] = other_memory_pp_on_first['model_states'][tp // 2] / 2
+                        if tp not in other_memory_pp_on_first['activation']:
+                            other_memory_pp_on_first['activation'][tp] = other_memory_pp_on_first['activation'][tp // 2] / 2
+                        if tp not in other_memory_pp_on_last['model_states']:
+                            other_memory_pp_on_last['model_states'][tp] = other_memory_pp_on_last['model_states'][tp // 2] / 2
+                        if tp not in other_memory_pp_on_last['activation']:
+                            other_memory_pp_on_last['activation'][tp] = other_memory_pp_on_last['activation'][tp // 2] / 2
+                    
                 # other_memory_pp_on_first['activation'] = other_memory_pp_on_last['activation'] = max(other_memory_pp_on_first['activation'], other_memory_pp_on_last['activation'])
                 print('other_memory_pp_off:', other_memory_pp_off)
                 print('other_memory_pp_on_first:', other_memory_pp_on_first)
@@ -605,7 +604,8 @@ class GalvatronProfiler():
         def allreduce_script(allreduce_size, allreduce_consec):
             return "python -m torch.distributed.launch --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK profile_allreduce.py --global_tp_deg %d --global_tp_consec %d --pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE \n"%(allreduce_size,allreduce_consec)
         
-        with open('scripts/profile_allreduce.sh', 'w') as f:
+        config_dir = os.path.join(self.path, './scripts')
+        with open(os.path.join(config_dir, 'profile_allreduce.sh'), 'w') as f:
             f.write(env)
             allreduce_size = num_nodes * num_gpus_per_node
             while allreduce_size > 1:
@@ -621,7 +621,7 @@ class GalvatronProfiler():
         def p2p_script(pp_deg):
             return "python -m torch.distributed.launch --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK profile_p2p.py --global_tp_deg 1 --global_tp_consec 1 --pp_deg %d --nproc_per_node=$NUM_GPUS_PER_NODE \n"%(pp_deg)
         
-        with open('scripts/profile_p2p.sh', 'w') as f:
+        with open(os.path.join(config_dir, 'profile_p2p.sh'), 'w') as f:
             f.write(env)
             pp_deg = 2
             while pp_deg <= world_size and pp_deg <= args.max_pp_deg:
@@ -630,7 +630,7 @@ class GalvatronProfiler():
                 pp_deg *= 2
                 f.write('sleep 1\n')
 
-    def generate_sp_script(self):
+    def generate_sp_script(self, num_nodes, num_gpus_per_node):
         env = self.get_env()
         
         def allreduce_script(allreduce_size, allreduce_consec, buffer_size):
@@ -638,9 +638,10 @@ class GalvatronProfiler():
         
         args = self.args
 
-        with open('scripts/profile_allreduce_sp.sh', 'w') as f:
+        config_dir = os.path.join(self.path, './scripts')
+        with open(os.path.join(config_dir, 'profile_allreduce_sp.sh'), 'w') as f:
             f.write(env)
-            allreduce_size = args.max_tp_size
+            allreduce_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
             while allreduce_size > 1:
                 buffer_size = 1024
                 while buffer_size >= 1:
@@ -653,9 +654,9 @@ class GalvatronProfiler():
         def all2all_script(allreduce_size, allreduce_consec, buffer_size):
             return "python -m torch.distributed.launch --nnodes=$NUM_NODES --nproc_per_node=$NUM_GPUS_PER_NODE --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT --node_rank=$NODE_RANK profile_all2all.py --global_tp_deg %d --global_tp_consec %d --pp_deg 1 --nproc_per_node=$NUM_GPUS_PER_NODE --local_batch_size %d --profile_time 1\n"%(allreduce_size,allreduce_consec,buffer_size)
         
-        with open('scripts/profile_all2all_sp.sh', 'w') as f:
+        with open(os.path.join(config_dir, 'profile_all2all_sp.sh'), 'w') as f:
             f.write(env)
-            all2all_size = args.max_tp_size
+            all2all_size = min(num_nodes * num_gpus_per_node, args.max_tp_size)
             while all2all_size > 1:
                 buffer_size = 1024
                 while buffer_size >= 1:
@@ -719,7 +720,7 @@ class GalvatronProfiler():
         args = self.args
         world_size = args.num_nodes * args.num_gpus_per_node
         if backend != "nccl":
-            self.generate_sp_script()
+            self.generate_sp_script(args.num_nodes, args.num_gpus_per_node)
             # import os
             # os.system('sh scripts/allreduce_scrpit.sh')
             # os.system('sh scripts/p2p_scrpit.sh')
@@ -759,7 +760,6 @@ class GalvatronProfiler():
             for size,time in zip(sizes,times):
                 key = 'all2all_size_%d_%dMB_time'%(all2all_size,size)
                 self.write_config(hardware_config_path, key, time)
-            print(times)
             print('='*70, '\n')
             all2all_size /= 2
             
@@ -776,7 +776,8 @@ class GalvatronProfiler():
         hostfile = os.path.join(self.path, args.hostfile)
         with open(hostfile, 'r') as f:
             hostnames = f.readlines()
-        hostnames = [hostname.strip() for hostname in hostnames]
+        hostnames = [hostname.strip() for hostname in hostnames if hostname.strip() != '']
+        
         return hostnames
     
     def prepare_nccltest_args(self, nccl_file='build/all_reduce_perf'):
@@ -839,7 +840,7 @@ class GalvatronProfiler():
             if mode == 'detail':
                 ARGS += 'START_MB=1 '
                 ARGS += 'END_MB=1024 '
-            # print(DEVICE_ARGS+ARGS)
+            print(DEVICE_ARGS+ARGS)
             os.system(DEVICE_ARGS+ARGS+'sh %s'%(os.path.join(self.path, 'scripts/run_nccl_test.sh')))
             with open('nccl_log/1/rank.0/stdout', 'r') as f:
                 lines = f.readlines()
@@ -890,40 +891,8 @@ class GalvatronProfiler():
             s += '_rank%d_%s'%(rank, type)
         return s
     
-    def match_key_str(self, s):
-        if '[' in s and ']' in s:
-            layernum = str2array(s[s.find('[')+1:s.find(']')])
-            s = s[s.find(']')+2:]
-            if 'rank' in s:
-                pattern = r'bsz(\d+)_rank(\d+)_(\w+)'
-                match = re.match(pattern, s)
-                bsz = int(match.group(1))
-                rank = int(match.group(2))
-                type = match.group(3)
-                results = [layernum, bsz, rank, type]
-            else:
-                pattern = r'bsz(\d+)'
-                match = re.match(pattern, s)
-                bsz = int(match.group(1))
-                results = [layernum, bsz]
-        else:
-            if 'rank' in s:
-                pattern = r'layernum(\d+)_bsz(\d+)_rank(\d+)_(\w+)'
-                match = re.match(pattern, s)
-                layernum = int(match.group(1))
-                bsz = int(match.group(2))
-                rank = int(match.group(3))
-                type = match.group(4)
-                results = [layernum, bsz, rank, type]
-            else:
-                pattern = r'layernum(\d+)_bsz(\d+)'
-                match = re.match(pattern, s)
-                layernum = int(match.group(1))
-                bsz = int(match.group(2))
-                results = [layernum, bsz]
-        return results
-    
     def total_memcost(self, pp_deg, layernum, layertype, per_layer_cost, stage_idx):
+        # get transformer layer memory cost
         layer_costs = []
         for l in range(layertype):
             layer_costs += [per_layer_cost[l]] * layernum
@@ -931,6 +900,7 @@ class GalvatronProfiler():
         avg_layer_num = int(total_layer_num // pp_deg)
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg-1)
         pp_divide = [avg_layer_num] * (pp_deg-1) + [last_layer_num]
+        assert avg_layer_num == last_layer_num
         return np.sum(layer_costs[int(np.sum(pp_divide[:stage_idx])):int(np.sum(pp_divide[:stage_idx+1]))])
     
     def prepare_profile_args(self, batch_size = None, sequence_length = None):
@@ -938,7 +908,7 @@ class GalvatronProfiler():
         
         PROFILE_ARGS = self.args2str(profile_args)        
         # zsh: Revise to accept extra_args_str
-        if "extra_args_str" in self.args:
+        if hasattr(self.args, "extra_args_str"):
             extra_args_list = self.args.extra_args_str.split("/")
             for arg in extra_args_list:
                 if arg != "":

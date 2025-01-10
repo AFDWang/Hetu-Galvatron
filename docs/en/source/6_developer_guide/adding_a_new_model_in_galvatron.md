@@ -400,10 +400,10 @@ Note: Although `wrap_block_name`, `wrap_checkpoint_block_name`, `wrap_other_bloc
 The `get_mymodel_config` function is used to get the model configuration, with the implementation format as follows:
 
 ```python
-def get_mymodel_config(args):
+def get_mymodel_config(args, overwrite_args=True):
     config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, True)
-    if args.local_rank == 0:
+    config = set_model_config(config, args, overwrite_args)
+    if hasattr(args, 'local_rank') and args.local_rank == 0:
         print(config)
     return config
 ```
@@ -664,8 +664,7 @@ if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='profile')
     
     # Load model configuration
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, overwrite_args=False)
+    config = get_mymodel_config(args, overwrite_args=False)
     
     # Create profiler instance
     profiler = GalvatronProfiler(args)
@@ -690,8 +689,7 @@ if __name__ == '__main__':
 ```python
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='search')
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, overwrite_args=True)
+    config = get_mymodel_config(args, overwrite_args=True)
     path = os.path.dirname(os.path.abspath(__file__))
     print(args)
     print(config)

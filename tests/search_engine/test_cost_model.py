@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 from galvatron.core.cost_model import MemoryCostModel, TimeCostModel, OtherTimeCostModel
-from tests.utils.cost_model_args import MemoryModelArgs, TimeModelArgs
+from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs
 
 @pytest.fixture
 def memory_model_args():

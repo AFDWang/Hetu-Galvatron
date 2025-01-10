@@ -3,7 +3,7 @@ import numpy as np
 import copy
 from galvatron.core.cost_model import MemoryCostModel
 from galvatron.core.search_engine import pp_division_memory_balanced, get_pp_stage_for_bsz, check_optimal_chunks, optimal_chunk_func_default
-from tests.utils.cost_model_args import MemoryModelArgs, TimeModelArgs
+from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs
 
 @pytest.fixture
 def memory_model_args():

@@ -398,10 +398,10 @@ def construct_hybrid_parallel_model_api(
 `get_mymodel_config`函数用于获取模型配置，其实现格式如下：
 
 ```python
-def get_mymodel_config(args):
+def get_mymodel_config(args, overwrite_args=True):
     config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, True)
-    if args.local_rank == 0:
+    config = set_model_config(config, args, overwrite_args)
+    if hasattr(args, 'local_rank') and args.local_rank == 0:
         print(config)
     return config
 ```
@@ -661,8 +661,7 @@ if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='profile')
     
     # 加载模型配置
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, overwrite_args=False)
+    config = get_mymodel_config(args, overwrite_args=False)
     
     # 创建性能分析器实例
     profiler = GalvatronProfiler(args)
@@ -686,8 +685,7 @@ if __name__ == '__main__':
 ```python
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='search')
-    config = config_from_meta(args.model_size)
-    config = set_model_config(config, args, overwrite_args=True)
+    config = get_mymodel_config(args, overwrite_args=True)
     path = os.path.dirname(os.path.abspath(__file__))
     print(args)
     print(config)

@@ -6,6 +6,7 @@
 [![Read the Docs](https://img.shields.io/readthedocs/hetu-galvatron)](https://hetu-galvatron.readthedocs.io)
 [![Downloads](https://static.pepy.tech/badge/hetu-galvatron)](https://pepy.tech/project/hetu-galvatron)
 ![visitors](https://visitor-badge.laobi.icu/badge?page_id=PKU-DAIR.Hetu-Galvatron)
+[![CodeCov](https://codecov.io/gh/PKU-DAIR/Hetu-Galvatron/branch/main/graph/badge.svg)](https://codecov.io/gh/PKU-DAIR/Hetu-Galvatron)
 
 Galvatron is an automatic distributed training system designed for Transformer models, including Large Language Models (LLMs). It leverages advanced automatic parallelism techniques to deliver exceptional training efficiency. This repository houses the official implementation of Galvatron-2, our latest version enriched with several new features.
 

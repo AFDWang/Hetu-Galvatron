@@ -2,7 +2,7 @@ import pytest
 import os
 import glob
 import json
-from tests.utils.mock_configs import (
+from tests.utils.search_configs import (
     initialize_search_engine
 )
 

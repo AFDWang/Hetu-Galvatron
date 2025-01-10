@@ -6,7 +6,7 @@ import os
 
 if __name__ == '__main__':
     args = initialize_galvatron(model_args, mode='profile')
-    config = get_gpt_config(args)
+    config = get_gpt_config(args, overwrite_args=False)
     
     profiler = GalvatronProfiler(args)
     path = os.path.dirname(os.path.abspath(__file__))

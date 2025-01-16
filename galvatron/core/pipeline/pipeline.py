@@ -209,21 +209,19 @@ class PipelineParallel(nn.Module):
             for j in range(len(tensor_shape[i])):
                 if tensor_shape[i][j] == -1:
                     tensor_shape[i][j] = microbatch_size
-            if i == 0:
-                if self.sequence_parallel:
-                    if self.shape_order == "SBH":
-                        tensor_shape[i][0] = tensor_shape[i][0] // size
-                    else:
-                        tensor_shape[i] = [tensor_shape[i][0] * tensor_shape[i][1] // size, tensor_shape[i][2]]
+            if self.sequence_parallel:
+                if self.shape_order == "SBH":
+                    tensor_shape[i][0] = tensor_shape[i][0] // size
+                else:
+                    tensor_shape[i] = [tensor_shape[i][0] * tensor_shape[i][1] // size, tensor_shape[i][2]]
             for j in range(len(tensor_shape_last[i])):
                 if tensor_shape_last[i][j] == -1:
                     tensor_shape_last[i][j] = microbatch_size_last
-            if i == 0:
-                if self.sequence_parallel:
-                    if self.shape_order == "SBH":
-                        tensor_shape_last[i][0] = tensor_shape_last[i][0] // size
-                    else:
-                        tensor_shape_last[i] = [tensor_shape_last[i][0] * tensor_shape_last[i][1] // size, tensor_shape_last[i][2]]
+            if self.sequence_parallel:
+                if self.shape_order == "SBH":
+                    tensor_shape_last[i][0] = tensor_shape_last[i][0] // size
+                else:
+                    tensor_shape_last[i] = [tensor_shape_last[i][0] * tensor_shape_last[i][1] // size, tensor_shape_last[i][2]]
         return tensor_shape, tensor_shape_last
 
     def no_pipeline_forward_backward(
@@ -906,6 +904,12 @@ class PipelineParallel(nn.Module):
             tensor_recv_prev: Union[torch.Tensor, None],
             tensor_recv_next: Union[torch.Tensor, None],
     ):
+        if self.info:
+            print(f'rank {self.global_rank}:\n'
+                  f'send prev: {tensor_send_prev.shape if tensor_send_prev is not None else None}\n'
+                  f'send next: {tensor_send_next.shape if tensor_send_next is not None else None}\n'
+                  f'recv prev: {tensor_recv_prev.shape if tensor_recv_prev is not None else None}\n'
+                  f'recv next: {tensor_recv_next.shape if tensor_recv_next is not None else None}')
         ops = []
         if tensor_send_prev is not None:
             send_prev_op = torch.distributed.P2POp(

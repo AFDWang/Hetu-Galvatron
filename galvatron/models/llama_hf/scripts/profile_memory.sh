@@ -21,8 +21,10 @@ MODEL_ARGS="
     --seq_length 2048"
 
 # PROFILE_ARGS_BF16="
+#     --profile_mode static \
 #     --profile_type memory \
 #     --profile_batch_size 8 \
+#     --profile_seq_length_list 4096 \
 #     --layernum_min 1 \
 #     --layernum_max 2 \
 #     --max_tp_deg 8 \
@@ -35,8 +37,8 @@ PROFILE_ARGS_BF16="
     --profile_mode sequence \
     --profile_type memory \
     --profile_batch_size 8 \
-    --profile_min_seq_length 512 \
-    --profile_max_seq_length 8192 \
+    --profile_min_seq_length 2048 \
+    --profile_max_seq_length 4096 \
     --layernum_min 1 \
     --layernum_max 2 \
     --max_tp_deg 8 \

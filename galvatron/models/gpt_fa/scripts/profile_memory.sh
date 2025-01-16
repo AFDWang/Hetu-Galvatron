@@ -39,6 +39,7 @@ MODEL_ARGS_SIZE67B="
 PROFILE_ARGS_BF16="
     --profile_type memory \
     --profile_batch_size 8 \
+    --profile_seq_length_list 2048 \
     --layernum_min 1 \
     --layernum_max 2 \
     --max_tp_deg 8 \

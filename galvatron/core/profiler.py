@@ -2,7 +2,9 @@ import os
 import time
 import torch
 import numpy as np
+from itertools import product
 from galvatron.utils import save_profiled_memory, print_peak_memory, save_profiled_time, array2str, str2array, read_json_config, write_json_config
+from galvatron.utils.config_utils import num2str
 import re
 from collections import defaultdict
 import copy
@@ -33,11 +35,13 @@ class GalvatronProfiler():
         exit_ = self.args.exit_after_profiling if hasattr(self.args, 'exit_after_profiling') else True
         self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=exit_)
     
-    def set_profiler_launcher(self, path, layernum_arg_names=None, model_name=None, layernum_listed=False):
+    def set_profiler_launcher(self, path, layernum_arg_names=None, model_name=None, seqlen_arg_names=None, layernum_listed=False):
         self.set_layernum_arg_names(layernum_arg_names, layernum_listed)
         self.set_path(path)
         self.set_model_name(model_name)
-    
+        self.set_layernum_list()
+        self.set_seqlen_list(seqlen_arg_names)
+
     def set_layernum_arg_names(self, layernum_arg_names, layernum_listed):
         self.layernum_listed = layernum_listed
         self.layernum_arg_names = layernum_arg_names
@@ -49,6 +53,42 @@ class GalvatronProfiler():
             self.num_layertype = sum([len(getattr(self.args, name)) for name in layernum_arg_names])
             self.layernum_list = [layernum for name in layernum_arg_names for layernum in getattr(self.args, name)]
     
+    def set_layernum_list(self):
+        args = self.args
+        self.sequence_length_list = []
+        if self.args.profile_seq_length_list is not None:
+            self.profile_seq_length_list = str2array(self.args.profile_seq_length_list)
+            assert len(self.profile_seq_length_list) == self.num_layertype
+
+        for i in range(self.num_layertype):
+            if args.profile_mode == "static":
+                assert args.profile_batch_size is not None
+                self.sequence_length_list.append([self.profile_seq_length_list[i]])
+            elif args.profile_mode == "batch":
+                assert (args.profile_min_batch_size is not None and args.profile_max_batch_size is not None)
+                self.sequence_length_list.append([self.profile_seq_length_list[i]])
+            elif args.profile_mode == "sequence":
+                if self.num_layertype > 1:
+                    assert False, "Sequence profiling only support single layertype!"
+                if args.profile_type == "computation":
+                    assert (args.profile_min_seq_length is not None and args.profile_max_seq_length is not None)
+                    # assert ((1<<(args.profile_min_seq_length.bit_length()-1)) == args.profile_min_seq_length), "profile_min_seq_length must be a power of 2"
+                    # assert ((1<<(args.profile_max_seq_length.bit_length()-1)) == args.profile_max_seq_length), "profile_max_seq_length must be a power of 2"
+                    # self.sequence_length_list = [(1<<i) for i in range(args.profile_min_seq_length.bit_length()-1, args.profile_max_seq_length.bit_length())]
+                    self.sequence_length_list.append(list(range(args.profile_min_seq_length, args.profile_max_seq_length + 1, args.profile_seq_length_step)))
+                elif args.profile_type == "memory":
+                    assert (args.profile_min_seq_length is not None and args.profile_max_seq_length is not None)
+                    assert ((1<<(args.profile_min_seq_length.bit_length()-1)) == args.profile_min_seq_length), "profile_min_seq_length must be a power of 2"
+                    assert ((1<<(args.profile_max_seq_length.bit_length()-1)) == args.profile_max_seq_length), "profile_max_seq_length must be a power of 2"
+                    self.sequence_length_list.append([(1<<j) for j in range(args.profile_min_seq_length.bit_length()-1, args.profile_max_seq_length.bit_length())])
+    
+    def set_seqlen_list(self, seqlen_arg_names):
+        if seqlen_arg_names is None:
+            self.seqlen_arg_names = ['seq_length']
+        else:
+            self.seqlen_arg_names = seqlen_arg_names
+        # self.seqlen_list = [getattr(self.args, name) for name in self.seqlen_arg_names]
+        
     def set_model_layer_configs(self, model_layer_configs):
         if model_layer_configs is None:
             return
@@ -139,7 +179,7 @@ class GalvatronProfiler():
                                          args.global_checkpoint, 
                                          args.sequence_parallel, 
                                          args.vocab_tp,
-                                         args.seq_length)
+                                         self.seqlen_list)
             if hasattr(args, 'save_profiled_memory') and args.save_profiled_memory:
                 exit(0)
     
@@ -167,7 +207,7 @@ class GalvatronProfiler():
             if hasattr(args, 'profile_forward') and args.profile_forward:
                 assert self.layernum_list is not None
                 time_config_path = self.time_profiling_path()
-                save_profiled_time(time_config_path, avg_time*1e3, args.global_train_batch_size, self.layernum_list, args.seq_length)
+                save_profiled_time(time_config_path, avg_time*1e3, args.global_train_batch_size, self.layernum_list, self.seqlen_list)
             if self.exit:
                 exit(0)
             else:
@@ -217,7 +257,7 @@ class GalvatronProfiler():
             if hasattr(args, 'profile_forward') and args.profile_forward:
                 assert self.layernum_list is not None
                 time_config_path = self.time_profiling_path()
-                save_profiled_time(time_config_path, avg_time, args.global_train_batch_size, self.layernum_list, args.seq_length)
+                save_profiled_time(time_config_path, avg_time, args.global_train_batch_size, self.layernum_list, self.seqlen_list)
             if self.exit:
                 exit(0)
             else:
@@ -225,30 +265,6 @@ class GalvatronProfiler():
                 self.total_start_time = time.time()
     
     # =============== For Launching Profiling Scripts ===============
-    def get_seq_list(self):
-        args = self.args
-        if hasattr(self,"sequence_length_list"):
-            return self.sequence_length_list
-        if args.profile_mode == "static":
-            assert args.profile_batch_size is not None
-            self.sequence_length_list = [args.seq_length]
-        elif args.profile_mode == "batch":
-            assert (args.profile_min_batch_size is not None and args.profile_max_batch_size is not None)
-            self.sequence_length_list = [args.seq_length]
-        elif args.profile_mode == "sequence":
-            assert (args.profile_min_seq_length is not None and args.profile_max_seq_length is not None)
-            assert ((1<<(args.profile_min_seq_length.bit_length()-1)) == args.profile_min_seq_length), "profile_min_seq_length must be a power of 2"
-            assert ((1<<(args.profile_max_seq_length.bit_length()-1)) == args.profile_max_seq_length), "profile_max_seq_length must be a power of 2"
-            # self.sequence_length_list = [(1<<i) for i in range(args.profile_min_seq_length.bit_length()-1, args.profile_max_seq_length.bit_length())]
-            self.sequence_length_list = list(range(args.profile_min_seq_length, args.profile_max_seq_length + 1, args.profile_seq_length_step))
-        else:
-            assert (args.profile_min_batch_size is not None and args.profile_max_batch_size is not None)
-            assert (args.profile_min_seq_length is not None and args.profile_max_seq_length is not None)
-            assert ((1<<(args.profile_min_seq_length.bit_length()-1)) == args.profile_min_seq_length), "profile_min_seq_length must be a power of 2"
-            assert ((1<<(args.profile_max_seq_length.bit_length()-1)) == args.profile_max_seq_length), "profile_max_seq_length must be a power of 2"
-            self.sequence_length_list = list(range(args.profile_min_seq_length, args.profile_max_seq_length + 1, args.profile_seq_length_step))
-        return self.sequence_length_list
-    
     def get_bsz_list(self):
         args = self.args
         if hasattr(self,"batch_size_list"):
@@ -279,13 +295,11 @@ class GalvatronProfiler():
         if args.profile_type == 'memory':
             assert (args.profile_mode == "static" or args.profile_mode == "sequence"), "Memory profiling only support sequence or static profile mode."
             max_tp_deg = min(world_size, self.args.max_tp_deg)
-            if args.profile_mode == "static":
-                sequence_length_list = [args.seq_length]
-            else:
-                sequence_length_list = [(1<<i) for i in range(args.profile_min_seq_length.bit_length()-1, args.profile_max_seq_length.bit_length())]
+            if args.profile_mode != "static":
                 max_tp_deg = 1
+            sequence_length_list = list(product(*self.sequence_length_list))
             for seq in sequence_length_list:
-                PROFILE_ARGS = self.prepare_profile_args(sequence_length = seq)
+                PROFILE_ARGS = self.prepare_profile_args()
                 pp_deg = 1
                 for checkpoint in [0, 1]:
                     tp_deg = 1
@@ -295,7 +309,9 @@ class GalvatronProfiler():
                                 if tp_deg == 1 and enable_vocab_tp == 1:
                                     continue
                                 for layernum_list in layernum_lists:
-                                    args_ = self.get_layernum_args(layernum_list)
+                                    args_ = {}
+                                    self.get_layernum_args(args_, layernum_list)
+                                    self.get_seqlen_args(args_, seq)
                                     args_['pp_deg'] = pp_deg
                                     args_['global_tp_deg'] = tp_deg
                                     args_['global_checkpoint'] = checkpoint
@@ -316,7 +332,9 @@ class GalvatronProfiler():
                             for enable_vocab_tp in [0,1]:
                                 if tp_deg == 1 and enable_vocab_tp == 1:
                                     continue
-                                args_ = self.get_layernum_args([layernum] * self.num_layertype)
+                                args_ = {}
+                                self.get_layernum_args(args_, [layernum] * self.num_layertype)
+                                self.get_seqlen_args(args_, seq)
                                 args_['pp_deg'] = pp_deg
                                 args_['global_tp_deg'] = tp_deg
                                 args_['global_checkpoint'] = 0
@@ -328,16 +346,18 @@ class GalvatronProfiler():
                         tp_deg *= 2
         elif args.profile_type == 'computation':
             for layernum_list in layernum_lists:
-                args_ = self.get_layernum_args(layernum_list)
+                args_ = {}
+                self.get_layernum_args(args_, layernum_list)
                 args_['pp_deg'] = 1
                 args_['global_tp_deg'] = 1
                 args_['global_checkpoint'] = 0
-                ARGS_ = self.args2str(args_)
                 batch_size_list = self.get_bsz_list()
-                sequence_length_list = self.get_seq_list()
+                sequence_length_list = list(product(*self.sequence_length_list))
                 for bsz in batch_size_list:
                     for seq in sequence_length_list:
-                        PROFILE_ARGS = self.prepare_profile_args(batch_size = bsz, sequence_length = seq)
+                        PROFILE_ARGS = self.prepare_profile_args(batch_size = bsz)
+                        self.get_seqlen_args(args_, seq)
+                        ARGS_ = self.args2str(args_)
                         CMD = LAUNCH_SCRIPTS+MODEL_ARGS+PROFILE_ARGS+ARGS_
                         print(CMD)
                         os.system(CMD)
@@ -350,31 +370,31 @@ class GalvatronProfiler():
             time_config_path = self.time_profiling_path()
             config = read_json_config(time_config_path)
             batch_size_list = self.get_bsz_list()
-            sequence_length_list = self.get_seq_list()
+            sequence_length_list = list(product(*self.sequence_length_list))
             for bsz in batch_size_list:
                 for seq in sequence_length_list:
-                    key_base = self.key_format(layernum_lists[0], bsz, seq)
+                    seq_info = num2str(list(seq), 'seq')
+                    key_base = self.key_format(layernum_lists[0], bsz, seq_info)
                     val_base = config[key_base]
+                    total_avg_time = []
                     for idx, layernum in enumerate(layernum_lists[1:]):
-                        key = self.key_format(layernum, bsz, seq)
+                        key = self.key_format(layernum, bsz, seq_info)
                         val = config[key]
                         avg_time = val - val_base
                         avg_time = avg_time / bsz / (args.layernum_max-args.layernum_min)
-                        write_key = 'layertype_%d_bsz%d_seq%d'%(idx,bsz,seq)
+                        write_key = 'layertype_%d_bsz%d_seq%d'%(idx,bsz,seq[idx])
                         config[write_key] = avg_time
-                        write_key = 'layertype_other_%d_bsz%d_seq%d'%(idx,bsz,seq)
-                        other_time = (val_base - layernum_lists[0][0] * avg_time * bsz) / bsz
-                        other_time += (val - layernum[0] * avg_time * bsz) / bsz
-                        other_time /= 2
-                        config[write_key] = max(other_time,0)
+                        total_avg_time.append(avg_time)
+                    other_time = val_base
+                    for idx in range(len(total_avg_time)):
+                        other_time -= layernum_lists[0][idx] * total_avg_time[idx] * bsz
+                    other_time /= bsz
+                    write_key = 'layertype_other_bsz%d_%s'%(bsz,seq_info)
+                    config[write_key] = max(other_time,0)
                     write_json_config(config, time_config_path)
                     print('Already written processed computation time into env config file %s!\n'%(time_config_path))    
         elif args.profile_type == 'memory':
             assert (args.profile_mode == "static" or args.profile_mode == "sequence"), "Memory profiling only support sequence or static profile mode."
-            if args.profile_mode == "static":
-                sequence_length_list = [args.seq_length]
-            else:
-                sequence_length_list = [(1<<i) for i in range(args.profile_min_seq_length.bit_length()-1, args.profile_max_seq_length.bit_length())]
             memory_config_path = self.memory_profiling_path()
             config = read_json_config(memory_config_path)
             bsz = args.profile_batch_size
@@ -382,11 +402,12 @@ class GalvatronProfiler():
             layertype = len(layernum_list_base)
             layernum_lists = layernum_lists[1:]
             layernum_diff = args.layernum_max - args.layernum_min
-
+            sequence_length_list = list(product(*self.sequence_length_list))
             for seq in sequence_length_list:
                 pp_deg, tp_deg = 1, 1
                 param_result_list, act_result_list, param_list = [dict() for _ in range(layertype)], [dict() for _ in range(layertype)], [-1]*layertype
-                print('Sequence length:%d'%seq)
+                seq_info = num2str(list(seq), 'seq')
+                print('Sequence length:%s'%seq_info)
                 # get tp act memory cost
                 while True:
                     if pp_deg * tp_deg > world_size:
@@ -401,8 +422,8 @@ class GalvatronProfiler():
                     re = config[strategy]
                     for l in range(layertype):
                         layernum_key_0, layernum_key_1 = layernum_list_base, layernum_lists[l]
-                        param_per_layer = (re[self.key_format(layernum_key_1, bsz, seq, 0, 'ms')] - re[self.key_format(layernum_key_0, bsz, seq, 0, 'ms')])/layernum_diff*pp_deg/4
-                        act_per_layer_per_sample = (re[self.key_format(layernum_key_1, bsz, seq, 0, 'act')] - re[self.key_format(layernum_key_0, bsz, seq, 0, 'act')])/layernum_diff*pp_deg/(pp_deg*tp_deg)
+                        param_per_layer = (re[self.key_format(layernum_key_1, bsz, seq_info, 0, 'ms')] - re[self.key_format(layernum_key_0, bsz, seq_info, 0, 'ms')])/layernum_diff*pp_deg/4
+                        act_per_layer_per_sample = (re[self.key_format(layernum_key_1, bsz, seq_info, 0, 'act')] - re[self.key_format(layernum_key_0, bsz, seq_info, 0, 'act')])/layernum_diff*pp_deg/(pp_deg*tp_deg)
                         act_per_layer_per_sample *= world_size / bsz
                         if args.profile_dp_type == 'zero3':
                             param_per_layer *= world_size//pp_deg//tp_deg
@@ -437,7 +458,7 @@ class GalvatronProfiler():
                     re = config[strategy]
                     for l in range(layertype):
                         layernum_key_0, layernum_key_1 = layernum_list_base, layernum_lists[l]
-                        act_per_layer_per_sample = (re[self.key_format(layernum_key_1, bsz, seq, 0, 'act')] - re[self.key_format(layernum_key_0, bsz, seq, 0, 'act')])/layernum_diff*pp_deg/(pp_deg*tp_deg)
+                        act_per_layer_per_sample = (re[self.key_format(layernum_key_1, bsz, seq_info, 0, 'act')] - re[self.key_format(layernum_key_0, bsz, seq_info, 0, 'act')])/layernum_diff*pp_deg/(pp_deg*tp_deg)
                         act_per_layer_per_sample *= world_size / bsz
                         # print(act_per_layer_per_sample)
                         act_dict_c, act_cpt = act_dict_c_list[l], act_cpt_list[l]
@@ -486,7 +507,7 @@ class GalvatronProfiler():
                                 layernum = pp_deg
                                 layernum_list = [layernum] * layertype
                             ms_cost, act_cost = [], []
-                            if self.key_format(layernum_list, bsz, seq, 0, 'ms') not in re:
+                            if self.key_format(layernum_list, bsz, seq_info, 0, 'ms') not in re:
                                 tp_deg *= 2
                                 continue
                             for l in range(layertype):
@@ -499,14 +520,14 @@ class GalvatronProfiler():
                             layer_act_costs_first = self.total_memcost(pp_deg, layernum, layertype, act_cost, 0)
                             layer_act_costs_last = self.total_memcost(pp_deg, layernum, layertype, act_cost, pp_deg-1)
 
-                            other_ms_first = re[self.key_format(layernum_list, bsz, seq, 0, 'ms')] - layer_ms_costs_first
-                            other_ms_last = re[self.key_format(layernum_list, bsz, seq, world_size-1, 'ms')] - layer_ms_costs_last
+                            other_ms_first = re[self.key_format(layernum_list, bsz, seq_info, 0, 'ms')] - layer_ms_costs_first
+                            other_ms_last = re[self.key_format(layernum_list, bsz, seq_info, world_size-1, 'ms')] - layer_ms_costs_last
                             if args.profile_dp_type == 'zero3':
-                                other_ms_first = (re[self.key_format(layernum_list, bsz, seq, 0, 'ms')] - layer_ms_costs_first / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
-                                other_ms_last = (re[self.key_format(layernum_list, bsz, seq, world_size-1, 'ms')] - layer_ms_costs_last / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
+                                other_ms_first = (re[self.key_format(layernum_list, bsz, seq_info, 0, 'ms')] - layer_ms_costs_first / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
+                                other_ms_last = (re[self.key_format(layernum_list, bsz, seq_info, world_size-1, 'ms')] - layer_ms_costs_last / (world_size//pp_deg//tp_deg)) * (world_size//pp_deg) / (tp_deg if enable_vocab_tp == 1 else 1)
                             
-                            act_peak_first = max(re[self.key_format(layernum_list, bsz, seq, 0, 'act_peak')], re[self.key_format(layernum_list, bsz, seq, 0, 'act')])
-                            act_peak_last = max(re[self.key_format(layernum_list, bsz, seq, world_size-1, 'act_peak')], re[self.key_format(layernum_list, bsz, seq, world_size-1, 'act')])
+                            act_peak_first = max(re[self.key_format(layernum_list, bsz, seq_info, 0, 'act_peak')], re[self.key_format(layernum_list, bsz, seq_info, 0, 'act')])
+                            act_peak_last = max(re[self.key_format(layernum_list, bsz, seq_info, world_size-1, 'act_peak')], re[self.key_format(layernum_list, bsz, seq_info, world_size-1, 'act')])
                             other_act_first = (act_peak_first - layer_act_costs_first * (bsz / (world_size // (pp_deg * tp_deg)))) / (bsz / world_size * pp_deg * (tp_deg if enable_vocab_tp == 1 else 1))
                             other_act_last = (act_peak_last - layer_act_costs_last * (bsz / (world_size // (pp_deg * tp_deg)))) / (bsz / world_size * pp_deg * (tp_deg if enable_vocab_tp == 1 else 1))
                             
@@ -551,34 +572,34 @@ class GalvatronProfiler():
                     for l in range(layertype):
                         if 'layertype_%d_sp'%l not in config.keys():
                             config['layertype_%d_sp'%l] = dict()
-                        config['layertype_%d_sp'%l][str(seq)] = {}
-                        config['layertype_%d_sp'%l][str(seq)]['parameter_size'] = copy.deepcopy(param_list[l])
-                        config['layertype_%d_sp'%l][str(seq)]['tp_activation_per_bsz_dict'] = copy.deepcopy(act_result_list[l])
+                        config['layertype_%d_sp'%l][str(seq[l])] = {}
+                        config['layertype_%d_sp'%l][str(seq[l])]['parameter_size'] = copy.deepcopy(param_list[l])
+                        config['layertype_%d_sp'%l][str(seq[l])]['tp_activation_per_bsz_dict'] = copy.deepcopy(act_result_list[l])
                     if 'other_memory_pp_off_sp' not in config.keys():
                         config['other_memory_pp_off_sp'] = {}
-                    config['other_memory_pp_off_sp'][str(seq)] = copy.deepcopy(other_memory_pp_off)
+                    config['other_memory_pp_off_sp'][seq_info[3:]] = copy.deepcopy(other_memory_pp_off)
                     if 'other_memory_pp_on_first_sp' not in config.keys():
                         config['other_memory_pp_on_first_sp'] = {}
-                    config['other_memory_pp_on_first_sp'][str(seq)] = copy.deepcopy(other_memory_pp_on_first)
+                    config['other_memory_pp_on_first_sp'][seq_info[3:]] = copy.deepcopy(other_memory_pp_on_first)
                     if 'other_memory_pp_on_last_sp' not in config.keys():
                         config['other_memory_pp_on_last_sp'] = {}
-                    config['other_memory_pp_on_last_sp'][str(seq)] = copy.deepcopy(other_memory_pp_on_last)
+                    config['other_memory_pp_on_last_sp'][seq_info[3:]] = copy.deepcopy(other_memory_pp_on_last)
                 else:
                     for l in range(layertype):
                         if 'layertype_%d'%l not in config.keys():
                             config['layertype_%d'%l] = dict()
-                        config['layertype_%d'%l][str(seq)] = {}
-                        config['layertype_%d'%l][str(seq)]['parameter_size'] = copy.deepcopy(param_list[l])
-                        config['layertype_%d'%l][str(seq)]['tp_activation_per_bsz_dict'] = copy.deepcopy(act_result_list[l])
+                        config['layertype_%d'%l][str(seq[l])] = {}
+                        config['layertype_%d'%l][str(seq[l])]['parameter_size'] = copy.deepcopy(param_list[l])
+                        config['layertype_%d'%l][str(seq[l])]['tp_activation_per_bsz_dict'] = copy.deepcopy(act_result_list[l])
                     if 'other_memory_pp_off' not in config.keys():
                         config['other_memory_pp_off'] = {}
-                    config['other_memory_pp_off'][str(seq)] = copy.deepcopy(other_memory_pp_off)
+                    config['other_memory_pp_off'][seq_info[3:]] = copy.deepcopy(other_memory_pp_off)
                     if 'other_memory_pp_on_first' not in config.keys():
                         config['other_memory_pp_on_first'] = {}
-                    config['other_memory_pp_on_first'][str(seq)] = copy.deepcopy(other_memory_pp_on_first)
+                    config['other_memory_pp_on_first'][seq_info[3:]] = copy.deepcopy(other_memory_pp_on_first)
                     if 'other_memory_pp_on_last' not in config.keys():
                         config['other_memory_pp_on_last'] = {}
-                    config['other_memory_pp_on_last'][str(seq)] = copy.deepcopy(other_memory_pp_on_last)  
+                    config['other_memory_pp_on_last'][seq_info[3:]] = copy.deepcopy(other_memory_pp_on_last)  
             write_json_config(config, memory_config_path)
 
     # =============== For Launching Nccl-test for Hardware Profiling ===============
@@ -886,7 +907,10 @@ class GalvatronProfiler():
         if bsz is not None:
             s += "_bsz%d"%(bsz)
         if seq is not None:
-            s += "_seq%d"%(seq)
+            if isinstance(seq, str):
+                s += "_%s"%(seq)
+            else:
+                s += "_seq%d"%(seq)
         if rank is not None and type is not None:
             s += '_rank%d_%s'%(rank, type)
         return s
@@ -903,8 +927,8 @@ class GalvatronProfiler():
         assert avg_layer_num == last_layer_num
         return np.sum(layer_costs[int(np.sum(pp_divide[:stage_idx])):int(np.sum(pp_divide[:stage_idx+1]))])
     
-    def prepare_profile_args(self, batch_size = None, sequence_length = None):
-        profile_args = self.profiling_general_args(batch_size, sequence_length)
+    def prepare_profile_args(self, batch_size = None):
+        profile_args = self.profiling_general_args(batch_size)
         
         PROFILE_ARGS = self.args2str(profile_args)        
         # zsh: Revise to accept extra_args_str
@@ -924,6 +948,7 @@ class GalvatronProfiler():
                             'profile_min_batch_size',
                             'profile_max_batch_size',
                             'profile_batch_size_step',
+                            'profile_seq_length_list',
                             'profile_min_seq_length',
                             'profile_max_seq_length',
                             'profile_seq_length_step',
@@ -945,7 +970,9 @@ class GalvatronProfiler():
                             'add_bias_linear',
                             'swiglu',
                             'extra_args_str',
-                            "seq_length"]
+                            "seq_length",
+                            "encoder_seq_length",
+                            "decoder_seq_length"]
         exclude_arg_names = profile_arg_names+self.layernum_arg_names
         MODEL_ARGS = self.args2str(self.args._get_kwargs(), exclude_arg_names)
         # print(MODEL_ARGS)
@@ -999,12 +1026,11 @@ class GalvatronProfiler():
                 s += self.arg2str(key, val)
         return s
     
-    def profiling_general_args(self, batch_size = None, sequence_length = None):
+    def profiling_general_args(self, batch_size = None):
         args = {
             'set_model_config_manually': 0,
             'set_layernum_manually': 1,
             'set_seqlen_manually': 1,
-            'seq_length': sequence_length,
             'global_train_batch_size': self.args.profile_batch_size if batch_size is None else batch_size,
             'epochs': 10,
             'lr': 1e-4,
@@ -1031,9 +1057,8 @@ class GalvatronProfiler():
             args['sequence-parallel'] = ''
         return args
     
-    def get_layernum_args(self, layernum_list):
+    def get_layernum_args(self, args, layernum_list):
         assert len(layernum_list) == self.num_layertype
-        args = {}
         if not self.layernum_listed:
             for layernum, arg_name in zip(layernum_list, self.layernum_arg_names):
                 args[arg_name] = layernum
@@ -1041,7 +1066,11 @@ class GalvatronProfiler():
             assert len(self.layernum_arg_names) == 1
             arg_name = self.layernum_arg_names[0]
             args[arg_name] = layernum_list
-        return args
+
+    def get_seqlen_args(self, args, seqlen_list):
+        assert len(seqlen_list) == self.num_layertype
+        for seqlen, arg_name in zip(seqlen_list, self.seqlen_arg_names):
+            args[arg_name] = seqlen
     
     def env_args(self):
         return {'PROFILE_LAUNCHER': os.getenv('PROFILE_LAUNCHER', 'python3 -m torch.distributed.launch'),

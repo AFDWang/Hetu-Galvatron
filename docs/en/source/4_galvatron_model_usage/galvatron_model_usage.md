@@ -20,7 +20,7 @@ sh scripts/profile_memory.sh
 
 ### Other Profile Arguments
 
-By setting `profile_min_batch_size`, `profile_max_batch_size`, and `profile_batch_size_step`, you can control the batch sizes used during time profiling. Specifically, the time profiling will be performed using batch sizes in `range(profile_min_batch_size, profile_max_batch_size + 1, profile_batch_size_step)`. Similarly, by setting `profile_min_seq_length`, `profile_max_seq_length`, `profile_seq_length_step`, you can control the sequence lengths used during time and memory profiling. The former should be used with `profile_mode == 'batch'`, and the latter with `profile_mode == 'sequence'`. Further details about `profile_mode` will be discussed later. 
+By setting `profile_min_batch_size`, `profile_max_batch_size`, and `profile_batch_size_step`, you can control the batch sizes used during time profiling. Specifically, the time profiling will be performed using batch sizes in `range(profile_min_batch_size, profile_max_batch_size + 1, profile_batch_size_step)`. Similarly, by setting `profile_min_seq_length`, `profile_max_seq_length`, `profile_seq_length_step`, you can control the sequence lengths used during time and memory profiling. The former should be used with `profile_mode == 'batch'`, and the latter with `profile_mode == 'sequence'`. For `static` mode, you can control the batch size by setting `profile_batch_size`, and control the sequence length by setting `profile_seq_length_list`. Further details about `profile_mode` will be discussed later. 
 
 ## Parallelism Optimizing with Galvatron
 

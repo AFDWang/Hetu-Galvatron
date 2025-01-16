@@ -12,6 +12,7 @@ def array2str(a):
     return ",".join(map(str,a))
 
 def read_json_config(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     return json.load(open(path,'r',encoding="utf-8"))
 
 def write_json_config(config, path):
@@ -93,12 +94,15 @@ def save_profiling_results(path, strategy, bsz, hidden_size, results):
     write_json_config(config, path)
     print('Already written policy profiling config into config file %s!\n'%(path)) 
 
-def layernum2str(layer_num):
-    if isinstance(layer_num, List):
-        layernum_info = 'layernum[%s]'%(array2str(layer_num))
+def num2str(num, name):
+    if name == 'seq':
+        if len(num) == 1:
+            num = num[0]
+    if isinstance(num, List):
+        info = '%s[%s]'%(name, array2str(num))
     else:
-        layernum_info = 'layernum%d'%layer_num
-    return layernum_info
+        info = '%s%d'%(name, num)
+    return info
 
 def save_profiled_memory(path, pp_deg, tp_deg, world_size, layer_num, bsz, rank, model_states, activation, activation_peak, cpt, sequence_parallel = False, vocab_tp = 1, seq = None):
     config = read_json_config(path) if os.path.exists(path) else {}
@@ -111,17 +115,19 @@ def save_profiled_memory(path, pp_deg, tp_deg, world_size, layer_num, bsz, rank,
         key += '_sp'
     if key not in config.keys():
         config[key] = {}
-    layernum_info = layernum2str(layer_num)
-    config[key]['%s_bsz%d_seq%d_rank%d_ms'%(layernum_info, bsz, seq, rank)] = model_states
-    config[key]['%s_bsz%d_seq%d_rank%d_act'%(layernum_info, bsz, seq, rank)] = activation
-    config[key]['%s_bsz%d_seq%d_rank%d_act_peak'%(layernum_info, bsz, seq, rank)] = activation_peak
+    layernum_info = num2str(layer_num, 'layernum')
+    seq_info = num2str(seq, 'seq')
+    config[key]['%s_bsz%d_%s_rank%d_ms'%(layernum_info, bsz, seq_info, rank)] = model_states
+    config[key]['%s_bsz%d_%s_rank%d_act'%(layernum_info, bsz, seq_info, rank)] = activation
+    config[key]['%s_bsz%d_%s_rank%d_act_peak'%(layernum_info, bsz, seq_info, rank)] = activation_peak
     write_json_config(config, path)
     print('Already written profiled memory into config file %s!\n'%(path)) 
      
 def save_profiled_time(path, time, bsz, layer_num, seq):
     config = read_json_config(path) if os.path.exists(path) else {}
-    layernum_info = layernum2str(layer_num)
-    key = '%s_bsz%d_seq%d'%(layernum_info, bsz, seq)
+    layernum_info = num2str(layer_num, 'layernum')
+    seq_info = num2str(seq, 'seq')
+    key = '%s_bsz%d_%s'%(layernum_info, bsz, seq_info)
     config[key] = time
     write_json_config(config, path)
     print('Already written profiled time into config file %s!\n'%(path)) 

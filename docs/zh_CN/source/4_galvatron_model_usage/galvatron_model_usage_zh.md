@@ -19,7 +19,7 @@ sh scripts/profile_memory.sh
 
 ### 其他性能分析参数
 
-通过设置 `profile_min_batch_size`、`profile_max_batch_size` 和 `profile_batch_size_step`，你可以控制时间性能分析期间使用的批量大小。具体来说，时间性能分析将使用 `range(profile_min_batch_size, profile_max_batch_size + 1, profile_batch_size_step)` 范围内的批量大小。类似地，通过设置 `profile_min_seq_length`、`profile_max_seq_length`、`profile_seq_length_step`，你可以控制时间和内存性能分析期间使用的序列长度。前者应与 `profile_mode == 'batch'` 一起使用，后者与 `profile_mode == 'sequence'` 一起使用。关于 `profile_mode` 的更多细节将在后面讨论。
+通过设置 `profile_min_batch_size`、`profile_max_batch_size` 和 `profile_batch_size_step`，你可以控制时间性能分析期间使用的批量大小。具体来说，时间性能分析将使用 `range(profile_min_batch_size, profile_max_batch_size + 1, profile_batch_size_step)` 范围内的批量大小。类似地，通过设置 `profile_min_seq_length`、`profile_max_seq_length`、`profile_seq_length_step`，你可以控制时间和内存性能分析期间使用的序列长度。前者应与 `profile_mode == 'batch'` 一起使用，后者与 `profile_mode == 'sequence'` 一起使用。而对于`static`模式，则需要通过设置`profile_batch_size`来控制批量大小，设置`profile_seq_length_list`来控制序列长度。关于 `profile_mode` 的更多细节将在后面讨论。
 
 ## 使用 Galvatron 进行并行优化
 

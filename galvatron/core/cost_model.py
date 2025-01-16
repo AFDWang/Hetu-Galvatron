@@ -108,7 +108,7 @@ class MemoryCostModel:
         for tp in total_min_tp:
             tp_other_memcosts = [0] * self.pp_size
             other_layers_bsz = global_batch_size * tp /self.tp_size/self.dp_size
-            
+            other_layers_bsz /= self.chunks
             # print(self.tp_size, self.dp_size, tp)
             if vsp:
                 model_tp = 1
@@ -287,7 +287,7 @@ class TimeCostModel:
             if self.tp_size == 1:
                 self.per_tp_message_time = 0
             else:
-                if self.per_tp_message_size in self.sp_dict:
+                if (self.per_tp_message_size//self.tp_size) in self.sp_dict:
                     self.per_tp_message_time = self.sp_dict[self.per_tp_message_size // self.tp_size]
                 else:
                     def linear_func(x, m, c):
@@ -452,35 +452,41 @@ class OtherTimeCostModel:
         self.dp_size = dict()
         self.comm_factor = dict()
         # calc tp comm size
+        self.per_tp_message_size = []
+        self.per_tp_message_time = []
+        self.tp_message_size = []
         k = min_tp
+        
         while k <= max_tp and world_size // pp_deg >= k:
-            if self.vsp == 0:
-                if sp_space == 'tp+sp':
-                    self.per_tp_message_size = self.mbsz*self.sl*self.hs * (2 if mixed_precision else 4)
-                    if k == 1:
-                        self.per_tp_message_time = 0
-                    else:
-                        if self.per_tp_message_size in allreduce_dict:
-                            self.per_tp_message_time = allreduce_dict[self.per_tp_message_size]
+            for sl in self.sl:
+                if self.vsp == 0:
+                    if sp_space == 'tp+sp':
+                        self.per_tp_message_size.append(self.mbsz*sl*self.hs * (2 if mixed_precision else 4))
+                        if k == 1:
+                            self.per_tp_message_time.append(0)
                         else:
-                            def linear_func(x, m, c):
-                                return m * x + c
-                            self.per_tp_message_time = linear_func( 1 / 1024 / 1024 * self.per_tp_message_size, *allreduce_dict[k]["popt"] )
-                else:
-                    dp_size = world_size // pp_deg // k
-                    if k == 1 or dp_size == 1:
-                        tp_coe = self.comm_coe_dict['%d'%k] if '%d'%k in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%k]
+                            if self.per_tp_message_size[-1] in allreduce_dict:
+                                self.per_tp_message_time.append(allreduce_dict[self.per_tp_message_size[-1]])
+                            else:
+                                def linear_func(x, m, c):
+                                    return m * x + c
+                                self.per_tp_message_time.append(linear_func( 1 / 1024 / 1024 * self.per_tp_message_size[-1], *allreduce_dict[k]["popt"] ))
                     else:
-                        tp_coe = self.comm_coe_dict['%d_0'%k]
+                        dp_size = world_size // pp_deg // k
+                        if k == 1 or dp_size == 1:
+                            tp_coe = self.comm_coe_dict['%d'%k] if '%d'%k in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%k]
+                        else:
+                            tp_coe = self.comm_coe_dict['%d_0'%k]
 
-                    self.tp_message_size = (k-1)/k*(self.mbsz*self.sl*self.hs/1024/1024) * (2 if mixed_precision else 4)
-                    self.per_tp_message_time = self.tp_message_size * tp_coe
-            else:
-                self.per_tp_message_time = 0
+                        self.tp_message_size.append((k-1)/k*(self.mbsz*sl*self.hs/1024/1024) * (2 if mixed_precision else 4))
+                        self.per_tp_message_time.append(self.tp_message_size[-1] * tp_coe)
+                else:
+                    self.per_tp_message_time.append(0)
             if pp_deg == 1:
-                self.tp_time[k] = 2 * self.per_tp_message_time
+                self.tp_time[k] = sum(self.per_tp_message_time) + self.per_tp_message_time[-1] # For T5 model
             else:
-                self.tp_time[k] = (self.per_tp_message_time, self.per_tp_message_time)
+                # TODO: consider embedding layer in middle stage
+                self.tp_time[k] = (self.per_tp_message_time[0], self.per_tp_message_time[-1])
             k *= 2
         # calc calc time (ms)
         k = min_tp

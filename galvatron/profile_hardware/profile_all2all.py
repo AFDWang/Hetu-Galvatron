@@ -80,7 +80,7 @@ def train(args):
         input = torch.tensor(input, dtype=torch.bfloat16, device=device)
         output = single_all_to_all(input, tp_groups[0].group)
     
-    torch.cuda.cudart().cudaProfilerStart()
+    # torch.cuda.cudart().cudaProfilerStart()
     for _ in range(20):
         input = np.random.rand(*(bs, 512, 1024))
         input = torch.tensor(input, dtype=torch.bfloat16, device=device)
@@ -92,7 +92,7 @@ def train(args):
         torch.cuda.synchronize()
         print(f"device: {local_rank}, time: {start.elapsed_time(end)}")
         time_list.append(start.elapsed_time(end))
-    torch.cuda.cudart().cudaProfilerStop()
+    # torch.cuda.cudart().cudaProfilerStop()
     
     if args.profile_time == 0:
         assert False

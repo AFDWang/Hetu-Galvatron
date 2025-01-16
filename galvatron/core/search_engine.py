@@ -10,7 +10,8 @@ from galvatron.utils import (
     strategy2config,
     array2str,
     write_json_config,
-    remap_config
+    remap_config,
+    num2str
 )
 from galvatron.core import MemoryCostModel, TimeCostModel, DpOnModel
 from scipy.optimize import curve_fit
@@ -190,7 +191,9 @@ class GalvatronSearchEngine():
         self.param_sizes = [0] * self.num_layertype
         self.act_sizes = [{} for _ in range(self.num_layertype)]
         if self.args.memory_profile_mode == "sequence":
-            assert self.args.sequence_parallel
+
+            assert self.args.sequence_parallel, "Sequence parallel is required for sequence memory profiling."
+            assert self.num_layertype == 1, "Only support num(layertype) == 1 for sequence memory profiling."
             maxseq_list = []
             for i in range(self.num_layertype):
                 layer_mem_config = self.memory_config['layertype_%d_sp'%i]
@@ -218,8 +221,9 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][self.seqlen_list[0]]
-                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][self.seqlen_list[-1]]}
+                seq_info = num2str(self.seqlen_list, 'seq')[3:]
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][seq_info]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][seq_info], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][seq_info]}
             else:
                 for i in range(self.num_layertype):
                     layer_mem_config = self.memory_config['layertype_%d'%i]
@@ -227,8 +231,9 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][self.seqlen_list[0]]
-                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last'][self.seqlen_list[-1]]}
+                seq_info = num2str(self.seqlen_list, 'seq')[3:]
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][seq_info]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][seq_info], 'last_stage':self.memory_config['other_memory_pp_on_last'][seq_info]}
         
         return self.time_config, self.memory_config
         
@@ -499,7 +504,7 @@ class GalvatronSearchEngine():
             pp_stage_dict = get_pp_stage_for_bsz(strategies, self.memcost_model_args_list, self.layernum_list, bsz)
             dp_on_model = DpOnModel(strategies, MemoryCostModel, TimeCostModel, 
                                     self.memcost_model_args_list, self.timecost_model_args_list,
-                                    max_mem=self.memory_constraint, layer_num=self.layernum_list, 
+                                    max_mem=self.memory_constraint, layer_num=self.layernum_list, sequence_len = self.seqlen_list, 
                                     multi_layer_type = True, pp_stage_dict = pp_stage_dict,
                                     comm_coe_dict=self.allreduce_comm_coe, gpu_num=self.args.gpu_num,
                                     config = self.args)
@@ -521,6 +526,7 @@ class GalvatronSearchEngine():
                                 other_time_profiled_list=self.other_time_profiled_list,
                                 max_mem=self.memory_constraint,
                                 layer_num=self.layernum_list,
+                                sequence_len = self.seqlen_list,
                                 multi_layer_type = True,
                                 pp_stage_dict = pp_stage_dict,
                                 search_history=self.search_history,
@@ -880,14 +886,15 @@ def pp_division_memory_balanced(memcost_model_args, layer_num, pp_deg, bsz, mbsz
         memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[i]).get_memory_cost()['enc_total']
         layer_min_memcost.append(np.min(memcost))
     other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, **new_memcost_model_args[0]).get_memory_cost()['other'][1]
-    print(other_cost)
+    # print(other_cost)
     # print(layer_min_memcost, other_cost)
     min_memcost_all_layers = []
     for i in range(layer_type_num):
         min_memcost_all_layers += [layer_min_memcost[i]]*layer_num[i]
-    print(min_memcost_all_layers)
+    # print(min_memcost_all_layers)
     avg_mem_cost = (np.sum(min_memcost_all_layers)+np.sum(other_cost))/pp_deg
-    #print('Avg memcost:', avg_mem_cost)
+    # print(min_memcost_all_layers, other_cost)
+    # print('Avg memcost:', avg_mem_cost)
 
     pp_divide = [0] * pp_deg
     mem_cost_per_stage = other_cost.copy()
@@ -896,7 +903,6 @@ def pp_division_memory_balanced(memcost_model_args, layer_num, pp_deg, bsz, mbsz
         while True:
             if idx >= len(min_memcost_all_layers):
                 break
-            print(avg_mem_cost, mem_cost_per_stage[i], pp_divide[i])
             if i < pp_deg - 1 and avg_mem_cost - mem_cost_per_stage[i] < 0.5 * min_memcost_all_layers[idx]:
                 break
             else:

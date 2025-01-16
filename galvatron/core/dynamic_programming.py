@@ -134,6 +134,7 @@ class DpOnModel:
                     other_time_profiled_list,
                     max_mem=8192, 
                     layer_num=24,
+                    sequence_len = [512],
                     multi_layer_type=False,
                     pp_stage_dict=None,
                     search_history=None,
@@ -151,6 +152,7 @@ class DpOnModel:
         self.other_time_profiled_list = other_time_profiled_list
         self.max_mem = max_mem
         self.layer_num = layer_num
+        self.sequence_len = sequence_len
         self.n_gpu = strategies_set[0][0] * strategies_set[0][1] * strategies_set[0][2]
         self.ppdeg_set = np.unique(np.array([s[0] for s in strategies_set], dtype=np.int32))
         self.multi_layer_type = multi_layer_type
@@ -227,8 +229,17 @@ class DpOnModel:
         min_cost_strategy_ids = np.argmin(intra_layer_cost, axis=1)
 
         other_mem_cost = {}
-        other_time_cost = {}
-        
+        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
+                                            self.sequence_len,
+                                            self.timecost_model_args[0]['hidden_size'],
+                                            self.timecost_model_args[0]['mixed_precision'],
+                                            self.timecost_model_args[0]['comm_coe_dict'], 
+                                            self.timecost_model_args[0]['allreduce_dict'], 
+                                            self.timecost_model_args[0]['sp_space'], 
+                                            vsp, min_tp, max_tp, 
+                                            self.memcost_model_args[0]['other_memory_pp_on'],
+                                            self.memcost_model_args[0]['other_memory_pp_off'],
+                                            self.other_time_profiled_list[0]).gen_result()
         if self.pipeline_type == "gpipe":
             v_list = []
             for i in range(len(self.layer_num)):
@@ -237,17 +248,6 @@ class DpOnModel:
                 if i == 0:
                     for k, v in mem_cost_list[0]['other'].items():
                         other_mem_cost[k] = np.ceil(v).astype(int)
-                    other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
-                                                        self.timecost_model_args[0]['sequence_length'],
-                                                        self.timecost_model_args[0]['hidden_size'],
-                                                        self.timecost_model_args[0]['mixed_precision'],
-                                                        self.timecost_model_args[0]['comm_coe_dict'], 
-                                                        self.timecost_model_args[0]['allreduce_dict'], 
-                                                        self.timecost_model_args[0]['sp_space'], 
-                                                        vsp, min_tp, max_tp, 
-                                                        self.memcost_model_args[i]['other_memory_pp_on'],
-                                                        self.memcost_model_args[i]['other_memory_pp_off'],
-                                                        self.other_time_profiled_list[i]).gen_result()
                 v = [cost['enc_total'] for cost in mem_cost_list]
                 v = np.ceil(np.array(v)).astype(np.int32)
                 v = v.reshape(1, -1).repeat(self.layer_num[i], axis=0)
@@ -264,17 +264,6 @@ class DpOnModel:
                     if stage_idx == 0 and i == 0:
                         for k, v in mem_cost_list[0]['other'].items():
                             other_mem_cost[k] = np.ceil(v).astype(int)
-                        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
-                                                        self.timecost_model_args[0]['sequence_length'],
-                                                        self.timecost_model_args[0]['hidden_size'],
-                                                        self.timecost_model_args[0]['mixed_precision'],
-                                                        self.timecost_model_args[0]['comm_coe_dict'], 
-                                                        self.timecost_model_args[0]['allreduce_dict'], 
-                                                        self.timecost_model_args[0]['sp_space'], 
-                                                        vsp, min_tp, max_tp, 
-                                                        self.memcost_model_args[i]['other_memory_pp_on'],
-                                                        self.memcost_model_args[i]['other_memory_pp_off'],
-                                                        self.other_time_profiled_list[i]).gen_result()
                     # other_mem_cost = np.ceil(mem_cost_list[0]['other']).astype(int)
                     v = [cost['enc_total'] for cost in mem_cost_list]
                     v = np.ceil(np.array(v)).astype(np.int32)
@@ -285,77 +274,80 @@ class DpOnModel:
 
         # NEW VERSION: inter-layer timecost model
         # print(other_time_cost, other_mem_cost, v[0], strategy_set)
-        inter_layer_cost = np.zeros((strategy_num, strategy_num))
-        for i in range(strategy_num):
-            for j in range(strategy_num):
-                case1 = strategy_set[j][1] > strategy_set[i][1]
-                case2 = False
-                case3 = False
-                if 'tp' in strategy_set[j][-1].keys() and 'tp' in strategy_set[i][-1].keys():
-                    case2 = (strategy_set[j][1] == strategy_set[i][1] and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])
-                    world_size = strategy_set[i][1] * strategy_set[i][2]
-                    case3 = (world_size == 8 and strategy_set[i][1] == 4 and strategy_set[j][1] == 2 \
-                        and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])
-                sample_num = self.config.seq_length * self.config.hidden_size * (4 if self.config.mixed_precision == "fp32" else 2)
-                if case1 or case2 or case3:
-                    inter_layer_cost[i, j] = (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / 2
-                if self.config.sequence_parallel:
-                    if strategy_set[j][1] != strategy_set[i][1]:
-                        inter_layer_cost[i, j] += (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / strategy_set[j][1] / 2
+        inter_layer_cost_list = []
+        for idx in range(len(self.layer_num)):
+            inter_layer_cost = np.zeros((strategy_num, strategy_num))
+            for i in range(strategy_num):
+                for j in range(strategy_num):
+                    case1 = strategy_set[j][1] > strategy_set[i][1]
+                    case2 = False
+                    case3 = False
+                    if 'tp' in strategy_set[j][-1].keys() and 'tp' in strategy_set[i][-1].keys():
+                        case2 = (strategy_set[j][1] == strategy_set[i][1] and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])
+                        world_size = strategy_set[i][1] * strategy_set[i][2]
+                        case3 = (world_size == 8 and strategy_set[i][1] == 4 and strategy_set[j][1] == 2 \
+                            and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])
+                    sample_num = self.sequence_len[idx] * self.config.hidden_size * (4 if self.config.mixed_precision == "fp32" else 2)
+                    if case1 or case2 or case3:
+                        inter_layer_cost[i, j] = (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / 2
+                    if self.config.sequence_parallel:
+                        if strategy_set[j][1] != strategy_set[i][1]:
+                            inter_layer_cost[i, j] += (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / strategy_set[j][1] / 2
 
                 # if case1 or case2 or case3:
                 #      ratio = strategy_set[j][1]
                 #      activation = 2 * bsz / strategy_set[j][2]
                 #      inter_layer_cost[i, j] = (ratio - 1) * activation / ratio
 
-        # find corresponding communication coefficient
-        for i in range(strategy_num):
-            for j in range(strategy_num):
-                tp_size, dp_size = strategy_set[j][1], strategy_set[j][2]
-                if tp_size == 1 or dp_size == 1:
-                    coe = self.comm_coe_dict['%d'%tp_size] if '%d'%tp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%tp_size]
-                else:
-                    # In this case, strategy[-1]['tp'] represents tp_consecutive_flag
-                    info = strategy_set[j][-1]
-                    assert 'tp' in info.keys() and info['tp'] in [0, 1]
-                    if info['tp']:
-                        coe = self.comm_coe_dict['%d_1'%tp_size]
+            # find corresponding communication coefficient
+            for i in range(strategy_num):
+                for j in range(strategy_num):
+                    tp_size, dp_size = strategy_set[j][1], strategy_set[j][2]
+                    if tp_size == 1 or dp_size == 1:
+                        coe = self.comm_coe_dict['%d'%tp_size] if '%d'%tp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%tp_size]
                     else:
-                        coe = self.comm_coe_dict['%d_0'%tp_size]
-                inter_layer_cost[i, j] = inter_layer_cost[i, j] * coe * 1e-7
+                        # In this case, strategy[-1]['tp'] represents tp_consecutive_flag
+                        info = strategy_set[j][-1]
+                        assert 'tp' in info.keys() and info['tp'] in [0, 1]
+                        if info['tp']:
+                            coe = self.comm_coe_dict['%d_1'%tp_size]
+                        else:
+                            coe = self.comm_coe_dict['%d_0'%tp_size]
+                    inter_layer_cost[i, j] = inter_layer_cost[i, j] * coe * 1e-7
 
-                # add a small bias to sort fsdp and dp
-                strategy0, strategy1 = strategy_set[i], strategy_set[j]
-                # if i != j and np.array_equal(strategy0[:3], strategy1[:3]):
-                #     case1 = 'tp' not in strategy0[-1] and 'fsdp' in strategy0[-1] and strategy0[-1]['fsdp']!=strategy1[-1]['fsdp']
-                #     case2 = 'tp' in strategy0[-1] and strategy0[-1]['tp']==strategy1[-1]['tp'] and strategy0[-1]['fsdp']!=strategy1[-1]['fsdp']
-                #     if (case1 or case2) and strategy0[-1]['fsdp']:
-                #         inter_layer_cost[i, j] = 1e-4
-                # tp -> sp
-                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['sp']):
-                    if 'sp' in strategy1[-1] and strategy1[-1]['sp']:
-                        inter_layer_cost[i, j] = 1e-10
-                # ->f     c -> fc
-                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp']):
-                    if 'fsdp' in strategy1[-1] and strategy1[-1]['fsdp']:
-                        inter_layer_cost[i, j] = 1e-9
-                # ->c  f -> cf
-                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['cpt']):
-                    if 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
-                        inter_layer_cost[i, j] = 2e-9
-                # ->fc
-                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp','cpt']):
-                    if 'fsdp' in strategy1[-1] and strategy1[-1]['fsdp'] and 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
-                        inter_layer_cost[i, j] = 3e-9
-                # f->c
-                if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp','cpt']) \
-                          and not self.match_strategy(strategy0, strategy1, except_keys=['fsdp']) \
-                          and not self.match_strategy(strategy0, strategy1, except_keys=['cpt']):
-                    if 'fsdp' in strategy0[-1] and strategy0[-1]['fsdp'] and 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
-                        inter_layer_cost[i, j] = 1e-9
-
-        # print(inter_layer_cost)
-        inter_layer_cost = np.expand_dims(inter_layer_cost, axis=0).repeat(self.total_layer_num, axis=0)
+                    # add a small bias to sort fsdp and dp
+                    strategy0, strategy1 = strategy_set[i], strategy_set[j]
+                    # if i != j and np.array_equal(strategy0[:3], strategy1[:3]):
+                    #     case1 = 'tp' not in strategy0[-1] and 'fsdp' in strategy0[-1] and strategy0[-1]['fsdp']!=strategy1[-1]['fsdp']
+                    #     case2 = 'tp' in strategy0[-1] and strategy0[-1]['tp']==strategy1[-1]['tp'] and strategy0[-1]['fsdp']!=strategy1[-1]['fsdp']
+                    #     if (case1 or case2) and strategy0[-1]['fsdp']:
+                    #         inter_layer_cost[i, j] = 1e-4
+                    # tp -> sp
+                    if i != j and self.match_strategy(strategy0, strategy1, except_keys=['sp']):
+                        if 'sp' in strategy1[-1] and strategy1[-1]['sp']:
+                            inter_layer_cost[i, j] = 1e-10
+                    # ->f     c -> fc
+                    if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp']):
+                        if 'fsdp' in strategy1[-1] and strategy1[-1]['fsdp']:
+                            inter_layer_cost[i, j] = 1e-9
+                    # ->c  f -> cf
+                    if i != j and self.match_strategy(strategy0, strategy1, except_keys=['cpt']):
+                        if 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
+                            inter_layer_cost[i, j] = 2e-9
+                    # ->fc
+                    if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp','cpt']):
+                        if 'fsdp' in strategy1[-1] and strategy1[-1]['fsdp'] and 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
+                            inter_layer_cost[i, j] = 3e-9
+                    # f->c
+                    if i != j and self.match_strategy(strategy0, strategy1, except_keys=['fsdp','cpt']) \
+                            and not self.match_strategy(strategy0, strategy1, except_keys=['fsdp']) \
+                            and not self.match_strategy(strategy0, strategy1, except_keys=['cpt']):
+                        if 'fsdp' in strategy0[-1] and strategy0[-1]['fsdp'] and 'cpt' in strategy1[-1] and strategy1[-1]['cpt']:
+                            inter_layer_cost[i, j] = 1e-9
+            inter_layer_cost_list.append(inter_layer_cost)
+        for i in range(len(self.layer_num)):
+            inter_layer_cost_list[i] = np.expand_dims(inter_layer_cost_list[i], axis=0).repeat(self.layer_num[i], axis=0)
+        inter_layer_cost = np.concatenate(inter_layer_cost_list, axis=0)
         inter_layer_cost[0, :, :] = 0 # no inter-layer communication cost in first layer
 
         pp_stage_list = self.pp_stage_dict[pp_deg]
@@ -376,7 +368,7 @@ class DpOnModel:
                 comm_cost_list, res_list_list, mem_remain_list, mem_cost_list = [], [], [], []
                 for i in range(pp_deg):
                     if self.config.sequence_parallel:
-                        global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_length * 4 / 1024 / 1024
+                        global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * max(self.sequence_len) * 4 / 1024 / 1024
                         if self.config.mixed_precision:
                             global_memory = global_memory / 2
                     else:
@@ -432,7 +424,7 @@ class DpOnModel:
         
         for i in range(pp_deg):
             if self.config.sequence_parallel and self.config.global_memory_buffer and sp_search != 2:
-                global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * self.config.seq_length * 4 / 1024 / 1024
+                global_memory = mbsz / min_tp * max_tp * self.config.hidden_size * max(self.sequence_len) * 4 / 1024 / 1024
                 if self.config.mixed_precision:
                     global_memory = global_memory / 2
             else:

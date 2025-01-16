@@ -20,28 +20,29 @@ MODEL_ARGS="
     --num_attention_heads 32 \
     --seq_length 2048"
 
-# PROFILE_ARGS="
-#     --profile_mode batch \
-#     --profile_type computation \
-#     --profile_min_batch_size 1 \
-#     --profile_max_batch_size 12 \
-#     --profile_batch_size_step 1 \
-#     --layernum_min 2 \
-#     --layernum_max 4 \
-#     --mixed_precision bf16 \
-#     --use-flash-attn"
-
 PROFILE_ARGS="
-    --profile_mode sequence \
+    --profile_mode batch \
     --profile_type computation \
-    --profile_batch_size 1 \
-    --profile_min_seq_length 4096 \
-    --profile_max_seq_length 65536 \
-    --profile_seq_length_step 4096 \
-    --layernum_min 1 \
-    --layernum_max 2 \
+    --profile_seq_length_list 4096 \
+    --profile_min_batch_size 1 \
+    --profile_max_batch_size 12 \
+    --profile_batch_size_step 1 \
+    --layernum_min 2 \
+    --layernum_max 4 \
     --mixed_precision bf16 \
     --use-flash-attn"
+
+# PROFILE_ARGS="
+#     --profile_mode sequence \
+#     --profile_type computation \
+#     --profile_batch_size 1 \
+#     --profile_min_seq_length 4096 \
+#     --profile_max_seq_length 32768 \
+#     --profile_seq_length_step 4096 \
+#     --layernum_min 1 \
+#     --layernum_max 2 \
+#     --mixed_precision bf16 \
+#     --use-flash-attn"
 
 # models in flash_attn cannot use fp32 without flash_attn
 # PROFILE_ARGS="

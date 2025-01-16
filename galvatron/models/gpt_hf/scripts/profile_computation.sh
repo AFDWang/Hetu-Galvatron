@@ -53,6 +53,7 @@ PROFILE_ARGS="
 #     --profile_min_batch_size 1 \
 #     --profile_max_batch_size 16 \
 #     --profile_batch_size_step 1 \
+#     --profile_seq_length_list 2048 \
 #     --layernum_min 2 \
 #     --layernum_max 4 \
 #     --mixed_precision bf16 \

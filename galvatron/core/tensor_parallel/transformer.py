@@ -442,7 +442,7 @@ class CoreAttention(MegatronModule):
         return context_layer
 
 
-class FlashSelfAttention(torch.nn.Module):
+class FlashSelfOrCrossAttention(torch.nn.Module):
     """Implement the scaled dot product attention with softmax.
     Arguments
     ---------
@@ -479,20 +479,30 @@ class FlashSelfAttention(torch.nn.Module):
         cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32,
                                     device=q.device)
 
-        if self.training:
-            # during training q,k,v always have same seqlen
-            assert seqlen_k == seqlen_q
-
-            is_causal = self.causal
+        is_causal = self.causal
+        if seqlen_k == seqlen_q:
             cu_seqlens_k = cu_seqlens_q
+        else:
+            cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32,
+                                device=k.device)
+        if self.training:
             dropout_p = self.dropout_p
         else:
-            # turn off FA causal mask after first inference autoregressive iteration
-            # only on first autoregressive step q,k,v have same seqlen
-            is_causal = seqlen_q == seqlen_k
-            cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32,
-                        device=q.device)
             dropout_p = 0
+        # if self.training:
+        #     # during training q,k,v always have same seqlen
+        #     assert seqlen_k == seqlen_q
+
+        #     is_causal = self.causal
+        #     cu_seqlens_k = cu_seqlens_q
+        #     dropout_p = self.dropout_p
+        # else:
+        #     # turn off FA causal mask after first inference autoregressive iteration
+        #     # only on first autoregressive step q,k,v have same seqlen
+        #     is_causal = seqlen_q == seqlen_k
+        #     cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32,
+        #                 device=q.device)
+        #     dropout_p = 0
 
         output = flash_attn_unpadded_func(
             q, k, v, cu_seqlens_q, cu_seqlens_k, seqlen_q, seqlen_k,
@@ -534,17 +544,17 @@ class ParallelAttention(MegatronModule):
         else:
             kv_projection_size = args.kv_channels * args.num_attention_heads
 
-        self.use_flash_attn = args.use_flash_attn \
-            and attention_type == AttnType.self_attn \
-            and self.attn_mask_type == AttnMaskType.causal
+        self.use_flash_attn = args.use_flash_attn #  \
+            # and attention_type == AttnType.self_attn \
+            # and self.attn_mask_type == AttnMaskType.causal
         if self.use_flash_attn:
             if flash_attn_unpadded_func is None:
                 raise ImportError('FlashAttention is not installed, please install with '
                                   'pip install flash-attn')
-            assert attention_type == AttnType.self_attn, ('FlashAttention code path only supports '
-                                                          'self-attention for now')
-            assert self.attn_mask_type == AttnMaskType.causal, ('FlashAttention code path only '
-                                                                'supports causal mask for now')
+            # assert attention_type == AttnType.self_attn, ('FlashAttention code path only supports '
+            #                                               'self-attention for now')
+            # assert self.attn_mask_type == AttnMaskType.causal, ('FlashAttention code path only '
+            #                                                     'supports causal mask for now')
             if rearrange is None:
                 raise ImportError('einops is not installed, please install with pip install einops')
 
@@ -611,8 +621,8 @@ class ParallelAttention(MegatronModule):
         self.checkpoint_core_attention = config.recompute_granularity == 'selective'
 
         if self.use_flash_attn:
-            self.core_attention_flash = FlashSelfAttention(
-                causal=True, attention_dropout=config.attention_dropout
+            self.core_attention_flash = FlashSelfOrCrossAttention(
+                causal=(attn_mask_type == AttnMaskType.causal), attention_dropout=config.attention_dropout
             )
         if self.use_ulysses:
             assert args.num_attention_heads % sp_world_size == 0

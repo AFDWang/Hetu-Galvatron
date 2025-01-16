@@ -212,9 +212,11 @@ class Module_with_relocation(nn.Module):
     def forward(self, *inputs, **kwargs):
         if isinstance(inputs, (Tuple, List)):
             inputs_relocated = []
-            inputs_relocated.append(self.relocate_activations(inputs[0], True))
-            for input in inputs[1:]:
-                inputs_relocated.append(self.relocate_activations(input, False))
+            for input in inputs:
+                if input.dtype in [torch.float16, torch.float32, torch.float64, torch.bfloat16]:
+                    inputs_relocated.append(self.relocate_activations(input, True))
+                else:
+                    inputs_relocated.append(self.relocate_activations(input, False))
             inputs_relocated = tuple(inputs_relocated)
             return self.module(*inputs_relocated, **kwargs)
         else:

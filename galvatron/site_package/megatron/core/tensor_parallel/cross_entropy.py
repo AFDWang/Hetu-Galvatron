@@ -182,7 +182,7 @@ class _VocabSequenceParallelCrossEntropy(torch.autograd.Function):
         # Need softmax for backward
         softmax = torch.nn.functional.softmax(vocab_seq_parallel_logits, dim=-1)
         ctx.vocab_size = vocab_seq_parallel_logits.size(2)
-        loss = torch.nn.functional.nll_loss(softmax.log().view(-1, ctx.vocab_size), target.view(-1), reduction='none')
+        loss = torch.nn.functional.nll_loss(softmax.log().view(-1, ctx.vocab_size), target.view(-1), reduction='none', ignore_index=-1)
        
         ctx.seqlen = vocab_seq_parallel_logits.size(0) * torch.distributed.get_world_size(sp_group)
         batch_size = vocab_seq_parallel_logits.size(1)

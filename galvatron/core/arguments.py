@@ -179,7 +179,7 @@ def galvatron_profile_args(parser):
         "--set_seqlen_manually", type=int, default=0, help="Whether to set sequence length config manually (doesn't overwrite other model configs)."
     )
     group.add_argument(
-        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
+        "--profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence"]
     )
     group.add_argument(
         "--profile_batch_size", type=int, default=None, help="Galvatron profiling batch size"
@@ -192,6 +192,9 @@ def galvatron_profile_args(parser):
     )
     group.add_argument(
         "--profile_batch_size_step", type=int, default=1, help="Galvatron profiling batch size step"
+    )
+    group.add_argument(
+        "--profile_seq_length_list", type=str, default=None, help="Galvatron profiling sequence length step"
     )
     group.add_argument(
         "--profile_min_seq_length", type=int, default=None, help="Galvatron profiling max sequence length"

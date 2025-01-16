@@ -32,7 +32,7 @@ Easy to use, even for those new to distributed training.
 - Support CKPT (Activation Checkpointing)
 - Support Mixed Precision (FP16, BF16)
 - Support more pipeline schedules (GPipe and pipedream-flush / 1F1B-flush)
-- Support PyTorch-2 (currently suppport 2.0.1)
+- Support PyTorch-2 (currently suppport 2.1.0)
 - Support FlashAttention-2 for more efficient attention kernel
 - Provide new Galvatron Profiler that profiles the model consumptions conveniently
 - Provide new Galvatron Search Engine with enhanced efficiency of parallelism optimization

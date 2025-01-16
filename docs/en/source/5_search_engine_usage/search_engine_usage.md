@@ -132,8 +132,21 @@ The format of these files is as follows:
     }
 }
 ```
-The meaning of `layer_type` is consistent with the computation profiling file; `/_sp` indicates whether sequence parallel was enabled during measurement; `sequence_length` is the sequence length during measurement; `layer_parameter` is the memory occupied by parameters per layer; `layer_ckpt_act` is the activation memory per layer when using checkpointing; `layer_tpx_act` is the activation memory per layer when using a tp dimension of x. For sequence parallel, `layer_tpx_act` is inversely proportional to x, so not every strategy needs manual measurement. Without sequence parallel, each strategy requires separate measurement. `othe_pp_[off/on_first/on_last]_tpx_[ms/act]` represents the model states or activation memory size for embedding layers when tp is x, in stages where pp is 1, greater than 1 (first stage), and less than 1 (last stage), excluding conventional layers.
+
+The meaning of layer_type is the same as in the computation_profiling file; `/_sp` indicates whether sequence parallel was enabled during measurement; `sequence_length` represents the sequence length during measurement; layer_parameter represents the memory occupied by parameters of a single layer; `layer_ckpt_act` represents the activation memory usage of a single layer when using checkpoint strategy, `layer_tpx_act` represents the activation memory of a single layer when using tensor parallel dimension x. For cases with sequence parallel enabled, `layer_tpx_act` has an inverse relationship with x, so it's not necessary to manually measure every strategy. However, when sequence parallel is not enabled, each strategy needs to be measured separately; `other_pp_[off/on_first/on_last]_tpx_[ms/act]` represents the memory size of model states or activations occupied by modules other than regular layers (mainly embedding modules) when applying tensor parallel dimension x to the embedding layer in pp=1, first stage of pp>1, and last stage of pp>1 respectively. Here, model states include optimizer states, parameters, and gradients.
 
 ### Usage
 
-You can modify the contents of `models/{model_name}/scripts/search_dist.sh` to use Galvatron or third-party profiling data for modeling and search. For third-party data, refer to the previous sections to modify the relevant configuration documents.
+You can modify the contents of `models/{model_name}/scripts/search_dist.sh` to use Galvatron or third-party profiling data for modeling and search. For third-party data, refer to the previous sections to modify the relevant configuration documents. If you want to use Galvatron's profiling data, please refer to [Galvatron Model Usage](../4_galvatron_model_usage/galvatron_model_usage.html).
+
+If you want to manually specify the path of the configuration file, please modify the following parameters:
+
+- `--memory_profiling_path`: Use this parameter to specify the path to the memory profiling configuration file.
+- `--time_profiling_path`: Use this parameter to specify the path to the time profiling configuration file.
+- `--allreduce_bandwidth_config_path`: Use this parameter to specify the path to the allreduce bandwidth configuration file.
+- `--p2p_bandwidth_config_path`: Use this parameter to specify the path to the p2p bandwidth configuration file.
+- `--overlap_coe_path`: Use this parameter to specify the path to the overlap coefficient configuration file.
+- `--sp_time_path`: Use this parameter to specify the path to the sequence parallelism time configuration file.
+- `--output_config_path`: Use this parameter to specify the path to the output parallel strategy file.
+
+Configuration file names follow the format described in the previous sections.

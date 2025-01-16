@@ -5,7 +5,7 @@ Galvatron 为多个主流模型提供了示例代码，展示了如何重写 Tra
 ## 使用 Galvatron 进行性能分析
 使用 Galvatron 的第一步是对硬件环境和模型前向计算时间进行性能分析。
 
-(1) 首先，对硬件环境进行性能分析。详细信息请参考 [快速入门](../3_quick_start/quick_start.html#profiling-with-galvatron)。在运行模型目录中的任何脚本之前，请确保已完成硬件环境的性能分析！
+(1) 首先，对硬件环境进行性能分析。详细信息请参考 [快速入门](../3_quick_start/quick_start_zh.html#galvatron)。在运行模型目录中的任何脚本之前，请确保已完成硬件环境的性能分析！
 
 (2) 其次，对模型计算时间进行性能分析：
 ````shell

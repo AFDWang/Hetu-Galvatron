@@ -33,7 +33,7 @@ sh scripts/search_dist.sh
 
 搜索结束后，获得的并行策略将生成在 `configs` 文件夹中。策略以 JSON 格式存储，文件名以 `galvatron_config_{model_size}_` 开头。
 
-有关自定义并行优化的更多使用详情，请参见 [Galvatron 模型使用](../4_galvatron_model_usage/galvatron_model_usage.html#parallelism-optimizing-with-galvatron)。
+有关自定义并行优化的更多使用详情，请参见 [Galvatron 模型使用](../4_galvatron_model_usage/galvatron_model_usage_zh.html#id3)。
 
 ## 使用 Galvatron 进行训练
 Galvatron 提供了一种简单的方法来以细粒度混合并行方式训练 Transformer 模型。你可以通过指定参数 ```galvatron_config_path``` 使用搜索到的最优并行策略来训练 Transformer 模型以获得最佳吞吐量，或者按照自己的喜好使用任何并行策略。Galvatron 支持两种混合并行配置模式，包括 JSON 配置模式和全局配置模式。你可以通过修改少量参数来指定并行策略。
@@ -47,4 +47,4 @@ sh scripts/train_dist_random.sh
 
 提示：在继续之前，请确认是否需要使用 `--set_seqlen_manually` 参数来手动指定训练模型的序列长度。
 
-详细指南和更多自定义训练选项请参见 [Galvatron 模型使用](../4_galvatron_model_usage/galvatron_model_usage.html#training-with-galvatron)。
+详细指南和更多自定义训练选项请参见 [Galvatron 模型使用](../4_galvatron_model_usage/galvatron_model_usage_zh.html#id9)。

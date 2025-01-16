@@ -1,7 +1,7 @@
 # Search Engine Usage
 ## 与Galvatron runtime 一起使用
 
-Search Engine可以像[Quick Start](../3_quick_start/quick_start.html#profiling-with-galvatron)中描述的那样与Galvatron runtime配合使用。
+Search Engine可以像[Quick Start](../3_quick_start/quick_start_zh.html#galvatron)中描述的那样与Galvatron runtime配合使用。
 
 ## 独立使用
 除了与Galvatron runtime配合使用之外，Galvatron Search Engine还可以独立使用，提供更加灵活的建模与搜索方式。
@@ -42,6 +42,18 @@ Search Engine可以像[Quick Start](../3_quick_start/quick_start.html#profiling-
 }
 ```
 当计算与通信发生 overlap 时，CUDA 内核 (Kernel) 会同时被计算和通信抢占导致降速，coe代表当通信计算重叠时导致的内核降速比例，通常这个值介于1.1-1.3之间。
+
+此外，如果你想使用`sp_space`为`tp+sp`的方式进行搜索，那么你还需要一个新文件`sp_time_{num_nodes}nodes_{num_gpus}gpus_per_node.json`，该文件的格式为：
+
+```
+{
+    "allreduce_size_{group_size}_{message_size}MB_time": {time},
+    "all2all_size_{group_size}_{message_size}MB_time": {time},
+    ...
+}
+```
+其中group_size为进行对应通信操作（allreduce/all2all）的通信组大小，message_size为进行通信操作的通信量（单位：MB），time为进行这种通信操作的时间。
+
 
 ### 模型配置
 模型配置为`models/{model_name}/configs`中的部分文件
@@ -121,17 +133,19 @@ time代表采用batch size为batch_size，序列长度为sequence_length的输�
 ```
 layer_type的意义与computation_profiling文件相同；`/_sp`代表该组数据测量时是否开启sequence parallel；`sequence_length`代表测量时的序列长度；layer_parameter代表单层的参数量所占内存；`layer_ckpt_act`代表使用checkpoint策略时，单层的激活值占用是多少，`layer_tpx_act`代表使用tp维度为x的策略时，单层的激活值是多少，对于开启sequence parallel的情况，`layer_tpx_act`关于x成反比例关系，可以不需要每种策略都手动测量，而不开启sequence parallel时，则需要每组策略单独测量；`othe_pp_[off/on_first/on_last]_tpx_[ms/act]`分别代表pp为1，pp大于1的第一个stage和pp小于1的最后一个stage中，对embedding层进行tp维度为x的切分时，除常规的layer以外的其他模块（主要是embedding模块）占用的model states或激活值内存大小，这里的model states包括optimzer states，parameter和gradient。
 
-此外，如果你想使用`sp_space`为`tp+sp`的方式进行搜索，那么你还需要一个新文件`sp_time_{num_nodes}nodes_{num_gpus}gpus_per_node.json`，该文件的格式为：
-
-```
-{
-    "allreduce_size_{group_size}_{message_size}MB_time": {time},
-    "all2all_size_{group_size}_{message_size}MB_time": {time},
-    ...
-}
-```
-其中group_size为进行对应通信操作（allreduce/all2all）的通信组大小，message_size为进行通信操作的通信量（单位：MB），time为进行这种通信操作的时间。
-
 ### 使用
 
-用户可以通过修改`models/{model_name}/scripts/search_dist.sh`中的内容，即可使用Galvatron/第三方的profile数据进行建模和搜索，如果想使用第三方数据，请参考前两小节修改相关配置文档，如果想使用Galvatron profile出的配置信息，请参考[使用文档](https://github.com/PKU-DAIR/Hetu-Galvatron/blob/dev/galvatron/models/README.md)。
+用户可以通过修改`models/{model_name}/scripts/search_dist.sh`中的内容，即可使用Galvatron/第三方的profile数据进行建模和搜索，如果想使用第三方数据，请参考前两小节修改相关配置文档，如果想使用Galvatron profile出的配置信息，请参考[使用文档](../4_galvatron_model_usage/galvatron_model_usage_zh.html#galvatron)。
+
+如果你想手动指定配置文件路径，请修改如下参数：
+
+- `--memory_profiling_path`: 用于指定模型memory profiling的配置文件路径
+- `--time_profiling_path`: 用于指定模型time profiling的配置文件路径
+- `--allreduce_bandwidth_config_path`: 用于指定集群allreduce bandwidth的配置文件路径
+- `--p2p_bandwidth_config_path`: 用于指定集群p2p bandwidth的配置文件路径
+- `--overlap_coe_path`: 用于指定集群overlap coefficient的配置文件路径
+- `--sp_time_path`: 用于指定集群不同通信量下的all2all和allreduce time的配置文件路径
+- `--output_config_path`: 用于指定输出并行策略文件的路径
+
+配置文件名称的格式请参考前两小节。
+

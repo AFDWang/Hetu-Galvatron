@@ -9,7 +9,7 @@
 project = 'Galvatron'
 copyright = '2024, PKU-DAIR'
 author = 'Xinyi Liu'
-release = '2.4'
+release = '2.3.1'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

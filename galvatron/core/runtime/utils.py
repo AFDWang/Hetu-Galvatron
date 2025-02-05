@@ -142,3 +142,4 @@ def get_optimizer_and_param_scheduler(model, args):
             print("Finish loading optimizer and param scheduler")
 
     return optimizer, opt_param_scheduler
+    

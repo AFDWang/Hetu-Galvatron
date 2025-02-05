@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-from .arguments import get_args
 from galvatron.utils import read_json_config, config2strategy, str2array
 import os
 import json
@@ -206,6 +205,7 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
     
     world_size = torch.distributed.get_world_size()
     hp_configs_whole['dp_sizes_whole'] = [world_size // pp_deg // tp_size // sp_size for tp_size, sp_size in zip(hp_configs_whole['tp_sizes_whole'], hp_configs_whole['sp_sizes_whole'])]
+    from galvatron.core import get_args
     if get_args().local_rank == 0:
         print('Model Layer Types:')
         print(module_types)

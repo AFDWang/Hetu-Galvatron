@@ -5,7 +5,8 @@ from typing import Union, Optional, Tuple, List
 import operator
 import copy
 from torch import Tensor
-from galvatron.core import wrap_modules_data_parallel, wrap_modules_checkpoint, get_args
+from galvatron.core.runtime.parallel import wrap_modules_data_parallel, wrap_modules_checkpoint
+
 import functools
 
 version_str = torch.__version__
@@ -104,6 +105,7 @@ class PipelineParallel(nn.Module):
         self.checkpoint_flags_stage = [0] * (self.stage_end_idx-self.stage_start_idx) # checkpoint default off
         self.require_loss = require_loss
         
+        from galvatron.core import get_args
         args = get_args()
         self.sequence_parallel = args.sequence_parallel
         self.shape_order = args.shape_order

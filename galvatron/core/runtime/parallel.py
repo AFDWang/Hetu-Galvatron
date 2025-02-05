@@ -9,8 +9,7 @@ import torch.nn as nn
 import torch
 from typing import Tuple, List
 from functools import partial
-from galvatron.core.redistribute import fused_split_allgather
-from .utils import rgetattr, rsetattr, rhasattr
+from .redistribute import fused_split_allgather
 
 from torch.distributed.fsdp._common_utils import _get_module_fsdp_state
 import collections
@@ -48,7 +47,7 @@ def wrap_data_parallel(module, dp_type = None, dp_group = None, module_type='ber
         return module
     else:
         assert pp_device is not None
-        from .arguments import get_args
+        from galvatron.core import get_args
         fsdp_type_dict = {0:get_args().default_dp_type, 1:'zero3'}
         assert dp_type in fsdp_type_dict.keys()
         return wrap_module_fsdp_manually(module, pp_device, module_type, dp_group, fsdp_type=fsdp_type_dict[dp_type], mixed_precision=mixed_precision, pp_on=pp_on, wrap_block_name=wrap_block_name, wrap_other_block_name=wrap_other_block_name, tp_groups=tp_groups, all_block_name=all_block_name, load_module_func=load_module_func)
@@ -71,7 +70,7 @@ def wrap_module_fsdp_manually(module, pp_device, module_type='bert_enc', dp_grou
     sharding_strategy = {'ddp': ShardingStrategy.NO_SHARD,
                            'zero2': ShardingStrategy.SHARD_GRAD_OP,
                            'zero3': ShardingStrategy.FULL_SHARD}[fsdp_type]
-    from .arguments import get_args
+    from galvatron.core import get_args
     args = get_args()
     
     mixed_precision_policy = MixedPrecision(
@@ -228,7 +227,7 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
     assert len(module_list) == len(dp_groups)
     
     process_group = default_process_group if default_process_group is not None else dp_groups[0]
-    from .arguments import get_args
+    from galvatron.core import get_args
     args = get_args()
     pp_on = True if args.pp_deg > 1 else False
     # pp_on = True if process_group.size < torch.distributed.get_world_size() else False
@@ -249,7 +248,6 @@ def wrap_modules_data_parallel(module_list, dp_types, dp_groups, module_types, p
             all_block_name=all_block_name,
             load_module_func=load_module_func
         )
-    from .arguments import get_args
     args = get_args()
     sharding_strategy = {'ddp': ShardingStrategy.NO_SHARD,
                            'zero2': ShardingStrategy.SHARD_GRAD_OP,

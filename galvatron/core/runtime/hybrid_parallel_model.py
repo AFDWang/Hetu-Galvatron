@@ -1,14 +1,15 @@
 import torch
 from torch import nn
 import numpy as np
-from galvatron.core import check_hp_config, hp_config_whole_model, get_enc_groups, mixed_precision_dtype, layer_shapes_dtypes_whole_model, get_chunks
-from galvatron.core import gen_comm_groups, wrap_modules_relocation
-from galvatron.core.initialize import init_empty_weights
+from .hybrid_parallel_config import check_hp_config, hp_config_whole_model, get_enc_groups, mixed_precision_dtype, layer_shapes_dtypes_whole_model, get_chunks
+from .comm_groups import gen_comm_groups
+from .parallel import wrap_modules_relocation
+from .initialize import init_empty_weights
 from .utils import get_layernorm_offset
 from torch import Tensor
 
 from torch.distributed import fsdp
-from galvatron.core.pipeline.grad_reduce import _register_post_backward_hook_bf16, _finalize_params_bf16
+from .pipeline.grad_reduce import _register_post_backward_hook_bf16, _finalize_params_bf16
 version_str = torch.__version__
 version_major, version_minor, _ = version_str.split('.')
 version_major, version_minor = int(version_major), int(version_minor)
@@ -174,7 +175,7 @@ def construct_hybrid_parallel_model_api(
     ln_offset, ln_size = get_layernorm_offset(model, layernorm_name)
     assert(len(ln_offset) == len(dp_groups_whole))
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
-    from galvatron.core.pipeline import PipelineParallel
+    from galvatron.core.runtime.pipeline import PipelineParallel
     hp_model = PipelineParallel(
         model=model,
         model_ranks=hp_configs_whole['pp_ranks_whole'],

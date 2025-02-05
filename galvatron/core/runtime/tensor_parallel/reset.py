@@ -1,7 +1,7 @@
 from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 # from torch.nn.init import xavier_uniform_ as init_method
-from galvatron.core.tensor_parallel import init_method_normal
+from galvatron.core.runtime.tensor_parallel import init_method_normal
 from megatron.training import get_args
 import torch
 

@@ -13,9 +13,9 @@ from galvatron.utils import (
     remap_config,
     num2str
 )
-from galvatron.core import MemoryCostModel, TimeCostModel, DpOnModel
+from galvatron.core.search_engine import MemoryCostModel, TimeCostModel, DpOnModel
 from scipy.optimize import curve_fit
-from galvatron.core.cost_model import pipeline_costmodel
+from galvatron.core.search_engine.cost_model import pipeline_costmodel
 
 class GalvatronSearchEngine():
     def __init__(self, args):

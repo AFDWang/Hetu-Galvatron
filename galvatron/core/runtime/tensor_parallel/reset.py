@@ -1,9 +1,11 @@
+import torch
 from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear, VocabParallelEmbedding
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
-# from torch.nn.init import xavier_uniform_ as init_method
-from galvatron.core.runtime.tensor_parallel import init_method_normal
 from megatron.training import get_args
-import torch
+
+# from torch.nn.init import xavier_uniform_ as init_method
+from .utils import init_method_normal
+
 
 def colummn_row_reset_parameters(self):
     args = get_args()
@@ -13,6 +15,7 @@ def colummn_row_reset_parameters(self):
     if hasattr(self, "bias") and self.bias != None:
         with torch.no_grad():
             self.bias.zero_()
+
 
 def init_reset_parameter():
     ColumnParallelLinear.reset_parameters = colummn_row_reset_parameters

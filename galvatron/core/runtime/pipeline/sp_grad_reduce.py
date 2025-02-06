@@ -1,8 +1,10 @@
 import logging
-from typing import Any, Callable, Dict, List, no_type_check, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, no_type_check
+
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp._common_utils import (
+    TrainingState,
     _assert_in_training_states,
     _FSDPState,
     _get_module_fsdp_state,
@@ -10,16 +12,16 @@ from torch.distributed.fsdp._common_utils import (
     _log_post_backward_hook,
     _no_dispatch_record_stream,
     clean_tensor_name,
-    TrainingState,
 )
-if torch.__version__ >= '2.5.0':
+
+if torch.__version__ >= "2.5.0":
     from torch.distributed.fsdp._flat_param import (
+        RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
         FlatParameter,
         FlatParamHandle,
         HandleShardingStrategy,
         HandleTrainingState,
-        RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
-)
+    )
 else:
     from torch.distributed.fsdp.flat_param import (
         FlatParameter,
@@ -28,23 +30,18 @@ else:
         HandleTrainingState,
         RESHARD_AFTER_FORWARD_HANDLE_STRATEGIES,
     )
-from torch.distributed.utils import (
-    _apply_to_tensors,
-    _cast_forward_inputs,
-    _p_assert,
-    _to_kwargs,
-)
-
-from torch.distributed.fsdp._runtime_utils import (
-    _reduce_grad, 
-    _reduce_grad_no_shard, 
-    _post_backward_reshard, 
-    _low_precision_hook_enabled
-)
 
 from megatron.core import parallel_state
+from torch.distributed.fsdp._runtime_utils import (
+    _low_precision_hook_enabled,
+    _post_backward_reshard,
+    _reduce_grad,
+    _reduce_grad_no_shard,
+)
+from torch.distributed.utils import _apply_to_tensors, _cast_forward_inputs, _p_assert, _to_kwargs
 
 log = logging.getLogger(__name__)
+
 
 @no_type_check
 @torch.no_grad()
@@ -68,17 +65,14 @@ def _post_backward_hook_sp(
     _log_post_backward_hook(state, handle, log)
     flat_param = handle.flat_param
     flat_param._post_backward_called = True
-    with torch.autograd.profiler.record_function(
-        "FullyShardedDataParallel._post_backward_hook"
-    ):
+    with torch.autograd.profiler.record_function("FullyShardedDataParallel._post_backward_hook"):
         _assert_in_training_states(state, [TrainingState.FORWARD_BACKWARD])
         # For multiple applications of reentrant AC across submodules sharing
         # the same `FlatParameter`, the post-backward hook may run multiple
         # times in one backward, in which case we permit the state to already
         # be in `BACKWARD_POST`.
         _p_assert(
-            handle._training_state
-            in (HandleTrainingState.BACKWARD_PRE, HandleTrainingState.BACKWARD_POST),
+            handle._training_state in (HandleTrainingState.BACKWARD_PRE, HandleTrainingState.BACKWARD_POST),
             f"Expects `BACKWARD_PRE` or `BACKWARD_POST` state but got {handle._training_state}",
         )
         handle._training_state = HandleTrainingState.BACKWARD_POST
@@ -106,19 +100,28 @@ def _post_backward_hook_sp(
                 and not handle._force_full_precision
             ):
                 flat_param.grad.data = flat_param.grad.to(handle._reduce_dtype)
-            
-            if hasattr(state, "sp_group") and hasattr(state, "ln_offset") and len(state.ln_offset) > 0 and len(state.sp_group.ranks) > 1 and hasattr(state, "last_batch") and state.last_batch:
-                all_ln_data = parallel_state.get_global_memory_buffer().get_tensor([sum(state.ln_size)],flat_param.grad.data.dtype,"reduce_grad")
+
+            if (
+                hasattr(state, "sp_group")
+                and hasattr(state, "ln_offset")
+                and len(state.ln_offset) > 0
+                and len(state.sp_group.ranks) > 1
+                and hasattr(state, "last_batch")
+                and state.last_batch
+            ):
+                all_ln_data = parallel_state.get_global_memory_buffer().get_tensor(
+                    [sum(state.ln_size)], flat_param.grad.data.dtype, "reduce_grad"
+                )
                 idx = 0
                 for offset, size in zip(state.ln_offset, state.ln_size):
-                    all_ln_data[idx:idx+size].copy_(flat_param.grad.data[offset:offset+size])
+                    all_ln_data[idx : idx + size].copy_(flat_param.grad.data[offset : offset + size])
                     idx += size
                 dist.all_reduce(all_ln_data, group=state.sp_group.group)
                 idx = 0
                 for offset, size in zip(state.ln_offset, state.ln_size):
-                    flat_param.grad.data[offset:offset+size].copy_(all_ln_data[idx:idx+size])
+                    flat_param.grad.data[offset : offset + size].copy_(all_ln_data[idx : idx + size])
                     idx += size
-                
+
             if handle.uses_sharded_strategy:
                 _reduce_grad(state, handle)
             else:
@@ -126,6 +129,4 @@ def _post_backward_hook_sp(
             # Since the unsharded gradient is produced in the computation
             # stream and consumed in the post-backward stream, inform the
             # caching allocator (before it goes out of scope)
-            _no_dispatch_record_stream(
-                autograd_computed_grad, state._post_backward_stream
-            )
+            _no_dispatch_record_stream(autograd_computed_grad, state._post_backward_stream)

@@ -85,15 +85,6 @@ def read_p2p_bandwidth_config(config_path):
             comm_coe_dict[int(key.split('_')[-1])] = 1.0/val
     return p2p_dict, comm_coe_dict
 
-def save_profiling_results(path, strategy, bsz, hidden_size, results):
-    config = read_json_config(path) if os.path.exists(path) else {}
-    key = form_strategy(strategy)
-    if key not in config.keys():
-        config[key] = {}
-    config[key]['hidden%d_bsz%d'%(hidden_size, bsz)] = results
-    write_json_config(config, path)
-    print('Already written policy profiling config into config file %s!\n'%(path)) 
-
 def num2str(num, name):
     if name == 'seq':
         if len(num) == 1:
@@ -104,34 +95,6 @@ def num2str(num, name):
         info = '%s%d'%(name, num)
     return info
 
-def save_profiled_memory(path, pp_deg, tp_deg, world_size, layer_num, bsz, rank, model_states, activation, activation_peak, cpt, sequence_parallel = False, vocab_tp = 1, seq = None):
-    config = read_json_config(path) if os.path.exists(path) else {}
-    key = '%d_%d_%d'%(pp_deg,tp_deg,world_size//pp_deg//tp_deg)
-    if cpt:
-        key += '_c'
-    if vocab_tp == tp_deg and tp_deg != 1:
-        key += '_vtp'
-    if sequence_parallel:
-        key += '_sp'
-    if key not in config.keys():
-        config[key] = {}
-    layernum_info = num2str(layer_num, 'layernum')
-    seq_info = num2str(seq, 'seq')
-    config[key]['%s_bsz%d_%s_rank%d_ms'%(layernum_info, bsz, seq_info, rank)] = model_states
-    config[key]['%s_bsz%d_%s_rank%d_act'%(layernum_info, bsz, seq_info, rank)] = activation
-    config[key]['%s_bsz%d_%s_rank%d_act_peak'%(layernum_info, bsz, seq_info, rank)] = activation_peak
-    write_json_config(config, path)
-    print('Already written profiled memory into config file %s!\n'%(path)) 
-     
-def save_profiled_time(path, time, bsz, layer_num, seq):
-    config = read_json_config(path) if os.path.exists(path) else {}
-    layernum_info = num2str(layer_num, 'layernum')
-    seq_info = num2str(seq, 'seq')
-    key = '%s_bsz%d_%s'%(layernum_info, bsz, seq_info)
-    config[key] = time
-    write_json_config(config, path)
-    print('Already written profiled time into config file %s!\n'%(path)) 
-    
 def dict_join_dirname(dic, dirname):
     for key, val in dic.items():
         dic[key] = os.path.join(dirname, val)

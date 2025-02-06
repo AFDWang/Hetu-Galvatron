@@ -1,32 +1,32 @@
 # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 
 """Transformer."""
-from contextlib import nullcontext
-import os
 import math
+import os
+from contextlib import nullcontext
+from typing import Optional
+
 import numpy as np
 import torch
 import torch.nn.functional as F
-from typing import Optional
-
 from megatron import core
-from megatron.training import get_timers, get_args, get_num_microbatches
-from megatron.legacy.model.module import MegatronModule
 from megatron.core import mpu, tensor_parallel
 from megatron.core.enums import ModelType
-from megatron.legacy.model.enums import AttnMaskType, LayerType, AttnType
-from megatron.legacy.model.fused_softmax import FusedScaleMaskSoftmax
-from megatron.legacy.model.fused_bias_gelu import bias_gelu_impl
+from megatron.core.jit import jit_fuser
 from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding, apply_rotary_pos_emb
-from megatron.legacy.model.utils import attention_mask_func, openai_gelu, erf_gelu, get_norm
+from megatron.core.parallel_state import get_tensor_and_expert_parallel_group, get_tensor_model_parallel_group
 from megatron.core.tensor_parallel import (
     gather_from_sequence_parallel_region_to_moe,
-    reduce_scatter_to_sequence_parallel_region_from_moe,
     get_cuda_rng_tracker,
-    get_data_parallel_rng_tracker_name
+    get_data_parallel_rng_tracker_name,
+    reduce_scatter_to_sequence_parallel_region_from_moe,
 )
-from megatron.core.parallel_state import get_tensor_model_parallel_group, get_tensor_and_expert_parallel_group
-from megatron.core.jit import jit_fuser
+from megatron.legacy.model.enums import AttnMaskType, AttnType, LayerType
+from megatron.legacy.model.fused_bias_gelu import bias_gelu_impl
+from megatron.legacy.model.fused_softmax import FusedScaleMaskSoftmax
+from megatron.legacy.model.module import MegatronModule
+from megatron.legacy.model.utils import attention_mask_func, erf_gelu, get_norm, openai_gelu
+from megatron.training import get_args, get_num_microbatches, get_timers
 
 try:
     from einops import rearrange
@@ -78,6 +78,7 @@ except ImportError:
 #         output = hidden_state.div(keep_prob) * random_tensor
 #         return output
 
+
 class ParallelMLP(MegatronModule):
     """MLP.
 
@@ -118,13 +119,17 @@ class ParallelMLP(MegatronModule):
         elif args.onnx_safe:
             self.activation_func = erf_gelu
         elif args.swiglu:
+
             def swiglu(x):
                 x = torch.chunk(x, 2, dim=-1)
                 return F.silu(x[0]) * x[1]
+
             self.activation_func = swiglu
         elif args.squared_relu:
+
             def squared_relu(x):
                 return torch.pow(F.relu(x), 2)
+
             self.activation_func = squared_relu
         else:
             self.bias_gelu_fusion = args.bias_gelu_fusion
@@ -161,11 +166,12 @@ class ParallelMLP(MegatronModule):
         output, output_bias = self.dense_4h_to_h(intermediate_parallel)
         return output, output_bias
 
+
 # def sinkhorn(cost, tol=0.0001):
 #     cost = torch.exp(cost)
 #     d0 = torch.ones(cost.size(0), device=cost.device, dtype=cost.dtype)
 #     d1 = torch.ones(cost.size(1), device=cost.device, dtype=cost.dtype)
-    
+
 #     eps = 0.00000001
 #     error = 1e9
 #     d1_old = d1
@@ -233,7 +239,7 @@ class ParallelMLP(MegatronModule):
 #         b = hidden_states.size(1)
 #         h = hidden_states.size(2)
 #         route = self.router(hidden_states).view(-1, args.num_experts)
-        
+
 #         # TODO (rprenger) Right now we're just using the sinkhorn algorithm
 #         # for load balancing. There should be an option to do no load balancing
 #         # and the algorithm and parametets should be further tested
@@ -300,9 +306,7 @@ class ParallelMLP(MegatronModule):
 
 class CoreAttention(MegatronModule):
 
-    def __init__(self, layer_number, config,
-                 attn_mask_type=AttnMaskType.padding,
-                 tp_group=None, sp_group=None):
+    def __init__(self, layer_number, config, attn_mask_type=AttnMaskType.padding, tp_group=None, sp_group=None):
         super(CoreAttention, self).__init__()
         self.fp16 = config.fp16
         self.bf16 = config.bf16
@@ -327,12 +331,9 @@ class CoreAttention(MegatronModule):
         else:
             sp_world_size = torch.distributed.get_world_size(sp_group)
         world_size = max(world_size, sp_world_size)
-        self.hidden_size_per_partition = core.utils.divide(projection_size,
-                                                           world_size)
-        self.hidden_size_per_attention_head = core.utils.divide(
-            projection_size, config.num_attention_heads)
-        self.num_attention_heads_per_partition = core.utils.divide(
-            config.num_attention_heads, world_size)
+        self.hidden_size_per_partition = core.utils.divide(projection_size, world_size)
+        self.hidden_size_per_attention_head = core.utils.divide(projection_size, config.num_attention_heads)
+        self.num_attention_heads_per_partition = core.utils.divide(config.num_attention_heads, world_size)
 
         coeff = None
         self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
@@ -341,49 +342,47 @@ class CoreAttention(MegatronModule):
             self.norm_factor *= coeff
 
         self.scale_mask_softmax = FusedScaleMaskSoftmax(
-            self.fp16, self.bf16,
+            self.fp16,
+            self.bf16,
             self.attn_mask_type,
             config.masked_softmax_fusion,
             attention_mask_func,
             self.attention_softmax_in_fp32,
-            coeff)
+            coeff,
+        )
 
         # Dropout. Note that for a single iteration, this layer will generate
         # different outputs on different number of parallel partitions but
         # on average it should not be partition dependent.
         self.attention_dropout = torch.nn.Dropout(config.attention_dropout)
 
-    def forward(self, query_layer, key_layer,
-                value_layer, attention_mask):
+    def forward(self, query_layer, key_layer, value_layer, attention_mask):
 
         # ===================================
         # Raw attention scores. [b, np, s, s]
         # ===================================
 
         # [b, np, sq, sk]
-        output_size = (query_layer.size(1),
-                       query_layer.size(2),
-                       query_layer.size(0),
-                       key_layer.size(0))
+        output_size = (query_layer.size(1), query_layer.size(2), query_layer.size(0), key_layer.size(0))
 
         # [sq, b, np, hn] -> [sq, b * np, hn]
-        query_layer = query_layer.reshape(output_size[2],
-                                          output_size[0] * output_size[1], -1)
+        query_layer = query_layer.reshape(output_size[2], output_size[0] * output_size[1], -1)
         # [sk, b, np, hn] -> [sk, b * np, hn]
-        key_layer = key_layer.view(output_size[3],
-                                   output_size[0] * output_size[1], -1)
+        key_layer = key_layer.view(output_size[3], output_size[0] * output_size[1], -1)
 
         # preallocting input tensor: [b * np, sq, sk]
         matmul_input_buffer = mpu.get_global_memory_buffer().get_tensor(
-            (output_size[0]*output_size[1], output_size[2], output_size[3]),
-            query_layer.dtype, "mpu")
+            (output_size[0] * output_size[1], output_size[2], output_size[3]), query_layer.dtype, "mpu"
+        )
 
         # Raw attention scores. [b * np, sq, sk]
         matmul_result = torch.baddbmm(
             matmul_input_buffer,
-            query_layer.transpose(0, 1),   # [b * np, sq, hn]
+            query_layer.transpose(0, 1),  # [b * np, sq, hn]
             key_layer.transpose(0, 1).transpose(1, 2),  # [b * np, hn, sk]
-            beta=0.0, alpha=(1.0/self.norm_factor))
+            beta=0.0,
+            alpha=(1.0 / self.norm_factor),
+        )
 
         # change view to [b, np, sq, sk]
         attention_scores = matmul_result.view(*output_size)
@@ -393,8 +392,7 @@ class CoreAttention(MegatronModule):
         # ===========================
 
         # attention scores and attention mask [b, np, sq, sk]
-        attention_probs = self.scale_mask_softmax(attention_scores,
-                                                  attention_mask)
+        attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -412,18 +410,13 @@ class CoreAttention(MegatronModule):
         # [sk, b, np, hn] --> [b, np, sq, hn]
 
         # context layer shape: [b, np, sq, hn]
-        output_size = (value_layer.size(1),
-                       value_layer.size(2),
-                       query_layer.size(0),
-                       value_layer.size(3))
+        output_size = (value_layer.size(1), value_layer.size(2), query_layer.size(0), value_layer.size(3))
 
         # change view [sk, b * np, hn]
-        value_layer = value_layer.view(value_layer.size(0),
-                                       output_size[0] * output_size[1], -1)
+        value_layer = value_layer.view(value_layer.size(0), output_size[0] * output_size[1], -1)
 
         # change view [b * np, sq, sk]
-        attention_probs = attention_probs.view(output_size[0] * output_size[1],
-                                               output_size[2], -1)
+        attention_probs = attention_probs.view(output_size[0] * output_size[1], output_size[2], -1)
 
         # matmul: [b * np, sq, hn]
         context_layer = torch.bmm(attention_probs, value_layer.transpose(0, 1))
@@ -435,8 +428,7 @@ class CoreAttention(MegatronModule):
         context_layer = context_layer.permute(2, 0, 1, 3).contiguous()
 
         # [sq, b, np, hn] --> [sq, b, hp]
-        new_context_layer_shape = context_layer.size()[:-2] + \
-            (self.hidden_size_per_partition,)
+        new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)
         context_layer = context_layer.view(*new_context_layer_shape)
 
         return context_layer
@@ -452,12 +444,13 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
         attention_dropout: The dropout rate to apply to the attention
                            (default: 0.0)
     """
-    def __init__(self, causal=False, softmax_scale=None, attention_dropout=0.0,
-                 device=None, dtype=None):
+
+    def __init__(self, causal=False, softmax_scale=None, attention_dropout=0.0, device=None, dtype=None):
         super().__init__()
-        assert flash_attn_unpadded_func is not None, ('Please install FlashAttention first, '
-                                                      'e.g., with pip install flash-attn')
-        assert rearrange is not None, 'Please install einops first, e.g., with pip install einops'
+        assert flash_attn_unpadded_func is not None, (
+            "Please install FlashAttention first, " "e.g., with pip install flash-attn"
+        )
+        assert rearrange is not None, "Please install einops first, e.g., with pip install einops"
         self.causal = causal
         self.softmax_scale = softmax_scale
         self.dropout_p = attention_dropout
@@ -469,22 +462,22 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
             q, k, v: The tensor containing the query, key, and value. (B, S, H, D)
         """
 
-        assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q,k,v)))
-        assert all((i.is_cuda for i in (q,k,v)))
+        assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q, k, v)))
+        assert all((i.is_cuda for i in (q, k, v)))
 
         batch_size, seqlen_q = q.shape[0], q.shape[1]
         seqlen_k = k.shape[1]
 
-        q, k, v = [rearrange(x, 'b s ... -> (b s) ...') for x in [q, k, v]]
-        cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32,
-                                    device=q.device)
+        q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
+        cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device)
 
         is_causal = self.causal
         if seqlen_k == seqlen_q:
             cu_seqlens_k = cu_seqlens_q
         else:
-            cu_seqlens_k = torch.arange(0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32,
-                                device=k.device)
+            cu_seqlens_k = torch.arange(
+                0, (batch_size + 1) * seqlen_k, step=seqlen_k, dtype=torch.int32, device=k.device
+            )
         if self.training:
             dropout_p = self.dropout_p
         else:
@@ -505,12 +498,19 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
         #     dropout_p = 0
 
         output = flash_attn_unpadded_func(
-            q, k, v, cu_seqlens_q, cu_seqlens_k, seqlen_q, seqlen_k,
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            seqlen_q,
+            seqlen_k,
             dropout_p,
-            softmax_scale=self.softmax_scale, causal=is_causal
+            softmax_scale=self.softmax_scale,
+            causal=is_causal,
         )
 
-        output = rearrange(output, '(b s) ... -> b s ...', b=batch_size)
+        output = rearrange(output, "(b s) ... -> b s ...", b=batch_size)
         return output
 
 
@@ -521,14 +521,20 @@ class ParallelAttention(MegatronModule):
     and returns output of the same size.
     """
 
-    def __init__(self, config, layer_number,
-                 attention_type=AttnType.self_attn,
-                 attn_mask_type=AttnMaskType.padding,
-                 tp_group=None, sp_group = None, use_ulysses = False):
+    def __init__(
+        self,
+        config,
+        layer_number,
+        attention_type=AttnType.self_attn,
+        attn_mask_type=AttnMaskType.padding,
+        tp_group=None,
+        sp_group=None,
+        use_ulysses=False,
+    ):
         super(ParallelAttention, self).__init__()
         args = get_args()
         self.use_ulysses = use_ulysses
-        
+
         self.layer_number = max(1, layer_number)
         self.attention_type = attention_type
         self.attn_mask_type = attn_mask_type
@@ -544,19 +550,18 @@ class ParallelAttention(MegatronModule):
         else:
             kv_projection_size = args.kv_channels * args.num_attention_heads
 
-        self.use_flash_attn = args.use_flash_attn #  \
-            # and attention_type == AttnType.self_attn \
-            # and self.attn_mask_type == AttnMaskType.causal
+        self.use_flash_attn = args.use_flash_attn  #  \
+        # and attention_type == AttnType.self_attn \
+        # and self.attn_mask_type == AttnMaskType.causal
         if self.use_flash_attn:
             if flash_attn_unpadded_func is None:
-                raise ImportError('FlashAttention is not installed, please install with '
-                                  'pip install flash-attn')
+                raise ImportError("FlashAttention is not installed, please install with " "pip install flash-attn")
             # assert attention_type == AttnType.self_attn, ('FlashAttention code path only supports '
             #                                               'self-attention for now')
             # assert self.attn_mask_type == AttnMaskType.causal, ('FlashAttention code path only '
             #                                                     'supports causal mask for now')
             if rearrange is None:
-                raise ImportError('einops is not installed, please install with pip install einops')
+                raise ImportError("einops is not installed, please install with pip install einops")
 
         # Per attention head and per partition values.
         if tp_group is None:
@@ -567,17 +572,15 @@ class ParallelAttention(MegatronModule):
             sp_world_size = 1
         else:
             sp_world_size = torch.distributed.get_world_size(sp_group)
-        self.hidden_size_per_attention_head = core.utils.divide(
-            query_projection_size, config.num_attention_heads)
-        self.num_attention_heads_per_partition = core.utils.divide(
-            config.num_attention_heads, world_size)
+        self.hidden_size_per_attention_head = core.utils.divide(query_projection_size, config.num_attention_heads)
+        self.num_attention_heads_per_partition = core.utils.divide(config.num_attention_heads, world_size)
 
         if self.group_query_attention:
             if args.num_query_groups % world_size != 0:
-                raise NotImplementedError('Currently the num_query_groups should be '
-                                          'a multiple of the tensor parallel size')
-            self.num_query_groups_per_partition = core.utils.divide(
-                        args.num_query_groups, world_size)
+                raise NotImplementedError(
+                    "Currently the num_query_groups should be " "a multiple of the tensor parallel size"
+                )
+            self.num_query_groups_per_partition = core.utils.divide(args.num_query_groups, world_size)
         else:
             self.num_query_groups_per_partition = self.num_attention_heads_per_partition
 
@@ -590,7 +593,8 @@ class ParallelAttention(MegatronModule):
                 init_method=config.init_method,
                 bias=args.add_bias_linear or args.add_qkv_bias,
                 gather_output=False,
-                tp_group=tp_group)
+                tp_group=tp_group,
+            )
         else:
             assert attention_type == AttnType.cross_attn
 
@@ -605,7 +609,8 @@ class ParallelAttention(MegatronModule):
                 init_method=config.init_method,
                 bias=config.add_bias_linear,
                 gather_output=False,
-                tp_group=tp_group)
+                tp_group=tp_group,
+            )
 
             self.key_value = tensor_parallel.ColumnParallelLinear(
                 config.hidden_size,
@@ -614,11 +619,13 @@ class ParallelAttention(MegatronModule):
                 init_method=config.init_method,
                 bias=config.add_bias_linear,
                 gather_output=False,
-                tp_group=tp_group)
+                tp_group=tp_group,
+            )
 
-        self.core_attention = CoreAttention(self.layer_number, config,
-                                            self.attn_mask_type, tp_group=tp_group, sp_group=sp_group)
-        self.checkpoint_core_attention = config.recompute_granularity == 'selective'
+        self.core_attention = CoreAttention(
+            self.layer_number, config, self.attn_mask_type, tp_group=tp_group, sp_group=sp_group
+        )
+        self.checkpoint_core_attention = config.recompute_granularity == "selective"
 
         if self.use_flash_attn:
             self.core_attention_flash = FlashSelfOrCrossAttention(
@@ -626,9 +633,12 @@ class ParallelAttention(MegatronModule):
             )
         if self.use_ulysses:
             assert args.num_attention_heads % sp_world_size == 0
-            self.dist_attn = DistributedAttention(self.core_attention_flash if self.use_flash_attn else self.core_attention, sp_group, 
-                                                  gather_idx = 1 if self.use_flash_attn else 0,)
-            #flash attn [B,S,H,D] gather_idx = 1, normal attn [S,B,H,D] gather_idx = 0
+            self.dist_attn = DistributedAttention(
+                self.core_attention_flash if self.use_flash_attn else self.core_attention,
+                sp_group,
+                gather_idx=1 if self.use_flash_attn else 0,
+            )
+            # flash attn [B,S,H,D] gather_idx = 1, normal attn [S,B,H,D] gather_idx = 0
         # Output.
         self.dense = tensor_parallel.RowParallelLinear(
             query_projection_size,
@@ -638,28 +648,25 @@ class ParallelAttention(MegatronModule):
             bias=args.add_bias_linear,
             input_is_parallel=True,
             skip_bias_add=True,
-            tp_group=tp_group)
+            tp_group=tp_group,
+        )
 
-    def _checkpointed_attention_forward(self, query_layer, key_layer,
-                                        value_layer, attention_mask,
-                                        rotary_pos_emb=None):
+    def _checkpointed_attention_forward(self, query_layer, key_layer, value_layer, attention_mask, rotary_pos_emb=None):
         """Forward method with activation checkpointing."""
+
         def custom_forward(*inputs):
             query_layer = inputs[0]
             key_layer = inputs[1]
             value_layer = inputs[2]
             attention_mask = inputs[3]
-            output_ = self.core_attention(query_layer, key_layer,
-                                          value_layer, attention_mask)
+            output_ = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
             return output_
 
-        q_pos_emb, k_pos_emb = (None, None) if rotary_pos_emb is None \
-            else rotary_pos_emb
+        q_pos_emb, k_pos_emb = (None, None) if rotary_pos_emb is None else rotary_pos_emb
 
         hidden_states = tensor_parallel.checkpoint(
-            custom_forward,
-            False, query_layer, key_layer, value_layer, attention_mask,
-            q_pos_emb, k_pos_emb)
+            custom_forward, False, query_layer, key_layer, value_layer, attention_mask, q_pos_emb, k_pos_emb
+        )
 
         return hidden_states
 
@@ -670,11 +677,10 @@ class ParallelAttention(MegatronModule):
             num_attention_heads,
             self.hidden_size_per_attention_head,
             dtype=self.params_dtype,
-            device=torch.cuda.current_device())
+            device=torch.cuda.current_device(),
+        )
 
-    def forward(self, hidden_states, attention_mask,
-                encoder_output=None, inference_params=None,
-                rotary_pos_emb=None):
+    def forward(self, hidden_states, attention_mask, encoder_output=None, inference_params=None, rotary_pos_emb=None):
         # hidden_states: [sq, b, h]
 
         # =================================================
@@ -686,18 +692,19 @@ class ParallelAttention(MegatronModule):
                 inf_max_seq_len = inference_params.max_sequence_length
                 inf_max_batch_size = inference_params.max_batch_size
                 inference_key_memory = self._allocate_memory(
-                    inf_max_seq_len, inf_max_batch_size,
-                    self.num_query_groups_per_partition)
+                    inf_max_seq_len, inf_max_batch_size, self.num_query_groups_per_partition
+                )
                 inference_value_memory = self._allocate_memory(
-                    inf_max_seq_len, inf_max_batch_size,
-                    self.num_query_groups_per_partition)
+                    inf_max_seq_len, inf_max_batch_size, self.num_query_groups_per_partition
+                )
 
                 inference_params.key_value_memory_dict[self.layer_number] = (
-                    inference_key_memory, inference_value_memory)
+                    inference_key_memory,
+                    inference_value_memory,
+                )
                 is_first_step = True
             else:
-                inference_key_memory, inference_value_memory = \
-                    inference_params.key_value_memory_dict[self.layer_number]
+                inference_key_memory, inference_value_memory = inference_params.key_value_memory_dict[self.layer_number]
 
         # =====================
         # Query, Key, and Value
@@ -718,46 +725,51 @@ class ParallelAttention(MegatronModule):
             mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
 
             # [sq, b, ng, (np/ng + 2) * hn] --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn]
-            (query_layer,
-            key_layer,
-            value_layer) = torch.split(
+            (query_layer, key_layer, value_layer) = torch.split(
                 mixed_x_layer,
                 [
                     (
-                        self.num_attention_heads_per_partition // self.num_query_groups_per_partition
+                        self.num_attention_heads_per_partition
+                        // self.num_query_groups_per_partition
                         * self.hidden_size_per_attention_head
                     ),
                     self.hidden_size_per_attention_head,
-                    self.hidden_size_per_attention_head
+                    self.hidden_size_per_attention_head,
                 ],
-                dim=3)
+                dim=3,
+            )
 
             # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn] -
             # TODO: check if it is necessary to reshape
             if self.group_query_attention:
-                query_layer = query_layer.reshape(query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head)
+                query_layer = query_layer.reshape(
+                    query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head
+                )
             else:
-                query_layer = query_layer.view(query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head)
+                query_layer = query_layer.view(
+                    query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head
+                )
         else:
             # Attention heads [sk, b, h] --> [sk, b, (np * 2 * hn)]
             mixed_kv_layer, _ = self.key_value(encoder_output)
 
             # [sk, b, (np * 2 * hn)] --> [sk, b, np, 2 * hn]
-            new_tensor_shape = mixed_kv_layer.size()[:-1] + \
-                (self.num_attention_heads_per_partition,
-                2 * self.hidden_size_per_attention_head)
+            new_tensor_shape = mixed_kv_layer.size()[:-1] + (
+                self.num_attention_heads_per_partition,
+                2 * self.hidden_size_per_attention_head,
+            )
             mixed_kv_layer = mixed_kv_layer.view(*new_tensor_shape)
 
             # [sk, b, np, 2 * hn] --> 2 [sk, b, np, hn]
-            (key_layer,
-            value_layer) = tensor_parallel.split_tensor_along_last_dim(mixed_kv_layer, 2)
+            (key_layer, value_layer) = tensor_parallel.split_tensor_along_last_dim(mixed_kv_layer, 2)
 
             # Attention head [sq, b, h] --> [sq, b, hp]
             query_layer, _ = self.query(hidden_states)
             # [sq, b, hp] --> [sq, b, np, hn]
-            new_tensor_shape = query_layer.size()[:-1] + \
-                (self.num_attention_heads_per_partition,
-                self.hidden_size_per_attention_head)
+            new_tensor_shape = query_layer.size()[:-1] + (
+                self.num_attention_heads_per_partition,
+                self.hidden_size_per_attention_head,
+            )
             query_layer = query_layer.view(*new_tensor_shape)
 
         # ==================================
@@ -769,7 +781,7 @@ class ParallelAttention(MegatronModule):
             if isinstance(rotary_pos_emb, tuple):
                 rotary_pos_emb = rotary_pos_emb
             else:
-                rotary_pos_emb = ((rotary_pos_emb,) * 2)
+                rotary_pos_emb = (rotary_pos_emb,) * 2
 
         if inference_params:
             batch_start = inference_params.batch_size_offset
@@ -779,15 +791,10 @@ class ParallelAttention(MegatronModule):
             sequence_end = sequence_start + key_layer.size(0)
             assert sequence_end <= inference_key_memory.size(0)
             # Copy key and values.
-            inference_key_memory[sequence_start:sequence_end,
-                                 batch_start:batch_end, ...] = key_layer
-            inference_value_memory[sequence_start:sequence_end,
-                                   batch_start:batch_end, ...] = value_layer
-            key_layer = inference_key_memory[
-                :sequence_end, batch_start:batch_end, ...]
-            value_layer = inference_value_memory[
-                :sequence_end, batch_start:batch_end, ...]
-
+            inference_key_memory[sequence_start:sequence_end, batch_start:batch_end, ...] = key_layer
+            inference_value_memory[sequence_start:sequence_end, batch_start:batch_end, ...] = value_layer
+            key_layer = inference_key_memory[:sequence_end, batch_start:batch_end, ...]
+            value_layer = inference_value_memory[:sequence_end, batch_start:batch_end, ...]
 
             # adjust the key rotary positional embedding
             if rotary_pos_emb is not None:
@@ -816,19 +823,17 @@ class ParallelAttention(MegatronModule):
         # expand the key_layer and value_layer [sk, b, ng, hn] -> [sk, b, np, hn]
         if self.num_attention_heads_per_partition // self.num_query_groups_per_partition > 1:
             key_layer = key_layer.repeat_interleave(
-                self.num_attention_heads_per_partition // self.num_query_groups_per_partition,
-                dim = 2
+                self.num_attention_heads_per_partition // self.num_query_groups_per_partition, dim=2
             )
             value_layer = value_layer.repeat_interleave(
-                self.num_attention_heads_per_partition // self.num_query_groups_per_partition,
-                dim = 2
+                self.num_attention_heads_per_partition // self.num_query_groups_per_partition, dim=2
             )
 
         # apply relative positional encoding (rotary embedding)
         if rotary_pos_emb is not None:
             q_pos_emb, k_pos_emb = rotary_pos_emb
-            query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb,self.config)
-            key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb,self.config)
+            query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb, self.config)
+            key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb, self.config)
             # TODO, can apply positional embedding to value_layer so it has
             # absolute positional embedding.
             # otherwise, only relative positional embedding takes effect
@@ -837,37 +842,39 @@ class ParallelAttention(MegatronModule):
         if self.use_ulysses:
             if self.use_flash_attn:
                 batch_dim_idx = 0
-                query_layer, key_layer, value_layer = [rearrange(x, 's b ... -> b s ...').contiguous()
-                            for x in (query_layer, key_layer, value_layer)]
-                
+                query_layer, key_layer, value_layer = [
+                    rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)
+                ]
+
                 context_layer = self.dist_attn(query_layer, key_layer, value_layer, batch_dim_idx)
-                context_layer = rearrange(context_layer, 'b s h d -> s b (h d)').contiguous()     
+                context_layer = rearrange(context_layer, "b s h d -> s b (h d)").contiguous()
             else:
-                batch_dim_idx = 1 # [S,B,H,D]
+                batch_dim_idx = 1  # [S,B,H,D]
                 context_layer = self.dist_attn(query_layer, key_layer, value_layer, batch_dim_idx, attention_mask)
-                context_layer = rearrange(context_layer, '... h d -> ... (h d)').contiguous() 
-        else: 
+                context_layer = rearrange(context_layer, "... h d -> ... (h d)").contiguous()
+        else:
             if not self.use_flash_attn:
                 if self.checkpoint_core_attention:
                     context_layer = self._checkpointed_attention_forward(
-                        query_layer, key_layer, value_layer, attention_mask)
+                        query_layer, key_layer, value_layer, attention_mask
+                    )
                 else:
-                    context_layer = self.core_attention(
-                        query_layer, key_layer, value_layer, attention_mask)
+                    context_layer = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
             else:
-                q, k, v = [rearrange(x, 's b ... -> b s ...').contiguous()
-                        for x in (query_layer, key_layer, value_layer)]
+                q, k, v = [
+                    rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)
+                ]
                 if not self.sequence_parallel:
                     with tensor_parallel.get_cuda_rng_tracker().fork():
                         context_layer = self.core_attention_flash(q, k, v)
                 else:
                     context_layer = self.core_attention_flash(q, k, v)
-                context_layer = rearrange(context_layer, 'b s h d -> s b (h d)').contiguous()
+                context_layer = rearrange(context_layer, "b s h d -> s b (h d)").contiguous()
 
         # =================
         # Output. [sq, b, h]
         # =================
-        
+
         output, bias = self.dense(context_layer)
 
         return output, bias
@@ -885,22 +892,21 @@ def bias_dropout_add(x, bias, residual, prob, training):
 def get_bias_dropout_add(training):
     def _bias_dropout_add(x, bias, residual, prob):
         return bias_dropout_add(x, bias, residual, prob, training)
+
     return _bias_dropout_add
 
 
 @jit_fuser
-def bias_dropout_add_fused_train(x: torch.Tensor,
-                                 bias: Optional[torch.Tensor],
-                                 residual: torch.Tensor,
-                                 prob: float) -> torch.Tensor:
+def bias_dropout_add_fused_train(
+    x: torch.Tensor, bias: Optional[torch.Tensor], residual: torch.Tensor, prob: float
+) -> torch.Tensor:
     return bias_dropout_add(x, bias, residual, prob, True)
 
 
 @jit_fuser
-def bias_dropout_add_fused_inference(x: torch.Tensor,
-                                     bias: Optional[torch.Tensor],
-                                     residual: torch.Tensor,
-                                     prob: float) -> torch.Tensor:
+def bias_dropout_add_fused_inference(
+    x: torch.Tensor, bias: Optional[torch.Tensor], residual: torch.Tensor, prob: float
+) -> torch.Tensor:
     return bias_dropout_add(x, bias, residual, prob, False)
 
 
@@ -1869,11 +1875,13 @@ def bias_dropout_add_fused_inference(x: torch.Tensor,
 #         super().load_state_dict(state_dict_, strict)
 
 from typing import Any, Tuple
+
+import torch.distributed as dist
 from torch import Tensor
 from torch.nn import Module
-import torch.distributed as dist
 
 # --------- ulysses --------------
+
 
 def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_head, head_dim):
 
@@ -1882,24 +1890,22 @@ def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_he
             # b, s, n, h
             if scatter_idx < 2:
                 output = input.permute(1, 2, 0, 3, 4).contiguous()
-                output = output.reshape(bs, seq_len // seq_world_size, seq_world_size * num_head,
-                                        head_dim).contiguous()
+                output = output.reshape(bs, seq_len // seq_world_size, seq_world_size * num_head, head_dim).contiguous()
             else:
                 output = input.permute(1, 0, 2, 3, 4).contiguous()
-                output = output.reshape(bs, seq_world_size * seq_len, num_head // seq_world_size,
-                                        head_dim).contiguous()
+                output = output.reshape(bs, seq_world_size * seq_len, num_head // seq_world_size, head_dim).contiguous()
         else:
             # s, b, n, h
             if scatter_idx < 2:
                 output = input.transpose(0, 1).transpose(1, 2).contiguous()
                 # output = input.permute(1, 2, 0, 3, 4).contiguous()
-                output = output.reshape(seq_len // seq_world_size, bs, seq_world_size * num_head,
-                                        head_dim).contiguous()
+                output = output.reshape(seq_len // seq_world_size, bs, seq_world_size * num_head, head_dim).contiguous()
             else:
                 output = input.reshape(seq_len * seq_world_size, bs, num_head // seq_world_size, head_dim).contiguous()
         return output
 
     return post_func
+
 
 def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, async_op=False, handle=None, type=None):
     seq_world_size = dist.get_world_size(group)
@@ -1907,64 +1913,77 @@ def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, asyn
         # b, s, n, h
         if scatter_idx < 2:
             bs, global_seq_len, num_local_head, head_dim = input.shape
-            input_t = input.reshape([bs, seq_world_size, global_seq_len // seq_world_size, num_local_head,
-                                     head_dim]).contiguous()
+            input_t = input.reshape(
+                [bs, seq_world_size, global_seq_len // seq_world_size, num_local_head, head_dim]
+            ).contiguous()
             input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
         else:
             bs, local_seq_len, num_total_head, head_dim = input.shape
-            assert num_total_head % seq_world_size == 0, f"Number of heads ({num_total_head}) must be divisible by the sequence parallel size ({seq_world_size})!"
-            input_t = input.reshape([bs, local_seq_len, seq_world_size, num_total_head // seq_world_size,
-                                     head_dim]).contiguous()
+            assert (
+                num_total_head % seq_world_size == 0
+            ), f"Number of heads ({num_total_head}) must be divisible by the sequence parallel size ({seq_world_size})!"
+            input_t = input.reshape(
+                [bs, local_seq_len, seq_world_size, num_total_head // seq_world_size, head_dim]
+            ).contiguous()
             input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
     else:
         # s, b, n, h
         if scatter_idx < 2:
             global_seq_len, bs, num_local_head, head_dim = input.shape
-            input_t = input.reshape([seq_world_size, global_seq_len // seq_world_size, bs, num_local_head,
-                                     head_dim]).contiguous()
+            input_t = input.reshape(
+                [seq_world_size, global_seq_len // seq_world_size, bs, num_local_head, head_dim]
+            ).contiguous()
         else:
             local_seq_len, bs, num_total_head, head_dim = input.shape
-            assert num_total_head % seq_world_size == 0, f"Number of heads ({num_total_head}) must be divisible by the sequence parallel size ({seq_world_size})!"
-            input_t = input.reshape([local_seq_len * bs, seq_world_size, num_total_head // seq_world_size,
-                                     head_dim]).contiguous()
+            assert (
+                num_total_head % seq_world_size == 0
+            ), f"Number of heads ({num_total_head}) must be divisible by the sequence parallel size ({seq_world_size})!"
+            input_t = input.reshape(
+                [local_seq_len * bs, seq_world_size, num_total_head // seq_world_size, head_dim]
+            ).contiguous()
             input_t = input_t.transpose(0, 1).contiguous()
             # input_t = input.reshape([local_seq_len, bs, seq_world_size, num_total_head // seq_world_size,
             #                          head_dim]).contiguous()
             # input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
 
     if scatter_idx < 2:
-        post_all2all_fun = post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, global_seq_len, num_local_head,
-                                        head_dim)
+        post_all2all_fun = post_all2all(
+            scatter_idx, batch_dim_idx, seq_world_size, bs, global_seq_len, num_local_head, head_dim
+        )
     else:
-        post_all2all_fun = post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, local_seq_len, num_total_head,
-                                        head_dim)
+        post_all2all_fun = post_all2all(
+            scatter_idx, batch_dim_idx, seq_world_size, bs, local_seq_len, num_total_head, head_dim
+        )
 
     output = torch.empty_like(input_t)
     work = dist.all_to_all_single(output, input_t, group=group, async_op=async_op)
 
     if async_op:
-        if type in ('dq', 'dk'):
-            handle[type + '_work'] = work
-            handle[type + '_grad'] = output
-            handle[type + '_post_all2all_func'] = post_all2all_fun
+        if type in ("dq", "dk"):
+            handle[type + "_work"] = work
+            handle[type + "_grad"] = output
+            handle[type + "_post_all2all_func"] = post_all2all_fun
             return output
 
     res = post_all2all_fun(output)
     return res
 
+
 class _SeqAllToAll(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx: Any,
-                group: dist.ProcessGroup,
-                input: Tensor,
-                scatter_idx: int,
-                gather_idx: int,
-                batch_dim_idx: int,
-                stream=None,
-                handle=None,
-                type=None,
-                is_fwd=True) -> Tensor:
+    def forward(
+        ctx: Any,
+        group: dist.ProcessGroup,
+        input: Tensor,
+        scatter_idx: int,
+        gather_idx: int,
+        batch_dim_idx: int,
+        stream=None,
+        handle=None,
+        type=None,
+        is_fwd=True,
+    ) -> Tensor:
         ctx.group = group
         ctx.scatter_idx = scatter_idx
         ctx.gather_idx = gather_idx
@@ -1977,21 +1996,21 @@ class _SeqAllToAll(torch.autograd.Function):
 
         else:
             # overlap communication path
-            if not is_fwd and type == 'o':
+            if not is_fwd and type == "o":
                 assert ctx.stream != None
                 res = single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, False)
                 get_accelerator().current_stream().wait_stream(ctx.stream)
                 del ctx.stream.activation_buffer_list
                 # The computation of d o_weight can overlap with the communication of d o_input
 
-            elif not is_fwd and type in ('q', 'k'):
+            elif not is_fwd and type in ("q", "k"):
                 # Achieve communication overlap by pipelining the matrix computation and communication of dq, dk, and dv
-                type = 'd' + type
+                type = "d" + type
                 res = single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, True, handle, type)
 
-            elif is_fwd and type in ('q', 'k'):
+            elif is_fwd and type in ("q", "k"):
                 # Achieve communication overlap by pipelining the matrix computation and communication of q, k, and v
-                type = 'fwd_' + type
+                type = "fwd_" + type
                 res = single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, False, handle, type)
 
             else:
@@ -2002,9 +2021,27 @@ class _SeqAllToAll(torch.autograd.Function):
     @staticmethod
     def backward(ctx: Any, *grad_output: Tensor) -> Tuple[None, Tensor, None, None]:
 
-        return (None,
-                _SeqAllToAll.apply(ctx.group, *grad_output, ctx.gather_idx, ctx.scatter_idx, ctx.batch_dim_idx,
-                                   ctx.stream, ctx.handle, ctx.type, False), None, None, None, None, None, None, None)
+        return (
+            None,
+            _SeqAllToAll.apply(
+                ctx.group,
+                *grad_output,
+                ctx.gather_idx,
+                ctx.scatter_idx,
+                ctx.batch_dim_idx,
+                ctx.stream,
+                ctx.handle,
+                ctx.type,
+                False,
+            ),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 class DistributedAttention(torch.nn.Module):
@@ -2040,11 +2077,11 @@ class DistributedAttention(torch.nn.Module):
             self.dafult_stream = get_accelerator().default_stream()
 
     def layer_sync(self, layer):
-        if self.sp_overlap_comm and hasattr(layer, 'done_event'):
+        if self.sp_overlap_comm and hasattr(layer, "done_event"):
             self.dafult_stream.wait_event(layer.done_event)
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, batch_dim_idx: int, *args: Any, **kwargs) -> Tensor:
-        """ forward
+        """forward
 
         Arguments:
             query (Tensor): query input to the layer
@@ -2059,31 +2096,35 @@ class DistributedAttention(torch.nn.Module):
 
         # TODO Merge three alltoall calls into one
         # TODO (Reza): change the api on the megatron-deepspeed side so that we only receive all data (q,k, and v) together!
-        #in shape : e.g.,  [s/p:h:]
+        # in shape : e.g.,  [s/p:h:]
 
         def bwd_hook(layer_type):
 
             def pre_hook_fun(grad):
-                type = 'd' + layer_type
-                self.overlap_handles[type + '_work'].wait()
+                type = "d" + layer_type
+                self.overlap_handles[type + "_work"].wait()
                 self.sp_stream.wait_stream(self.dafult_stream)
-                all2all_output = self.overlap_handles[type + '_grad']
+                all2all_output = self.overlap_handles[type + "_grad"]
                 grad = list(grad)
-                grad[0] = self.overlap_handles[type + '_post_all2all_func'](all2all_output)
+                grad[0] = self.overlap_handles[type + "_post_all2all_func"](all2all_output)
                 grad = tuple(grad)
 
             return pre_hook_fun
+
         if torch.distributed.get_world_size(self.spg) > 1:
             self.layer_sync(query)
-            query_layer = _SeqAllToAll.apply(self.spg, query, self.scatter_idx, self.gather_idx, batch_dim_idx, None,
-                                            self.overlap_handles, 'q')
+            query_layer = _SeqAllToAll.apply(
+                self.spg, query, self.scatter_idx, self.gather_idx, batch_dim_idx, None, self.overlap_handles, "q"
+            )
             self.layer_sync(key)
-            key_layer = _SeqAllToAll.apply(self.spg, key, self.scatter_idx, self.gather_idx, batch_dim_idx, None,
-                                        self.overlap_handles, 'k')
+            key_layer = _SeqAllToAll.apply(
+                self.spg, key, self.scatter_idx, self.gather_idx, batch_dim_idx, None, self.overlap_handles, "k"
+            )
             if self.sp_overlap_comm:
                 self.dafult_stream.wait_stream(self.sp_stream)
-            value_layer = _SeqAllToAll.apply(self.spg, value, self.scatter_idx, self.gather_idx, batch_dim_idx, None,
-                                            self.overlap_handles, 'v')
+            value_layer = _SeqAllToAll.apply(
+                self.spg, value, self.scatter_idx, self.gather_idx, batch_dim_idx, None, self.overlap_handles, "v"
+            )
             if self.sp_overlap_comm:
                 # Register a hook to synchronize dq and dk after the all-to-all
                 # operation when the gradient data is used.
@@ -2091,21 +2132,28 @@ class DistributedAttention(torch.nn.Module):
                 # improve interpreter speed to
                 # call and launch of the forward all-to-all communication.
                 grad_fn_q = query.grad_fn.next_functions[0][0]
-                grad_fn_q.register_prehook(bwd_hook(layer_type='q'))
+                grad_fn_q.register_prehook(bwd_hook(layer_type="q"))
                 grad_fn_k = key.grad_fn.next_functions[0][0]
-                grad_fn_k.register_prehook(bwd_hook(layer_type='k'))
+                grad_fn_k.register_prehook(bwd_hook(layer_type="k"))
         else:
             query_layer, key_layer, value_layer = query, key, value
 
-        #out shape : e.g., [s:h/p:]
+        # out shape : e.g., [s:h/p:]
         head_dim = query_layer.shape[-1]
         context_layer = self.local_attn(query_layer, key_layer, value_layer, *args, **kwargs)
-        context_layer = context_layer.view(context_layer.shape[0],context_layer.shape[1], -1, head_dim)
+        context_layer = context_layer.view(context_layer.shape[0], context_layer.shape[1], -1, head_dim)
         if torch.distributed.get_world_size(self.spg) > 1:
-            output = _SeqAllToAll.apply(self.spg, context_layer, self.gather_idx, self.scatter_idx, batch_dim_idx,
-                                        self.sp_stream, self.overlap_handles, 'o')
+            output = _SeqAllToAll.apply(
+                self.spg,
+                context_layer,
+                self.gather_idx,
+                self.scatter_idx,
+                batch_dim_idx,
+                self.sp_stream,
+                self.overlap_handles,
+                "o",
+            )
         else:
             output = context_layer
-        #out e.g., [s/p::h]
+        # out e.g., [s/p::h]
         return output
-    

@@ -307,6 +307,8 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(batch['tokens'])
            _broadcast(batch['attention_mask'])
            _broadcast(batch['position_ids'])
+           # broadcast labels for fa model (labels.shape)
+           _broadcast(batch['labels'])
 
        elif mpu.is_pipeline_last_stage():
            _broadcast(batch['labels'])
@@ -334,12 +336,14 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(position_ids)
  
        elif mpu.is_pipeline_first_stage():
-           labels=None
+           # labels=None
            loss_mask=None
    
            _broadcast(tokens)
            _broadcast(attention_mask)
            _broadcast(position_ids)
+           # broadcast labels for fa model (labels.shape)
+           _broadcast(labels)
 
        elif mpu.is_pipeline_last_stage():
            tokens=None

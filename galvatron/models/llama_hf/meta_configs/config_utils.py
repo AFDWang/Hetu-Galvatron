@@ -1,17 +1,21 @@
-import os, json
+import json
+import os
+
 from transformers import GPT2Config, LlamaConfig
+
 from galvatron.utils import dict_join_dirname
 
 # ============= Meta AI Model Config Paths =============
-path_dict =  {
-    'llama-0.3b': 'llama-0.3b.json',
-    'llama-7b': 'llama-7b.json',
-    'llama-13b': 'llama-13b.json',
-    'llama-30b': 'llama-30b.json',
-    'llama2-70b': 'llama2-70b.json',
-    'qwen2.5-7b': 'qwen2.5-7b.json',
-    'qwen2.5-72b': 'qwen2.5-72b.json',
+path_dict = {
+    "llama-0.3b": "llama-0.3b.json",
+    "llama-7b": "llama-7b.json",
+    "llama-13b": "llama-13b.json",
+    "llama-30b": "llama-30b.json",
+    "llama2-70b": "llama2-70b.json",
+    "qwen2.5-7b": "qwen2.5-7b.json",
+    "qwen2.5-72b": "qwen2.5-72b.json",
 }
+
 
 def config_from_meta(model_type) -> LlamaConfig:
     if isinstance(model_type, str):
@@ -23,19 +27,23 @@ def config_from_meta(model_type) -> LlamaConfig:
         assert isinstance(model_type, dict), "model_type must be a string or a dictionary"
         params = model_type
     if "n_kv_heads" not in params:
-        params['n_kv_heads'] = None
-    if 'ffn_dim' not in params:
-        params['ffn_dim'] = (params['dim'] * 8 // 3 + params['multiple_of'] - 1) // params['multiple_of'] * params['multiple_of']
+        params["n_kv_heads"] = None
+    if "ffn_dim" not in params:
+        params["ffn_dim"] = (
+            (params["dim"] * 8 // 3 + params["multiple_of"] - 1) // params["multiple_of"] * params["multiple_of"]
+        )
     return LlamaConfig(
-        hidden_size=params['dim'], intermediate_size= params['ffn_dim'],
-        num_attention_heads=params['n_heads'],
-        num_hidden_layers=params['n_layers'],
-        rms_norm_eps=params['norm_eps'],
-        num_key_value_heads=params['n_kv_heads'],
-        max_position_embeddings=params['n_positions'],
-        vocab_size=params['vocab_size'],
+        hidden_size=params["dim"],
+        intermediate_size=params["ffn_dim"],
+        num_attention_heads=params["n_heads"],
+        num_hidden_layers=params["n_layers"],
+        rms_norm_eps=params["norm_eps"],
+        num_key_value_heads=params["n_kv_heads"],
+        max_position_embeddings=params["n_positions"],
+        vocab_size=params["vocab_size"],
     )
-    
+
+
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
     config.use_cache = False
@@ -55,13 +63,14 @@ def set_model_config(config, args, overwrite_args=True):
             config.num_hidden_layers = args.num_hidden_layers
         if args.set_seqlen_manually:
             config.max_position_embeddings = args.seq_length
-    
+
     # ======= Model Config --> Arguments ======
     overwrite_model_args(config, args)
     # This step is necessary that maintains the consistency of model config and arguments.
-    if overwrite_args: # Overwrite necessary Megatron-LM arguments with the model config
+    if overwrite_args:  # Overwrite necessary Megatron-LM arguments with the model config
         overwrite_megatron_args(config, args)
     return config
+
 
 def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
@@ -69,6 +78,7 @@ def overwrite_model_args(config, args):
     args.num_attention_heads = config.num_attention_heads
     args.seq_length = config.max_position_embeddings
     args.vocab_size = config.vocab_size
+
 
 def overwrite_megatron_args(config, args):
     args.num_layers = config.num_hidden_layers
@@ -90,18 +100,20 @@ def overwrite_megatron_args(config, args):
         args.group_query_attention = True
         args.num_query_groups = config.num_key_value_heads
 
+
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):
-    if hasattr(args,"profile_mode"):
+    if hasattr(args, "profile_mode"):
         if args.profile_mode != "sequence":
-            return '%s_seqlen%d'%(config.model_name, config.max_position_embeddings)
-    return '%s'%(config.model_name)
+            return "%s_seqlen%d" % (config.model_name, config.max_position_embeddings)
+    return "%s" % (config.model_name)
+
 
 def model_layer_configs(config):
     return [
         {
-            'hidden_size': config.hidden_size,
-            'seq_len': config.max_position_embeddings,
-            'layer_num': config.num_hidden_layers
+            "hidden_size": config.hidden_size,
+            "seq_len": config.max_position_embeddings,
+            "layer_num": config.num_hidden_layers,
         }
     ]

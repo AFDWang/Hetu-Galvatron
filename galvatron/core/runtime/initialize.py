@@ -1,6 +1,8 @@
+from contextlib import contextmanager
+
 import torch
 import torch.nn as nn
-from contextlib import contextmanager
+
 
 @contextmanager
 def init_empty_weights(include_buffers: bool = True):

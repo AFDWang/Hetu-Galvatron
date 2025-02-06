@@ -1,13 +1,17 @@
-import os, json
+import json
+import os
+
 from transformers import GPT2Config, LlamaConfig
+
 from galvatron.utils import dict_join_dirname
 
 # ============= Meta AI Model Config Paths =============
-path_dict =  {
-    'llama-7b': 'llama-7b.json',
-    'llama-13b': 'llama-13b.json',
-    'llama-30b': 'llama-30b.json',
+path_dict = {
+    "llama-7b": "llama-7b.json",
+    "llama-13b": "llama-13b.json",
+    "llama-30b": "llama-30b.json",
 }
+
 
 def config_from_meta(model_type) -> LlamaConfig:
     if isinstance(model_type, str):
@@ -19,17 +23,21 @@ def config_from_meta(model_type) -> LlamaConfig:
         assert isinstance(model_type, dict), "model_type must be a string or a dictionary"
         params = model_type
     if "n_kv_heads" not in params:
-        params['n_kv_heads'] = None
-    if 'ffn_dim' not in params:
-        params['ffn_dim'] = (params['dim'] * 8 // 3 + params['multiple_of'] - 1) // params['multiple_of'] * params['multiple_of']
+        params["n_kv_heads"] = None
+    if "ffn_dim" not in params:
+        params["ffn_dim"] = (
+            (params["dim"] * 8 // 3 + params["multiple_of"] - 1) // params["multiple_of"] * params["multiple_of"]
+        )
     return LlamaConfig(
-        hidden_size=params['dim'], intermediate_size= params['ffn_dim'],
-        num_attention_heads=params['n_heads'],
-        num_hidden_layers=params['n_layers'],
-        rms_norm_eps=params['norm_eps'],
-        num_key_value_heads=params['n_kv_heads'],
-        max_position_embeddings=params['n_positions'],
+        hidden_size=params["dim"],
+        intermediate_size=params["ffn_dim"],
+        num_attention_heads=params["n_heads"],
+        num_hidden_layers=params["n_layers"],
+        rms_norm_eps=params["norm_eps"],
+        num_key_value_heads=params["n_kv_heads"],
+        max_position_embeddings=params["n_positions"],
     )
+
 
 def llama_config_to_gpt2_config(llama_config, args) -> GPT2Config:
     return GPT2Config(
@@ -60,19 +68,20 @@ def llama_config_to_gpt2_config(llama_config, args) -> GPT2Config:
         mlp_fc2_bias=False,
         rotary_emb_base=getattr(llama_config, "rotary_emb_base", 10000.0),
         n_head_kv=llama_config.num_key_value_heads,
-        use_cache = False,
-        fused_bias_fc = True,
-        sequence_parallel = hasattr(args, 'sequence_parallel') and args.sequence_parallel,
-        use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn,
+        use_cache=False,
+        fused_bias_fc=True,
+        sequence_parallel=hasattr(args, "sequence_parallel") and args.sequence_parallel,
+        use_flash_attn=hasattr(args, "use_flash_attn") and args.use_flash_attn,
         max_position_embeddings_data=llama_config.max_position_embeddings,
     )
+
 
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
     config.use_cache = False
     config.fused_bias_fc = True
-    config.sequence_parallel = hasattr(args, 'sequence_parallel') and args.sequence_parallel
-    config.use_flash_attn = hasattr(args, 'use_flash_attn') and args.use_flash_attn
+    config.sequence_parallel = hasattr(args, "sequence_parallel") and args.sequence_parallel
+    config.use_flash_attn = hasattr(args, "use_flash_attn") and args.use_flash_attn
     config.resid_pdrop = 0.0
     config.embd_pdrop = 0.0
     config.attn_pdrop = 0.0
@@ -90,13 +99,14 @@ def set_model_config(config, args, overwrite_args=True):
             config.num_hidden_layers = args.num_hidden_layers
         if args.set_seqlen_manually:
             config.max_position_embeddings_data = args.seq_length
-    
+
     # ======= Model Config --> Arguments ======
     overwrite_model_args(config, args)
     # This step is necessary that maintains the consistency of model config and arguments.
-    if overwrite_args: # Overwrite necessary Megatron-LM arguments with the model config
+    if overwrite_args:  # Overwrite necessary Megatron-LM arguments with the model config
         overwrite_megatron_args(config, args)
     return config
+
 
 def overwrite_model_args(config, args):
     args.hidden_size = config.hidden_size
@@ -104,6 +114,7 @@ def overwrite_model_args(config, args):
     args.num_attention_heads = config.num_attention_heads
     args.seq_length = config.max_position_embeddings_data
     args.vocab_size = config.vocab_size
+
 
 def overwrite_megatron_args(config, args):
     args.num_layers = config.num_hidden_layers
@@ -117,20 +128,30 @@ def overwrite_megatron_args(config, args):
     args.hidden_dropout = config.resid_pdrop
     args.attention_dropout = config.attn_pdrop
     if getattr(args, "padded_vocab_size", None) is None:
-        args.padded_vocab_size = (config.vocab_size + args.make_vocab_size_divisible_by - 1) // args.make_vocab_size_divisible_by * args.make_vocab_size_divisible_by
+        args.padded_vocab_size = (
+            (config.vocab_size + args.make_vocab_size_divisible_by - 1)
+            // args.make_vocab_size_divisible_by
+            * args.make_vocab_size_divisible_by
+        )
+
 
 # ============= Get Model Name and Layer Configs =============
 def model_name(config, args=None):
-    if hasattr(args,"profile_mode"):
+    if hasattr(args, "profile_mode"):
         if args.profile_mode != "sequence":
-            return 'hidden%d_head%d_seqlen%d'%(config.hidden_size, config.num_attention_heads, config.max_position_embeddings)
-    return 'hidden%d_head%d'%(config.hidden_size, config.num_attention_heads)
+            return "hidden%d_head%d_seqlen%d" % (
+                config.hidden_size,
+                config.num_attention_heads,
+                config.max_position_embeddings,
+            )
+    return "hidden%d_head%d" % (config.hidden_size, config.num_attention_heads)
+
 
 def model_layer_configs(config):
     return [
         {
-            'hidden_size': config.hidden_size,
-            'seq_len': config.max_position_embeddings_data,
-            'layer_num': config.num_hidden_layers
+            "hidden_size": config.hidden_size,
+            "seq_len": config.max_position_embeddings_data,
+            "layer_num": config.num_hidden_layers,
         }
     ]

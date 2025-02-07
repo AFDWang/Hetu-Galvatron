@@ -452,12 +452,13 @@ class OtherTimeCostModel:
         self.dp_size = dict()
         self.comm_factor = dict()
         # calc tp comm size
-        self.per_tp_message_size = []
-        self.per_tp_message_time = []
-        self.tp_message_size = []
+        
         k = min_tp
         
         while k <= max_tp and world_size // pp_deg >= k:
+            self.per_tp_message_size = []
+            self.per_tp_message_time = []
+            self.tp_message_size = []
             for sl in self.sl:
                 if self.vsp == 0:
                     if sp_space == 'tp+sp':
@@ -527,9 +528,9 @@ class OtherTimeCostModel:
                     self.dp_size[k] = other_memory_pp_off['model_states'][1] / 4
             else:
                 if vsp == 0:
-                    self.dp_size[k] = (other_memory_pp_on['first_stage']['model_states'][k] / 4, other_memory_pp_on['first_stage']['model_states'][k] / 4)
+                    self.dp_size[k] = (other_memory_pp_on['first_stage']['model_states'][k] / 4, other_memory_pp_on['last_stage']['model_states'][k] / 4)
                 else:
-                    self.dp_size[k] = (other_memory_pp_on['last_stage']['model_states'][1] / 4, other_memory_pp_on['last_stage']['model_states'][1] / 4)
+                    self.dp_size[k] = (other_memory_pp_on['first_stage']['model_states'][1] / 4, other_memory_pp_on['last_stage']['model_states'][1] / 4)
             k *= 2
 
     def gen_result(self):

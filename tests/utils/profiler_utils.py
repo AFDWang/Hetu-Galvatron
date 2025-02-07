@@ -1,8 +1,8 @@
-from galvatron.core import GalvatronProfiler
+from galvatron.core import HardwareProfiler, ModelProfiler, RuntimeProfiler
 from tests.utils.model_utils import ModelFactory
 from tests.models.configs.get_config_json import ConfigFactory
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Optional, Dict, Any, List
 
 @dataclass
@@ -25,6 +25,7 @@ class ModelProfileArgs:
     profile_batch_size_step: int = 1
     
     # Sequence length configuration
+    profile_seq_length_list: str = "4096"
     profile_min_seq_length: Optional[int] = None
     profile_max_seq_length: Optional[int] = None
     profile_seq_length_step: int = 128
@@ -95,7 +96,7 @@ def initialize_model_profile_profiler(profiler_model_configs_dir, model_type, ba
     config = ModelFactory.create_config(model_type, backend, args, False)
 
     # Initialize profiler
-    profiler = GalvatronProfiler(args)
+    profiler = ModelProfiler(args)
     profiler.set_profiler_launcher(profiler_model_configs_dir.parent, layernum_arg_names(), model_type)
 
     return profiler
@@ -133,7 +134,7 @@ def initialize_hardware_profile_profiler(profiler_hardware_configs_dir):
 
     # Setup search engine
     args = HardwareProfileArgs()
-    profiler = GalvatronProfiler(args)
+    profiler = HardwareProfiler(args)
     profiler.set_path(profiler_hardware_configs_dir)
     return profiler
 
@@ -154,7 +155,7 @@ def initialize_runtime_profile_profiler(profiler_model_configs_dir, model_type, 
     args.model_size = config_json
     config = ModelFactory.create_config(model_type, backend, args, False)
     # Initialize profiler
-    profiler = GalvatronProfiler(args)
+    profiler = RuntimeProfiler(args)
     profiler.set_profiler_dist(profiler_model_configs_dir.parent, model_layer_configs(config), model_type, rank = 0, profile_ranks = [0], **kwargs)
     
     return profiler

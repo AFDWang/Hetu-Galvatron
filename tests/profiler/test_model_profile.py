@@ -12,7 +12,7 @@ def base_profiler(profiler_model_configs_dir):
 
 @pytest.mark.profiler
 @pytest.mark.parametrize("mode,expected_seq_list,config", [
-    ("static", [4096], {"profile_batch_size": 32}),
+    ("static", [4096], {"profile_seq_length_list": "4096"}),
     ("sequence", [128, 256, 384, 512], {
         "profile_min_seq_length": 128,
         "profile_max_seq_length": 512,
@@ -22,10 +22,12 @@ def base_profiler(profiler_model_configs_dir):
 def test_get_seq_list(base_profiler, mode, expected_seq_list, config):
     """Test sequence list generation in different modes"""
     base_profiler.args.profile_mode = mode
+    base_profiler.args.profile_type = "computation"
     for key, value in config.items():
         setattr(base_profiler.args, key, value)
     
-    assert base_profiler.get_seq_list() == expected_seq_list
+    base_profiler.set_seqlen_list()
+    assert base_profiler.sequence_length_list[0] == expected_seq_list
 
 @pytest.mark.profiler
 @pytest.mark.parametrize("mode,expected_bsz_list,config", [
@@ -86,12 +88,13 @@ def test_launch_profiling_scripts(base_profiler, profile_type, profile_mode, exp
             base_profiler.args.profile_seq_length_step = 128
     elif profile_mode == "sequence":
         if profile_mode == "static":
-            base_profiler.args.seq_length = 4096
+            base_profiler.args.profile_seq_length_list = [4096]
         else:
             base_profiler.args.profile_min_seq_length = 128
             base_profiler.args.profile_max_seq_length = 512
             base_profiler.args.profile_seq_length_step = 128
     
+    base_profiler.set_seqlen_list()
     # Mock all required methods
     with patch('os.system') as mock_system:
         
@@ -125,6 +128,7 @@ def test_process_computation_profiled_data(base_profiler, profiler_model_configs
     base_profiler.args.profile_mode = mode
     for key, value in config.items():
         setattr(base_profiler.args, key, value)
+    base_profiler.set_seqlen_list()
     
     # Process data
     base_profiler.process_profiled_data()
@@ -172,6 +176,7 @@ def test_process_memory_profiled_data(base_profiler, profiler_model_configs_dir,
     base_profiler.args.profile_mode = mode
     for key, value in config.items():
         setattr(base_profiler.args, key, value)
+    base_profiler.set_seqlen_list()
     
     # Process data
     base_profiler.process_profiled_data()

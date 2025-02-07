@@ -78,10 +78,10 @@ def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode
 
         checkpoint_values = config["checkpoint"].split(',')
         assert len(checkpoint_values) == 28
-        expected_checkpoint = "1,1,1,1,1,1,1,1,1,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,0,0"
+        expected_checkpoint = "1,1,1,1,1,1,1,1,1,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0"
         assert config["checkpoint"] == expected_checkpoint
     else:
-        assert abs(throughput - 2.3714885035864284) < 1e-6
+        assert abs(throughput - 2.5077387851394093) < 1e-6
 
         output_dir = base_config_dirs[2]
         json_files = glob.glob(os.path.join(output_dir, '*.json'))
@@ -110,11 +110,11 @@ def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode
         assert config["pp_division"] == "28"
         assert config["pipeline_type"] == "pipedream_flush"
         assert config["default_dp_type"] == "zero2"
-        assert config["vtp"] == 2
+        assert config["vtp"] == 1
         assert config["vsp"] == 0
 
         array_fields = {
-            "tp_sizes_enc": "2",
+            "tp_sizes_enc": "1",
             "tp_consecutive_flags": "1",
             "dp_types_enc": "1",
             "use_sp": "0",
@@ -124,3 +124,4 @@ def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode
         for field, expected_value in array_fields.items():
             values = config[field].split(',')
             assert len(values) == 28, f"Expected 28 values in {field}, got {len(values)}"
+            assert all(v == expected_value for v in values), f"Unexpected values in {field}"

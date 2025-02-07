@@ -1,7 +1,7 @@
 import pytest
 import sys
 from io import StringIO
-from galvatron.core.search_engine import GalvatronSearchEngine
+from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
 from galvatron.utils.strategy_utils import print_strategies
 from tests.utils.search_args import SearchArgs
 from tests.utils.model_utils import ModelFactory

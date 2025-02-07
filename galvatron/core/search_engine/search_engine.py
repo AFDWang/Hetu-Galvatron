@@ -123,7 +123,7 @@ class GalvatronSearchEngine():
                 for s,t in self.time_config.items():
                     if s.startswith('layertype_%d_'%i):
                         self.time_profiled_list.append(t)
-                    if s.startswith('layertype_other_%d_'%i):
+                    if s.startswith('layertype_other_'):
                         self.other_time_profiled_list.append(t)
         elif self.args.time_profile_mode == "batch":
             self.time_profiled_list = []
@@ -146,7 +146,7 @@ class GalvatronSearchEngine():
                 x_data = []
                 y_data = []
                 for s,t in self.time_config.items():
-                    if s.startswith('layertype_%d_'%i) and '_seq%d'%self.seqlen_list[i] in s:
+                    if s.startswith('layertype_other_') and '_seq%d'%self.seqlen_list[i] in s:
                         x_data.append(int(s.split('_')[-2][3:]))
                         y_data.append(t * x_data[-1])
                 assert len(x_data) >= 8, "Different bsz in computation profile of layertype_other_%d should not be lower than 8."%i
@@ -178,7 +178,7 @@ class GalvatronSearchEngine():
                 x_data = []
                 y_data = []
                 for s,t in self.time_config.items():
-                    if s.startswith('layertype_other_%d_'%i) and "_bsz1_" in s:
+                    if s.startswith('layertype_other_') and "_bsz1_" in s:
                         x_data.append(int(s.split('seq')[-1]))
                         y_data.append(t)
                 # assert len(x_data) >= 8, "Different bsz in computation profile of layertype_other_%d should not be lower than 8."%i
@@ -221,9 +221,9 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                seq_info = num2str(self.seqlen_list, 'seq')[3:]
-                self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][seq_info]
-                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][seq_info], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][seq_info]}
+                # seq_info = num2str(self.seqlen_list, 'seq')[3:]
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][self.seqlen_list[0]]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][self.seqlen_list[-1]]}
             else:
                 for i in range(self.num_layertype):
                     layer_mem_config = self.memory_config['layertype_%d'%i]
@@ -231,9 +231,9 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                seq_info = num2str(self.seqlen_list, 'seq')[3:]
-                self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][seq_info]
-                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][seq_info], 'last_stage':self.memory_config['other_memory_pp_on_last'][seq_info]}
+                # seq_info = num2str(self.seqlen_list, 'seq')[3:]
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][self.seqlen_list[0]]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last'][self.seqlen_list[-1]]}
         
         return self.time_config, self.memory_config
         

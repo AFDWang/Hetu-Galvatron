@@ -4,13 +4,13 @@ from pathlib import Path
 from tests.utils.search_args import SearchArgs
 from tests.utils.model_utils import ModelFactory
 from tests.models.configs.get_config_json import ConfigFactory
-from galvatron.core.search_engine import GalvatronSearchEngine
+from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
 
 def create_static_time_config() -> Dict[str, float]:
     """Create mock time config for static profiling mode"""
     return {
         "layertype_0_bsz8_seq4096": 11.219752883911134,
-        "layertype_other_0_bsz8_seq4096": 27.296485137939456,
+        "layertype_other_bsz8_seq4096": 27.296485137939456,
     }
 
 def create_batch_time_config() -> Dict[str, float]:
@@ -26,16 +26,16 @@ def create_batch_time_config() -> Dict[str, float]:
         "layertype_0_bsz8_seq4096": 11.219752883911134,
         "layertype_0_bsz9_seq4096": 11.234162224663628,
         "layertype_0_bsz10_seq4096": 11.236963653564455,
-        "layertype_other_0_bsz1_seq4096": 31.97360305786134,
-        "layertype_other_0_bsz2_seq4096": 29.767119598388675,
-        "layertype_other_0_bsz3_seq4096": 27.621103922526043,
-        "layertype_other_0_bsz4_seq4096": 29.155476379394514,
-        "layertype_other_0_bsz5_seq4096": 28.962725830078124,
-        "layertype_other_0_bsz6_seq4096": 28.964708455403656,
-        "layertype_other_0_bsz7_seq4096": 27.860640171596003,
-        "layertype_other_0_bsz8_seq4096": 27.296485137939456,
-        "layertype_other_0_bsz9_seq4096": 27.257109239366326,
-        "layertype_other_0_bsz10_seq4096": 27.296959228515618,
+        "layertype_other_bsz1_seq4096": 31.97360305786134,
+        "layertype_other_bsz2_seq4096": 29.767119598388675,
+        "layertype_other_bsz3_seq4096": 27.621103922526043,
+        "layertype_other_bsz4_seq4096": 29.155476379394514,
+        "layertype_other_bsz5_seq4096": 28.962725830078124,
+        "layertype_other_bsz6_seq4096": 28.964708455403656,
+        "layertype_other_bsz7_seq4096": 27.860640171596003,
+        "layertype_other_bsz8_seq4096": 27.296485137939456,
+        "layertype_other_bsz9_seq4096": 27.257109239366326,
+        "layertype_other_bsz10_seq4096": 27.296959228515618,
     }
 
 def create_sequence_time_config() -> Dict[str, float]:
@@ -49,14 +49,14 @@ def create_sequence_time_config() -> Dict[str, float]:
         "layertype_0_bsz1_seq24576": 82.6971145629883,
         "layertype_0_bsz1_seq28672": 106.13850097656245,
         "layertype_0_bsz1_seq32768": 123.1998901367187,
-        "layertype_other_0_bsz1_seq4096": 31.97360305786134,
-        "layertype_other_0_bsz1_seq8192": 56.27244796752933,
-        "layertype_other_0_bsz1_seq12288": 86.6235107421875,
-        "layertype_other_0_bsz1_seq16384": 121.2523483276367,
-        "layertype_other_0_bsz1_seq20480": 141.90354614257797,
-        "layertype_other_0_bsz1_seq24576": 177.68662719726558,
-        "layertype_other_0_bsz1_seq28672": 197.4156311035157,
-        "layertype_other_0_bsz1_seq32768": 225.79444885253918
+        "layertype_other_bsz1_seq4096": 31.97360305786134,
+        "layertype_other_bsz1_seq8192": 56.27244796752933,
+        "layertype_other_bsz1_seq12288": 86.6235107421875,
+        "layertype_other_bsz1_seq16384": 121.2523483276367,
+        "layertype_other_bsz1_seq20480": 141.90354614257797,
+        "layertype_other_bsz1_seq24576": 177.68662719726558,
+        "layertype_other_bsz1_seq28672": 197.4156311035157,
+        "layertype_other_bsz1_seq32768": 225.79444885253918
     }
 
 def create_static_memory_config():

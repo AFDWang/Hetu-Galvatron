@@ -94,10 +94,8 @@ class ModelProfiler(BaseProfiler):
 
         for i in range(self.num_layertype):
             if args.profile_mode == "static":
-                assert args.profile_batch_size is not None
                 self.sequence_length_list.append([self.profile_seq_length_list[i]])
             elif args.profile_mode == "batch":
-                assert args.profile_min_batch_size is not None and args.profile_max_batch_size is not None
                 self.sequence_length_list.append([self.profile_seq_length_list[i]])
             elif args.profile_mode == "sequence":
                 if self.num_layertype > 1:

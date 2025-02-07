@@ -9,7 +9,7 @@ from tests.utils.search_configs import (
 from tests.utils.search_args import SearchArgs
 from tests.utils.model_utils import ModelFactory
 from tests.models.configs.get_config_json import ConfigFactory
-from galvatron.core.search_engine import GalvatronSearchEngine
+from galvatron.core.search_engine.search_engine import GalvatronSearchEngine
 
 # ============= Model Config Tests =============
 @pytest.mark.search_engine

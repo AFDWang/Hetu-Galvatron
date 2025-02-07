@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-from galvatron.core.cost_model import MemoryCostModel, TimeCostModel, OtherTimeCostModel
+from galvatron.core.search_engine.cost_model import MemoryCostModel, TimeCostModel, OtherTimeCostModel
 from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs
 
 @pytest.fixture
@@ -386,7 +386,7 @@ def base_other_time_args():
         'mbsz': 4,
         'pp_deg': 1,
         'world_size': 8,
-        'sequence_length': 1024,
+        'sequence_length': [1024],
         'hidden_size': 1024,
         'mixed_precision': False,
         'comm_coe_dict': {
@@ -536,7 +536,7 @@ def test_other_time_cost_model(base_other_time_args, config_updates, expected):
         if expected.get('has_pp'):
             # For pipeline parallel, check first and last stage
             assert len(result[tp]) == args['pp_deg']
-            # Values should be different for first and last stage
+            # Values should be equal for first and last stage when first stage memory == last stage memory
             assert abs(result[tp][0] - result[tp][-1]) < 1e-6
         else:
             # For non-pipeline parallel, check single stage
@@ -553,12 +553,12 @@ def test_other_time_cost_model(base_other_time_args, config_updates, expected):
         
         if expected.get('check_sp_tp'):
             # Check SP+TP specific calculations
-            per_tp_message_size = args['mbsz']*args['sequence_length']*args['hidden_size'] * (2 if args['mixed_precision'] else 4)
+            per_tp_message_size = args['mbsz']*args['sequence_length'][0]*args['hidden_size'] * (2 if args['mixed_precision'] else 4)
             if tp > 1:
                 assert hasattr(model, 'per_tp_message_size')
-                assert model.per_tp_message_size == per_tp_message_size
+                assert model.per_tp_message_size[0] == per_tp_message_size
    
     if expected.get('check_precision'):
         # Message sizes should be halved for mixed precision
-        assert model.tp_message_size == (expected['tp_sizes'][-1]-1)/expected['tp_sizes'][-1]*(args['mbsz']*args['sequence_length']*args['hidden_size']/1024/1024) * 2
+        assert model.tp_message_size[0] == (expected['tp_sizes'][-1]-1)/expected['tp_sizes'][-1]*(args['mbsz']*args['sequence_length'][0]*args['hidden_size']/1024/1024) * 2
         

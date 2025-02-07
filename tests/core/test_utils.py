@@ -2,7 +2,7 @@
 import pytest
 import torch
 import torch.nn as nn
-from galvatron.core.utils import rgetattr, rsetattr, rhasattr
+from galvatron.core.runtime.utils import rgetattr, rsetattr, rhasattr
 
 class DummyModule(nn.Module):
     def __init__(self):

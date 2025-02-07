@@ -6,7 +6,7 @@ from tests.utils.search_configs import (
     create_batch_time_config,
     create_hardware_configs
 )
-from galvatron.core.search_engine import optimal_chunk_func_default
+from galvatron.core.search_engine.search_engine import optimal_chunk_func_default
 from galvatron.utils.config_utils import read_allreduce_bandwidth_config, read_p2p_bandwidth_config, remap_config
 
 @dataclass

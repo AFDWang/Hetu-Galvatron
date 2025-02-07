@@ -215,7 +215,7 @@ def test_profile_time_python(base_profiler):
         
         # End timing
         with patch('builtins.print') as mock_print, \
-            patch('galvatron.core.profiler.save_profiled_time') as mock_save, \
+            patch('galvatron.core.profiler.runtime_profiler.save_profiled_time') as mock_save, \
             patch('builtins.exit') as mock_exit:
             
             base_profiler.profile_time_python(iter=3)

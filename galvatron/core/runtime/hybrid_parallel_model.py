@@ -161,6 +161,7 @@ def construct_hybrid_parallel_model_api(
     layernorm_name=[],
     all_block_name=None,
     load_module_func=None,
+    meta_init_buffer=True,
 ):
     if wrap_checkpoint_block_name == None:
         wrap_checkpoint_block_name = wrap_block_name
@@ -218,7 +219,7 @@ def construct_hybrid_parallel_model_api(
 
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
     if args.initialize_on_meta and args.shape_order == "SBH":
-        with init_empty_weights(True):
+        with init_empty_weights(meta_init_buffer):
             model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole)
     elif args.shape_order == "SBH":
         model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole)
@@ -227,7 +228,7 @@ def construct_hybrid_parallel_model_api(
         model = construct_tensor_parallel_model(model, config, tp_groups_whole)
     # [Step 2] Construct Sequantial model using model-specific sequential function
     if args.initialize_on_meta and args.shape_order == "SBH":
-        with init_empty_weights(True):
+        with init_empty_weights(meta_init_buffer):
             model = construct_sequential_model(model, config)
     else:
         model = construct_sequential_model(model, config)

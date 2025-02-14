@@ -744,12 +744,12 @@ def _add_network_size_args(parser):
                        help='Number of encoder transformer layers.')
     group.add_argument('--decoder-num-layers', type=int, default=None,
                        help='Number of decoder transformer layers.')
-    group.add_argument('--hidden-size', type=int, default=None,
+    group.add_argument('--hidden-size', type=int, default=1024,
                        help='Tansformer hidden size.')
     group.add_argument('--ffn-hidden-size', type=int, default=None,
                        help='Transformer Feed-Forward Network hidden size. '
                        'This is set to 4*hidden-size if not provided')
-    group.add_argument('--num-attention-heads', type=int, default=None,
+    group.add_argument('--num-attention-heads', type=int, default=12,
                        help='Number of transformer attention heads.')
     group.add_argument('--kv-channels', type=int, default=None,
                        help='Projection weights dimension in multi-head '

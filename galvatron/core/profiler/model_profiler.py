@@ -91,6 +91,13 @@ class ModelProfiler(BaseProfiler):
         if self.args.profile_seq_length_list is not None:
             self.profile_seq_length_list = str2array(self.args.profile_seq_length_list)
             assert len(self.profile_seq_length_list) == self.num_layertype
+        else:
+            # for swin model
+            if self.layernum_listed:
+                self.profile_seq_length_list = []
+                for i in range(len(self.args.depths)):
+                    seq_len = (self.args.image_size // self.args.patch_size // (2 ** i)) ** 2
+                    self.profile_seq_length_list.append(seq_len)
 
         for i in range(self.num_layertype):
             if args.profile_mode == "static":
@@ -807,6 +814,7 @@ class ModelProfiler(BaseProfiler):
             "profile_type",
             "set_model_config_manually",
             "set_layernum_manually",
+            "set_seqlen_manually",
             "profile_batch_size",
             "profile_min_batch_size",
             "profile_max_batch_size",
@@ -998,6 +1006,10 @@ class ModelProfiler(BaseProfiler):
             len(seqlen_list) == self.num_layertype
         ), f"Expected {self.num_layertype} sequence lengths, got {len(seqlen_list)}"
 
+        # Swin model does not support set seqlen manually
+        if self.seqlen_arg_names is None:
+            return
+        
         for seqlen, arg_name in zip(seqlen_list, self.seqlen_arg_names):
             args[arg_name] = seqlen
 

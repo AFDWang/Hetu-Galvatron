@@ -221,9 +221,11 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                # seq_info = num2str(self.seqlen_list, 'seq')[3:]
-                self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][self.seqlen_list[0]]
-                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][self.seqlen_list[-1]]}
+                seq_info = num2str(self.seqlen_list, 'seq')[3:]
+                if seq_info.isdigit():
+                    seq_info = int(seq_info)
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][int(seq_info)]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][seq_info], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][seq_info]}
             else:
                 for i in range(self.num_layertype):
                     layer_mem_config = self.memory_config['layertype_%d'%i]
@@ -231,9 +233,11 @@ class GalvatronSearchEngine():
                     tp_activation_per_bsz_dict = layer_mem_config[self.seqlen_list[i]]['tp_activation_per_bsz_dict'].copy()
                     self.param_sizes[i] = parameter_size
                     self.act_sizes[i] = tp_activation_per_bsz_dict
-                # seq_info = num2str(self.seqlen_list, 'seq')[3:]
-                self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][self.seqlen_list[0]]
-                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][self.seqlen_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last'][self.seqlen_list[-1]]}
+                seq_info = num2str(self.seqlen_list, 'seq')[3:]
+                if seq_info.isdigit():
+                    seq_info = int(seq_info)
+                self.other_memory_pp_off = self.memory_config['other_memory_pp_off'][seq_info]
+                self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first'][seq_info], 'last_stage':self.memory_config['other_memory_pp_on_last'][seq_info]}
         
         return self.time_config, self.memory_config
         
@@ -291,7 +295,7 @@ class GalvatronSearchEngine():
                     'optimal_chunk_func': self.optimal_chunk_func,
                     'sequence_length': self.seqlen_list[i],
                     'hidden_size': self.hiddensize_list[i],
-                    'vocab_size': self.args.padded_vocab_size,
+                    'vocab_size': self.args.padded_vocab_size if hasattr(self.args, 'padded_vocab_size') else self.args.num_classes, # For Swin model
                     'forward_computation_time': self.time_profiled_list[i],
                     'bct_fct_coe': 2,
                     'extra_overhead': 0,

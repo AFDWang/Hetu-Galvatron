@@ -55,6 +55,18 @@ class RuntimeProfiler(BaseProfiler):
         exit_ = self.args.exit_after_profiling if hasattr(self.args, "exit_after_profiling") else True
         self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=exit_)
 
+    def set_profiler_single(self, start_iter=10, end_iter=20):
+        """
+        Set profiler for single process
+
+        Args:
+            start_iter: Starting iteration for profiling
+            end_iter: Ending iteration for profiling
+        """
+        self.set_memory_profiler(0)
+        exit_ = self.args.exit_after_profiling if 'exit_after_profiling' in self.args else True
+        self.set_time_profiler(start_iter=start_iter, end_iter=end_iter, exit=exit_)
+    
     def set_model_layer_configs(self, model_layer_configs: Optional[List[Dict]]) -> None:
         """Set model layer configurations
 
@@ -190,7 +202,10 @@ class RuntimeProfiler(BaseProfiler):
         self.start = torch.cuda.Event(enable_timing=True)
         self.end = torch.cuda.Event(enable_timing=True)
         self.time_list = []
-        self.world_size = torch.distributed.get_world_size()
+        if torch.distributed.is_initialized():
+            self.world_size = torch.distributed.get_world_size()
+        else:
+            self.world_size = 1
 
     def profile_time_start(self, iter: int) -> None:
         """Start timing for current iteration

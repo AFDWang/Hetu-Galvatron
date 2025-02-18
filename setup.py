@@ -10,7 +10,7 @@ except ImportError:
     fused_dense_lib, dropout_layer_norm, rotary_emb, xentropy_cuda_lib = None, None, None, None
     
 
-FLASH_ATTN_INSTALL = os.getenv("GALVATRON_FLASH_ATTN_INSTALL", "FALSE") == "TRUE"
+FLASH_ATTN_INSTALL = os.getenv("FLEXSP_FLASH_ATTN_INSTALL", "FALSE") == "TRUE"
 
 here = pathlib.Path(__file__).parent.resolve()
 
@@ -42,24 +42,28 @@ dp_core_ext = Extension(
     extra_compile_args=['-O3', '-Wall', '-shared', '-std=c++11', '-fPIC'],
     language='c++'
 )
-
+sequence_module_ext = Extension(
+    'sequence_module',
+    sources=['galvatron/flexsp_solver/csrc/sequence_module.cpp'],
+    extra_compile_args=['-O3', '-Wall', '-shared', '-std=c++11', '-fPIC'],
+    language='c++'   
+)
 _deps = [
-    "torch>=2.0.1",
-    "torchvision>=0.15.2",
-    "transformers>=4.31.0",
-    "h5py>=3.6.0",
-    "attrs>=21.4.0",
+    "torch==2.4.1+cu118",
+    "torchvision>=0.19.1",
+    "transformers>=4.41.1",
+    "h5py>=3.11.0",
+    "attrs>=23.2.0",
     "yacs>=0.1.8",
-    "six>=1.15.0",
-    "sentencepiece>=0.1.95",
-    "pybind11>=2.9.1",
-    "scipy>=1.10.1",
-
+    "six>=1.16.0",
+    "sentencepiece>=0.2.0",
+    "pybind11>=2.13.1",
+    "pyscipopt",
 ]
 
 if FLASH_ATTN_INSTALL:
     _deps.append("packaging")
-    _deps.append("flash-attn>=2.0.8")
+    _deps.append("flash-attn>=2.6.3")
 
 setup(
     name="hetu-galvatron",
@@ -67,8 +71,6 @@ setup(
     description="Galvatron, a Efficient Transformer Training Framework for Multiple GPUs Using Automatic Parallelism",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    author="Yujie Wang, Shenhan Zhu, Xinyi Liu",
-    author_email="alfredwang@pku.edu.cn, shenhan.zhu@pku.edu.cn, xy.liu@stu.pku.edu.cn",
     packages=find_packages(
         exclude=(
             "build",
@@ -80,12 +82,12 @@ setup(
     package_data={"": ["*.json"]},
     include_package_data=True,
     scripts=["galvatron/scripts/flash_attn_ops_install.sh"],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     cmdclass={
         "install": CustomInstall,
         "build_ext": CustomBuildExt
     },
     install_requires=_deps,
-    setup_requires=["pybind11>=2.9.1"],
-    ext_modules=[dp_core_ext]
+    setup_requires=["pybind11>=2.13.1"],
+    ext_modules=[dp_core_ext, sequence_module_ext]
 )

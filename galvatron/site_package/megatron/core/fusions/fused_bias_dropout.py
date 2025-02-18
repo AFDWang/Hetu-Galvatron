@@ -3,8 +3,6 @@ from typing import Optional, Tuple
 
 import torch
 
-from megatron.core.jit import jit_fuser
-
 
 def _bias_dropout_add_func(x_with_bias, residual, prob, training):
     # type: (Tuple[Tensor, Optional[Tensor]], Tensor, float, bool) -> Tensor
@@ -45,14 +43,14 @@ def bias_dropout_add_unfused(training):
     return _bias_dropout_add
 
 
-@jit_fuser
+@torch.jit.script
 def bias_dropout_add_fused_train(
     x_with_bias: Tuple[torch.Tensor, Optional[torch.Tensor]], residual: torch.Tensor, prob: float,
 ) -> torch.Tensor:
     return _bias_dropout_add_func(x_with_bias, residual, prob, True)
 
 
-@jit_fuser
+@torch.jit.script
 def bias_dropout_add_fused_inference(
     x_with_bias: Tuple[torch.Tensor, Optional[torch.Tensor]], residual: torch.Tensor, prob: float,
 ) -> torch.Tensor:

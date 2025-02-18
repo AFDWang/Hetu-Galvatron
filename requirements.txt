@@ -1,11 +1,12 @@
-torch>=2.1.0
-torchvision>=0.15.2
-transformers>=4.31.0
-flash_attn>=2.0.8
-h5py>=3.6.0
-attrs>=21.4.0
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch==2.4.1+cu118
+torchvision>=0.19.1
+torchaudio
+transformers==4.45.2 
+h5py>=3.11.0
+attrs>=23.2.0
 yacs>=0.1.8
-six>=1.15.0
-sentencepiece>=0.1.95
-pybind11>=2.9.1
-scipy>=1.10.1
+six>=1.16.0
+sentencepiece>=0.2.0
+pybind11>=2.13.1
+pyscipopt

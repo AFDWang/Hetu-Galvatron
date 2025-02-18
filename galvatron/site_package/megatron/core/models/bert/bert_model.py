@@ -1,13 +1,9 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-import os
-from collections import OrderedDict
-from typing import Dict, Literal, Optional
+from typing import Literal, Optional
 
 import torch
 from torch import Tensor
 
-from megatron.core import parallel_state, tensor_parallel
-from megatron.core.dist_checkpointing.mapping import ShardedStateDict
 from megatron.core.models.bert.bert_lm_head import BertLMHead
 from megatron.core.models.bert.pooler import Pooler
 from megatron.core.models.common.embeddings.language_model_embedding import LanguageModelEmbedding
@@ -18,7 +14,7 @@ from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.transformer_block import TransformerBlock
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.utils import get_linear_layer
-from megatron.core.utils import make_tp_sharded_tensor_for_checkpoint
+from megatron.model.bert_model import bert_extended_attention_mask, bert_position_ids
 
 
 class BertModel(LanguageModule):
@@ -63,11 +59,6 @@ class BertModel(LanguageModule):
         if return_embeddings:
             assert self.post_process and self.add_binary_head
 
-        assert (
-            os.getenv('NVTE_ALLOW_NONDETERMINISTIC_ALGO') == '0'
-            or os.getenv('NVTE_FLASH_ATTN') == '0'
-        ), "Bert currently does not support flash attention. Please set env variable NVTE_FLASH_ATTN=0 or set NVTE_ALLOW_NONDETERMINISTIC_ALGO=0"
-
         self.config: TransformerConfig = config
         self.transformer_layer_spec: ModuleSpec = transformer_layer_spec
         self.vocab_size = vocab_size
@@ -96,10 +87,7 @@ class BertModel(LanguageModule):
 
         if self.position_embedding_type == 'rope':
             self.rotary_pos_emb = RotaryEmbedding(
-                kv_channels=self.config.kv_channels,
-                rotary_percent=rotary_percent,
-                rotary_interleaved=self.config.rotary_interleaved,
-                seq_len_interpolation_factor=seq_len_interpolation_factor,
+                self.config.kv_channels, rotary_percent, seq_len_interpolation_factor
             )
 
         # Transformer.
@@ -113,18 +101,16 @@ class BertModel(LanguageModule):
         # Output
         if post_process:
             # TODO: Make sure you are passing in the mpu_vocab_size properly
-            self.lm_head = BertLMHead(config.hidden_size, config,)
-
-            self.output_layer = tensor_parallel.ColumnParallelLinear(
+            self.lm_head = BertLMHead(
                 config.hidden_size,
+                config,
+                parallel_output,
                 self.vocab_size,
-                config=config,
-                init_method=config.init_method,
-                bias=True,
-                skip_bias_add=False,
-                gather_output=not self.parallel_output,
-                skip_weight_param_allocation=pre_process and share_embeddings_and_output_weights,
+                self.pre_process,
+                self.share_embeddings_and_output_weights,
             )
+
+            self.output_layer = self.lm_head.output_layer
 
             self.binary_head = None
             if self.add_binary_head:
@@ -137,42 +123,8 @@ class BertModel(LanguageModule):
                     config.hidden_size, config.init_method, config, config.sequence_parallel
                 )
 
-        if self.pre_process or self.post_process:
-            self.setup_embeddings_and_output_layer()
-
-    def bert_extended_attention_mask(self, attention_mask: Tensor) -> Tensor:
-        """Creates the extended attention mask
-
-        Converts the attention mask of dimension [batch size, 1, seq len] to [batch size, 1, seq len, seq len] and makes it binary
-
-        Args:
-            attention_mask (Tensor): The input attention mask
-
-        Returns:
-            Tensor: The extended binary attention mask
-        """
-        # We create a 3D attention mask from a 2D tensor mask.
-        # [b, 1, s]
-        attention_mask_b1s = attention_mask.unsqueeze(1)
-        # [b, s, 1]
-        attention_mask_bs1 = attention_mask.unsqueeze(2)
-        # [b, s, s]
-        attention_mask_bss = attention_mask_b1s * attention_mask_bs1
-        # [b, 1, s, s]
-        extended_attention_mask = attention_mask_bss.unsqueeze(1)
-
-        # Convert attention mask to binary:
-        extended_attention_mask = extended_attention_mask < 0.5
-
-        return extended_attention_mask
-
-    def bert_position_ids(self, token_ids):
-        # Create position ids
-        seq_length = token_ids.size(1)
-        position_ids = torch.arange(seq_length, dtype=torch.long, device=token_ids.device)
-        position_ids = position_ids.unsqueeze(0).expand_as(token_ids)
-
-        return position_ids
+        if self.share_embeddings_and_output_weights and (self.pre_process or self.post_process):
+            self.initialize_last_stage_with_word_embeddings()
 
     def set_input_tensor(self, input_tensor: Tensor) -> None:
         """Sets input tensor to the model.
@@ -206,14 +158,9 @@ class BertModel(LanguageModule):
 
         It either returns the Loss values if labels are given  or the final hidden units
         """
-        extended_attention_mask = self.bert_extended_attention_mask(attention_mask)
+        extended_attention_mask = bert_extended_attention_mask(attention_mask)
 
-        if parallel_state.is_pipeline_first_stage():
-            input_ids = input_ids
-            position_ids = self.bert_position_ids(input_ids)
-        else:
-            position_ids = None
-            input_ids = None
+        position_ids = bert_position_ids(input_ids)
 
         # Encoder embedding.
         if self.pre_process:
@@ -222,7 +169,7 @@ class BertModel(LanguageModule):
             )
         else:
             # intermediate stage of pipeline
-            # encoder will get hidden_states from encoder.input_tensor
+            # decoder will get hidden_states from encoder.input_tensor
             encoder_input = None
 
         # Rotary positional embeddings (Why not move this into BERT/GPTEmberdding ?)
@@ -233,7 +180,7 @@ class BertModel(LanguageModule):
             )
             rotary_pos_emb = self.rotary_pos_emb(rotary_seq_len)
 
-        # Run encoder.
+        # Run decoder.
         hidden_states = self.encoder(
             hidden_states=encoder_input,
             attention_mask=extended_attention_mask,
@@ -264,8 +211,7 @@ class BertModel(LanguageModule):
         if self.share_embeddings_and_output_weights:
             output_weight = self.shared_embedding_or_output_weight()
 
-        hidden_states_after_lm_head = self.lm_head(hidden_states=hidden_states)
-        logits, _ = self.output_layer(hidden_states_after_lm_head, weight=output_weight)
+        logits = self.lm_head(hidden_states=hidden_states, word_embeddings_weight=output_weight)
 
         binary_logits = None
         if self.binary_head is not None:
@@ -278,3 +224,11 @@ class BertModel(LanguageModule):
         loss = self.compute_language_model_loss(lm_labels, logits)
 
         return loss, binary_logits
+
+    # TODO: add distributed checkpointing
+    def state_dict_for_save_checkpoint(self, prefix='', keep_vars=False):
+        pass
+
+    # TODO: add distributed checkpointing
+    def load_state_dict(self, state_dict, strict=True):
+        pass

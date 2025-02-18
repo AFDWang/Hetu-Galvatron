@@ -18,11 +18,6 @@ def form_strategy(strategy):
     if 'cpt' in info.keys():
         if info['cpt']:
             dp_deg += '-c'
-    
-    if 'sp' in info.keys():
-        if info['sp']:
-            dp_deg += '-sp'
-    
     return template%(pp_deg, tp_deg, dp_deg)
 
 def strategy_str2list(strategy_str):
@@ -38,15 +33,10 @@ def strategy_str2list(strategy_str):
         s[2] = s[2][:-1]
     else:
         fsdp = 0
-    if len(s) >= 4 and s[3] == 'c':
+    if len(s) == 4 and s[3] == 'c':
         cpt = 1
     else:
         cpt = 0
-    if len(s) >= 5 and s[4] == 'sp':
-        sp = 1
-    else:
-        sp = 0
-    
     pp_deg, tp_deg, dp_deg = int(s[0]), int(s[1]), int(s[2])
     re = [pp_deg, tp_deg, dp_deg, {}]
     if tp_deg > 1 and dp_deg > 1:
@@ -55,8 +45,6 @@ def strategy_str2list(strategy_str):
         re[-1]['fsdp'] = fsdp
     if cpt == 1:
         re[-1]['cpt'] = 1
-    if sp == 1:
-        re[-1]['sp'] = 1
     return re
 
 def print_strategies(strategy_list):

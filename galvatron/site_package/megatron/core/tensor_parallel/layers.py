@@ -1,17 +1,15 @@
-# Copyright (c) 2024, Peking University. All rights reserved.
-# Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
 # Parts of the code here are adapted from PyTorch
 # repo: https://github.com/pytorch/pytorch
 
-# Add support for Megatron-TP with custom group
-import io
 import math
 import os
 import warnings
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Callable, Optional
 
 import torch
+import torch.distributed
 import torch.nn.functional as F
 import torch.nn.init as init
 from torch.cuda.amp import custom_bwd, custom_fwd
@@ -25,9 +23,6 @@ from megatron.core.parallel_state import (
     get_tensor_model_parallel_world_size,
 )
 
-from ..dist_checkpointing.mapping import ShardedStateDict
-from ..transformer.utils import make_sharded_tensors_for_checkpoint
-from ..utils import make_tp_sharded_tensor_for_checkpoint, prepare_input_tensors_for_wgrad_compute
 from .mappings import (
     copy_to_tensor_model_parallel_region,
     gather_from_sequence_parallel_region,
@@ -47,6 +42,7 @@ from .mappings_group import (
     scatter_to_sequence_parallel_region_group,
     reduce_scatter_to_sequence_parallel_region_group,
 )
+
 from .random import get_cuda_rng_tracker, get_expert_parallel_rng_tracker_name
 from .utils import VocabUtility, divide, split_tensor_along_last_dim
 
@@ -144,8 +140,6 @@ def _initialize_affine_weight_cpu(
     # Split and copy
     per_partition_per_stride_size = divide(per_partition_size, stride)
     weight_list = torch.split(master_weight, per_partition_per_stride_size, dim=partition_dim)
-    rank = get_tensor_model_parallel_rank()
-    world_size = get_tensor_model_parallel_world_size()
     if tp_group is None:
         rank = get_tensor_model_parallel_rank()
         world_size = get_tensor_model_parallel_world_size()
@@ -155,25 +149,113 @@ def _initialize_affine_weight_cpu(
     my_weight_list = weight_list[rank::world_size]
 
     with torch.no_grad():
-        # all tensors must live on the same device
-        cpu_weight = torch.cat(my_weight_list, dim=partition_dim).to_dense()
-        weight.data.copy_(cpu_weight)
+        torch.cat(my_weight_list, dim=partition_dim, out=weight)
     if return_master_weight:
         return master_weight
     return None
 
+import torch.distributed as dist
+from typing import Any, Tuple
+from torch import Tensor
+class SimpleAllToAll(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx: Any,
+                group: dist.ProcessGroup,
+                input: Tensor,
+                scatter_idx = -2,
+                gather_idx = -1) -> Tensor:
+        ctx.group = group
+        ctx.scatter_idx = scatter_idx
+        ctx.gather_idx = gather_idx
+        ctx.seqlen = input.shape[0] # S
+        ctx.dim = input.shape[1] # d//N
+        ctx.partit_world_size = dist.get_world_size(group)
+        # input: [S,d // N]
+        position_embed = torch.empty(input.shape[0] // ctx.partit_world_size, input.shape[1] * ctx.partit_world_size, dtype = input.dtype).cuda()
+        dist.all_to_all_single(output = position_embed , input = input, group = group) #[S//N, d]
+        return position_embed
+
+    @staticmethod
+    def backward(ctx: Any, grad_output: Tensor) -> Tuple[None, Tensor, None, None]:
+        # output: [S//N, d] -> [S, d//N]
+        grad_output = grad_output.transpose(0, 1).contiguous() 
+        grad_input = torch.empty(ctx.dim, ctx.seqlen, dtype = grad_output.dtype).cuda()
+        dist.all_to_all_single(output=grad_input, input=grad_output, group = ctx.group) #[d, S//N]  -> [d//N, S]
+        grad_input = grad_input.transpose(0, 1).contiguous() #[d//N, S] -> [S, d//N]
+        return (None, grad_input, None, None)
+
+class SequenceParallelPositionEmbedding(torch.nn.Module):
+    """Embedding parallelized in the sequence dimension.
+
+    Arguments:
+        sequence_length: max sequence length.
+        embedding_dim: size of hidden state.
+    """
+
+    def __init__(self, sequence_length, embedding_dim, init_method: Callable,
+                    config: ModelParallelConfig, tp_group = None, sp_group = None):
+        super(SequenceParallelPositionEmbedding, self).__init__()
+        sequence_parallel_size = torch.distributed.get_world_size(tp_group)
+        self.sp_group = sp_group
+        self.tp_group = tp_group
+        assert embedding_dim % sequence_parallel_size == 0
+        local_embedding_dim = embedding_dim // sequence_parallel_size
+        self.partit_world_size = torch.distributed.get_world_size(self.tp_group)
+        self.embedding_dim = embedding_dim
+        self.local_embedding_dim = local_embedding_dim
+        self.num_embeddings_per_partition = sequence_length
+        # local_sequence_length = sequence_length // sequence_parallel_size
+        # self.offset = local_sequence_length * torch.distributed.get_rank(tp_group)
+        # Allocate weights and initialize.
+        
+        if config.use_cpu_initialization:
+            self.weight = Parameter(
+                torch.empty(
+                    self.num_embeddings_per_partition, self.local_embedding_dim, dtype=config.params_dtype
+                )
+            )
+            if config.perform_initialization:
+                _initialize_affine_weight_cpu(
+                    self.weight,
+                    self.num_embeddings_per_partition * self.partit_world_size,
+                    self.local_embedding_dim,
+                    self.num_embeddings_per_partition,
+                    0,
+                    init_method,
+                    tp_group=tp_group,
+                    params_dtype=config.params_dtype,
+                )
+        else:
+            self.weight = Parameter(
+                torch.empty(
+                    self.num_embeddings_per_partition,
+                    self.local_embedding_dim,
+                    device=torch.cuda.current_device(),
+                    dtype=config.params_dtype,
+                )
+            )
+            if config.perform_initialization:
+                _initialize_affine_weight_gpu(self.weight, init_method, partition_dim=0, stride=1)
+                
+    def forward(self, position_ids):
+        sharded_embed = self.weight[position_ids] #[S, d/p]
+        if self.partit_world_size > 1:
+            position_embed = SimpleAllToAll.apply(self.tp_group, sharded_embed)
+        else:
+            position_embed = sharded_embed
+        return position_embed
 
 class VocabParallelEmbedding(torch.nn.Module):
     """Embedding parallelized in the vocabulary dimension.
 
     This is mainly adapted from torch.nn.Embedding and all the default
     values are kept.
-
-    Args:
+    Arguments:
         num_embeddings: vocabulary size.
         embedding_dim: size of hidden state.
 
-    Keyword Args:
+    Keyword Arguments:
         config: A megatron.core.ModelParallelConfig object
     """
 
@@ -184,8 +266,8 @@ class VocabParallelEmbedding(torch.nn.Module):
         *,
         init_method: Callable,
         config: ModelParallelConfig,
-        tp_group = None,
-        sp_group = None,
+        tp_group=None,
+        sp_group = None
     ):
         super(VocabParallelEmbedding, self).__init__()
         self.tp_group = tp_group
@@ -239,6 +321,9 @@ class VocabParallelEmbedding(torch.nn.Module):
                 _initialize_affine_weight_gpu(self.weight, init_method, partition_dim=0, stride=1)
 
     def forward(self, input_):
+        assert not torch.any(
+            (input_ < 0) | (input_ >= self.num_embeddings)
+        ), "An input token is out of bounds of the embedding table"
         if self.tensor_model_parallel_size > 1:
             # Build the mask.
             input_mask = (input_ < self.vocab_start_index) | (input_ >= self.vocab_end_index)
@@ -259,33 +344,14 @@ class VocabParallelEmbedding(torch.nn.Module):
             output = reduce_from_tensor_model_parallel_region_group(output_parallel, self.tp_group)
         return output
 
-    def sharded_state_dict(
-        self,
-        prefix: str = '',
-        sharded_offsets: Tuple[Tuple[int, int, int]] = (),
-        metadata: Optional[dict] = None,
-    ) -> ShardedStateDict:
-        """ Non-default implementation for embeddings due to `allow_shape_mismatch` param """
-        state_dict = self.state_dict(prefix='', keep_vars=True)
-
-        weight_prefix = f'{prefix}weight'
-        return {
-            weight_prefix: make_tp_sharded_tensor_for_checkpoint(
-                tensor=state_dict['weight'],
-                key=weight_prefix,
-                allow_shape_mismatch=True,
-                prepend_offsets=sharded_offsets,
-            )
-        }
-
 
 class LinearWithFrozenWeight(torch.autograd.Function):
     """Linear operator that does not calculate gradient for weight.
-    This op and LinearWithGradAccumulationAndAsyncCommunication performs
-    mathematically-identical forward and DGRAD.
+    This op and LinearWithGradAccumulationAndAsyncCommunication performs 
+    mathematically-identical forward and DGRAD. 
 
     Conceptually this op is the same as torch.nn.functional.linear with
-    weight.requires_grad==False, but in experiments they are not identical
+    weight.requires_grad==False, but in experiments they are not identical 
     mathematically. """
 
     @staticmethod
@@ -314,17 +380,16 @@ def linear_with_frozen_weight(
     gradient_accumulation_fusion: bool,
     async_grad_allreduce: bool,
     sequence_parallel: bool,
-    grad_output_buffer: Optional[List[torch.Tensor]] = None,
-    tp_group: Optional[torch.distributed.ProcessGroup] = None,
+    tp_group = None,
 ) -> torch.Tensor:
     """Linear layer execution with weight.requires_grad == False.
 
-    This function handles linear layers with weight frozen (untrainable).
+    This function handles linear layers with weight frozen (untrainable). 
     In the forward, it only saves weight and does not save input activations.
-    In the backward, it does not perform weight gradient calculation, or
-    weight gradient allreduce.
+    In the backward, it does not perform weight gradient calculation, or 
+    weight gradient allreduce. 
 
-    Args:
+    Arguments:
 
     input (torch.Tensor required): input like torch.nn.functional.linear
 
@@ -332,26 +397,17 @@ def linear_with_frozen_weight(
 
     bias (torch.Tensor optional): bias like torch.nn.functional.linear
 
-    gradient_accumulation_fusion (bool required): dummy argument, used to
+    gradient_accumulation_fusion (bool required): dummy argument, used to 
     keep the API unified between all forward implementation functions.
 
-    async_grad_allreduce (bool required): dummy argument, used to
+    async_grad_allreduce (bool required): dummy argument, used to 
     keep the API unified between all forward implementation functions.
 
     sequence_parallel (bool required): Indicates that sequence
         parallelism is used and thus in the forward pass the input is
         all gathered, and the backward pass the input gradients are
         reduce scattered.
-
-    grad_output_buffer (List[torch.Tensor] optional): dummy argument, used to
-    keep the API unified between all forward implementation functions.
-
     """
-
-    assert grad_output_buffer is None, (
-        "grad_output_buffer kwarg is only supported with "
-        "linear_with_grad_accumulation_and_async_allreduce"
-    )
 
     if sequence_parallel:
         if tp_group is None:
@@ -383,7 +439,6 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         gradient_accumulation_fusion,
         async_grad_allreduce,
         sequence_parallel,
-        grad_output_buffer,
         tp_group,
     ):
         ctx.save_for_backward(input, weight)
@@ -391,7 +446,6 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         ctx.gradient_accumulation_fusion = gradient_accumulation_fusion
         ctx.async_grad_allreduce = async_grad_allreduce
         ctx.sequence_parallel = sequence_parallel
-        ctx.grad_output_buffer = grad_output_buffer
         ctx.tp_group = tp_group
 
         if sequence_parallel:
@@ -409,6 +463,7 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
                 all_gather_buffer, input, group=tp_group
             )
             total_input = all_gather_buffer
+            # print("in linearcolumn tp:",total_input.shape,input.shape,world_size)
         else:
             total_input = input
 
@@ -422,50 +477,44 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
     def backward(ctx, grad_output):
         input, weight = ctx.saved_tensors
         use_bias = ctx.use_bias
-        grad_output_buffer = ctx.grad_output_buffer
 
-        wgrad_compute = True
-        if grad_output_buffer is not None:
-            grad_output_buffer.append(grad_output)
-            wgrad_compute = False
-
-        if wgrad_compute:
-            if ctx.sequence_parallel:
-                if ctx.tp_group is None:
-                    world_size = get_tensor_model_parallel_world_size()
-                else:
-                    world_size = get_tensor_model_parallel_world_size_group(ctx.tp_group)
-                dim_size = list(input.size())
-                dim_size[0] = dim_size[0] * world_size
-
-                all_gather_buffer = get_global_memory_buffer().get_tensor(
-                    dim_size, input.dtype, "mpu"
-                )
-                if ctx.tp_group is None:
-                    ctx.tp_group = get_tensor_model_parallel_group()
-                if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
-                    handle = torch.distributed._all_gather_base(
-                        all_gather_buffer, input, group=ctx.tp_group, async_op=True
-                    )
-                else:
-                    handle = torch.distributed._all_gather_base(
-                        all_gather_buffer, input, group=ctx.tp_group # , async_op=True
-                    )
-
-                # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
-                # gather is scheduled before the input gradient computation
-                total_input = all_gather_buffer
+        if ctx.sequence_parallel:
+            if ctx.tp_group is None:
+                world_size = get_tensor_model_parallel_world_size()
             else:
-                total_input = input
+                world_size = get_tensor_model_parallel_world_size_group(ctx.tp_group)
+            dim_size = list(input.size())
+            dim_size[0] = dim_size[0] * world_size
+            if ctx.tp_group is None:
+                ctx.tp_group = get_tensor_model_parallel_group()
+            all_gather_buffer = get_global_memory_buffer().get_tensor(dim_size, input.dtype, "mpu")
+            handle = torch.distributed._all_gather_base(
+                all_gather_buffer, input, group=ctx.tp_group, async_op=True
+            )
+
+            # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
+            # gather is scheduled before the input gradient computation
+            total_input = all_gather_buffer
+        else:
+            total_input = input
         grad_input = grad_output.matmul(weight)
 
-        if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1" and ctx.sequence_parallel and wgrad_compute:
+        if ctx.sequence_parallel:
             handle.wait()
 
-        if wgrad_compute:
-            grad_output, total_input = prepare_input_tensors_for_wgrad_compute(
-                grad_output, total_input
-            )
+        # Doing gather + slicing during the NeMo forward pass can make this tensor
+        # not be contiguous. PyTorch only checks if the tensor is contiguous, and only
+        # clones it if it's not contiguous:
+        # https://github.com/pytorch/pytorch/blob/c47cf9bc7f9e02f649ab4ed53fe4d35732c92ab6/torch/_refs/__init__.py#L2761
+        grad_output = grad_output.contiguous()
+        total_input = total_input.contiguous()
+        # Convert the tensor shapes to 2D for execution compatibility
+        grad_output = grad_output.view(
+            grad_output.shape[0] * grad_output.shape[1], grad_output.shape[2]
+        )
+        total_input = total_input.view(
+            total_input.shape[0] * total_input.shape[1], total_input.shape[2]
+        )
 
         if ctx.async_grad_allreduce:
             # Asynchronous all-reduce
@@ -482,49 +531,35 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
                 dim_size, dtype=input.dtype, device=torch.cuda.current_device(), requires_grad=False
             )
             # reduce_scatter
-            if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
-                handle = torch.distributed._reduce_scatter_base(
-                    sub_grad_input, grad_input, group=ctx.tp_group, async_op=True
-                )
-            else:
-                handle = torch.distributed._reduce_scatter_base(
-                    sub_grad_input, grad_input, group=ctx.tp_group# , async_op=True
-                )
+            handle = torch.distributed._reduce_scatter_base(
+                sub_grad_input, grad_input, group=ctx.tp_group, async_op=True
+            )
             # Here we rely on CUDA_DEVICE_MAX_CONNECTIONS=1 to ensure that the
             # reduce scatter is scheduled before the weight gradient computation
 
         if ctx.gradient_accumulation_fusion:
-            if wgrad_compute:
-                if weight.main_grad.dtype == torch.float32:
-                    fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(
-                        total_input, grad_output, weight.main_grad
-                    )
-                elif weight.main_grad.dtype in (torch.float16, torch.bfloat16):
-                    fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp16(
-                        total_input, grad_output, weight.main_grad
-                    )
-                else:
-                    raise RuntimeError("Unsupported gradient type for gradient accumulation fusion")
+            if weight.main_grad.dtype == torch.float32:
+                fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(
+                    total_input, grad_output, weight.main_grad
+                )
+            elif weight.main_grad.dtype in (torch.float16, torch.bfloat16):
+                fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp16(
+                    total_input, grad_output, weight.main_grad
+                )
+            else:
+                raise RuntimeError("Unsupported gradient type for gradient accumulation fusion")
 
             if hasattr(weight, 'grad_added_to_main_grad'):
                 # When overlap_grad_reduce is True, need to ensure that backward hooks
                 # are all run on the main backprop thread to prevent deadlocks. Setup
                 # dummy grad_weight tensor to prevent backward hooks from being run
                 # in a background thread.
-                if getattr(weight, 'zero_out_wgrad', False):
-                    grad_weight = torch.zeros(
-                        weight.main_grad.shape,
-                        dtype=input.dtype,
-                        device=torch.cuda.current_device(),
-                        requires_grad=False,
-                    )
-                else:
-                    grad_weight = torch.empty(
-                        weight.main_grad.shape,
-                        dtype=input.dtype,
-                        device=torch.cuda.current_device(),
-                        requires_grad=False,
-                    )
+                grad_weight = torch.empty(
+                    weight.main_grad.shape,
+                    dtype=input.dtype,
+                    device=torch.cuda.current_device(),
+                    requires_grad=False,
+                )
                 weight.grad_added_to_main_grad = True
             else:
                 grad_weight = None
@@ -533,16 +568,13 @@ class LinearWithGradAccumulationAndAsyncCommunication(torch.autograd.Function):
         grad_bias = grad_output.sum(dim=0) if use_bias else None
 
         if ctx.sequence_parallel:
-            if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') == "1":
-                handle.wait()
-            # Need to return None's as gradient has to flow for all the input arguments
-            # provided during forward
-            return sub_grad_input, grad_weight, grad_bias, None, None, None, None, None
+            handle.wait()
+            return sub_grad_input, grad_weight, grad_bias, None, None, None, None
 
         if ctx.async_grad_allreduce:
             handle.wait()
 
-        return grad_input, grad_weight, grad_bias, None, None, None, None, None
+        return grad_input, grad_weight, grad_bias, None, None, None, None
 
 
 def linear_with_grad_accumulation_and_async_allreduce(
@@ -552,8 +584,7 @@ def linear_with_grad_accumulation_and_async_allreduce(
     gradient_accumulation_fusion: bool,
     async_grad_allreduce: bool,
     sequence_parallel: bool,
-    grad_output_buffer: Optional[List[torch.Tensor]] = None,
-    tp_group: Optional[torch.distributed.ProcessGroup] = None,
+    tp_group = None,
 ) -> torch.Tensor:
     """Linear layer execution with asynchronous communication and
     gradient accumulation fusion in backprop.
@@ -580,36 +611,32 @@ def linear_with_grad_accumulation_and_async_allreduce(
     CUDA_DEVICE_MAX_CONNECTIONS=1 forces the kernels to be scheduled
     in the order they are called.
 
-    Args:
+    Arguments:
 
-        input (torch.Tensor required): input like torch.nn.functional.linear
+    input (torch.Tensor required): input like torch.nn.functional.linear
 
-        weight (torch.Tensor required): weight like torch.nn.functional.linear
+    weight (torch.Tensor required): weight like torch.nn.functional.linear
 
-        bias (torch.Tensor optional): bias like torch.nn.functional.linear
+    bias (torch.Tensor optional): bias like torch.nn.functional.linear
 
-        gradient_accumulation_fusion (bool required): Perform the gradient
-            accumulation fusion, requires the custom CUDA extension
-            fused_weight_gradient_mlp_cuda module. To use
-            gradient_accumulation_fusion you must install APEX with
-            --cpp_ext and --cuda_ext. For example: "pip install
-            --global-option=\"--cpp_ext\" --global-option=\"--cuda_ext .\"
-            " Note that the extension requires CUDA>=11. Otherwise, you
-            must turn off gradient accumulation fusion."
+    gradient_accumulation_fusion (bool required): Perform the gradient
+        accumulation fusion, requires the custom CUDA extension
+        fused_weight_gradient_mlp_cuda module. To use
+        gradient_accumulation_fusion you must install APEX with
+        --cpp_ext and --cuda_ext. For example: "pip install
+        --global-option=\"--cpp_ext\" --global-option=\"--cuda_ext .\"
+        " Note that the extension requires CUDA>=11. Otherwise, you
+        must turn off gradient accumulation fusion."
 
-        async_grad_allreduce (bool required): Do the allreduce of input
-            gradients asyncronously with the computation of weight
-            gradients. If sequence_parallel is True, this must be
-            False, as no all reduce is performed.
+    async_grad_allreduce (bool required): Do the allreduce of input
+        gradients asyncronously with the computation of weight
+        gradients. If sequence_parallel is True, this must be
+        False, as no all reduce is performed.
 
     sequence_parallel (bool required): Indicates that sequence
         parallelism is used and thus in the forward pass the input is
         all gathered, and the backward pass the input gradients are
         reduce scattered.
-
-    grad_output_buffer (List[torch.Tensor] optional): Buffer used to save
-        output gradients when embedding table wgrad compute is deferred.
-        Defaults to None.
     """
     args = [
         input,
@@ -618,19 +645,18 @@ def linear_with_grad_accumulation_and_async_allreduce(
         gradient_accumulation_fusion,
         async_grad_allreduce,
         sequence_parallel,
-        grad_output_buffer,
         tp_group,
     ]
 
     if not linear_with_grad_accumulation_and_async_allreduce.warned:
         if os.environ.get('CUDA_DEVICE_MAX_CONNECTIONS') != "1":
-            # if sequence_parallel:
-            #     warnings.warn(
-            #         "When using sequence parallelism it is recommended to set the "
-            #         "environment variable CUDA_DEVICE_MAX_CONNECTIONS to 1 for "
-            #         "maximum speedup"
-            #     )
-            #     linear_with_grad_accumulation_and_async_allreduce.warned = True
+            if sequence_parallel:
+                warnings.warn(
+                    "When using sequence parallelism it is recommended to set the "
+                    "environment variable CUDA_DEVICE_MAX_CONNECTIONS to 1 for "
+                    "maximum speedup"
+                )
+                linear_with_grad_accumulation_and_async_allreduce.warned = True
 
             if async_grad_allreduce:
                 warnings.warn(
@@ -652,21 +678,34 @@ class ColumnParallelLinear(torch.nn.Module):
     The linear layer is defined as Y = XA + b. A is parallelized along
     its second dimension as A = [A_1, ..., A_p].
 
-    Args:
+    Arguments:
         input_size: first dimension of matrix A.
         output_size: second dimension of matrix A.
+
+    Keyword Arguments
         bias: If true, add bias
-        gather_output: If true, call all-gather on output and make Y available to all GPUs, otherwise, every GPU will have its output which is Y_i = XA_i
-        init_method: method to initialize weights. Note that bias is always set to zero.
+        gather_output: If true, call all-gather on output and make Y available
+                       to all GPUs, otherwise, every GPU will have its output
+                       which is Y_i = XA_i
+        init_method: method to initialize weights. Note that bias is always set
+                     to zero.
         stride: For the strided linear layers.
-        keep_master_weight_for_test: This was added for testing and should be set to False. It returns the master weights used for initialization.
-        skip_bias_add: If True, do not add the bias term, instead return it to be added by the caller. This enables performance optimations where bias can be fused with other elementwise operations.
-        skip_weight_param_allocation: If True, weight parameter is not allocated and must be passed as a keyword argument `weight` during the forward pass. Note that this does not affect bias, which will be allocated if bias is True. Defaults to False.
-        embedding_activation_buffer: This buffer holds the input activations of the final embedding linear layer on the last pipeline stage when defer_embedding_wgrad_compute is enabled.
-        grad_output_buffer: This buffer holds the gradient outputs of the final embedding linear layer on the last pipeline stage when defer_embedding_wgrad_compute is enabled.
+        keep_master_weight_for_test: This was added for testing and should be
+                                     set to False. It returns the master weights
+                                     used for initialization.
+        skip_bias_add: If True, do not add the bias term, instead
+                       return it to be added by the caller. This
+                       enables performance optimations where bias can
+                       be fused with other elementwise operations.
+        skip_weight_param_allocation: If True, weight parameter is not allocated and must be passed
+                                      as a keyword argument `weight` during the forward pass. Note
+                                      that this does not affect bias, which will be allocated if
+                                      bias is True. Defaults to False.
         is_expert: If True, the layer is treated as an MoE expert layer.
         config: ModelParallelConfig object
-        tp_comm_buffer_name: Communication buffer name is not used in non-Transformer-Engine modules.
+        tp_comm_buffer_name: Communication buffer name is not used in
+                             non-Transformer-Engine modules.
+
     """
 
     def __init__(
@@ -682,17 +721,17 @@ class ColumnParallelLinear(torch.nn.Module):
         keep_master_weight_for_test=False,
         skip_bias_add=False,
         skip_weight_param_allocation: bool = False,
-        embedding_activation_buffer: Optional[List[torch.Tensor]] = None,
-        grad_output_buffer: Optional[List[torch.Tensor]] = None,
         is_expert: bool = False,
         tp_comm_buffer_name: str = None,  # Not used
-        tp_group: Optional[torch.distributed.ProcessGroup] = None,
-        sp_group: Optional[torch.distributed.ProcessGroup] = None,
+        tp_group = None,
+        sp_group = None,
+        seq_data_group = None,
     ):
         super(ColumnParallelLinear, self).__init__()
-        
+
         self.tp_group = tp_group
         self.sp_group = sp_group
+        self.seq_data_group =seq_data_group
         # Keep input parameters
         self.input_size = input_size
         self.output_size = output_size
@@ -707,8 +746,6 @@ class ColumnParallelLinear(torch.nn.Module):
         self.skip_bias_add = skip_bias_add
         self.is_expert = is_expert
         self.expert_parallel = config.expert_model_parallel_size > 1
-        self.embedding_activation_buffer = embedding_activation_buffer
-        self.grad_output_buffer = grad_output_buffer
         self.config = config
 
         # Parameters.
@@ -732,7 +769,7 @@ class ColumnParallelLinear(torch.nn.Module):
                         init_method,
                         stride=stride,
                         return_master_weight=keep_master_weight_for_test,
-                        tp_group=tp_group,
+                        tp_group=tp_group
                     )
             else:
                 self.weight = Parameter(
@@ -813,13 +850,6 @@ class ColumnParallelLinear(torch.nn.Module):
             self.sequence_parallel or self.expert_parallel
         )
 
-        # Hook adding a default empty _extra_state for state dict
-        self._register_load_state_dict_pre_hook(
-            lambda state_dict, prefix, *args, **kwargs: state_dict.setdefault(
-                f'{prefix}_extra_state'
-            )
-        )
-
     def forward(self, input_: torch.Tensor, weight: Optional[torch.Tensor] = None):
         """Forward of ColumnParallelLinear
 
@@ -850,12 +880,6 @@ class ColumnParallelLinear(torch.nn.Module):
                     f"not {expected_shape} as expected"
                 )
 
-        if self.config._cpu_offloading_context is not None:
-            if self.config._cpu_offloading_context.inside_context == True:
-                assert (
-                    self.config.cpu_offloading == False
-                ), "CPU Offloading cannot be enabled while using non-TE modules"
-
         bias = self.bias if not self.skip_bias_add else None
 
         if (
@@ -870,15 +894,11 @@ class ColumnParallelLinear(torch.nn.Module):
             else:
                 input_parallel = copy_to_tensor_model_parallel_region_group(input_, self.tp_group)
 
-        if self.config.defer_embedding_wgrad_compute:
-            self.embedding_activation_buffer.append(input_parallel)
-
         # Matrix multiply.
         if not weight.requires_grad:
             self._forward_impl = linear_with_frozen_weight
         else:
             self._forward_impl = linear_with_grad_accumulation_and_async_allreduce
-
         output_parallel = self._forward_impl(
             input=input_parallel,
             weight=weight,
@@ -888,9 +908,6 @@ class ColumnParallelLinear(torch.nn.Module):
             if self.explicit_expert_comm
             else self.async_tensor_model_parallel_allreduce,
             sequence_parallel=False if self.explicit_expert_comm else self.sequence_parallel,
-            grad_output_buffer=self.grad_output_buffer
-            if self.config.defer_embedding_wgrad_compute
-            else None,
             tp_group=self.tp_group,
         )
         if self.gather_output:
@@ -905,35 +922,38 @@ class ColumnParallelLinear(torch.nn.Module):
         output_bias = self.bias if self.skip_bias_add else None
         return output, output_bias
 
-    def sharded_state_dict(self, prefix='', sharded_offsets=(), metadata=None):
-        """ Sharding along axis 0, bias sharded """
-        state_dict = self.state_dict(prefix='', keep_vars=True)
-        return make_sharded_tensors_for_checkpoint(
-            state_dict, prefix, {'weight': 0, 'bias': 0}, sharded_offsets
-        )
-
-    def set_extra_state(self, state: Any):
-        """ Extra state is ignored """
-
-    def get_extra_state(self) -> None:
-        """ Keep compatibility with TE state dict. """
-        return None
-
 
 class RowParallelLinear(torch.nn.Module):
     """Linear layer with row parallelism.
 
-    The linear layer is defined as Y = XA + b. A is parallelized along its first dimension and X along its second dimension. A = transpose([A_1 .. A_p]) X = [X_1, ..., X_p]
-
-    Args:
+    The linear layer is defined as Y = XA + b. A is parallelized along
+    its first dimension and X along its second dimension as:
+               -   -
+              | A_1 |
+              | .   |
+          A = | .   |        X = [X_1, ..., X_p]
+              | .   |
+              | A_p |
+               -   -
+    Arguments:
         input_size: first dimension of matrix A.
         output_size: second dimension of matrix A.
+
+    Keyword Arguments:
         bias: If true, add bias. Note that bias is not parallelized.
-        input_is_parallel: If true, we assume that the input is already split across the GPUs and we do not split again.
-        init_method: method to initialize weights. Note that bias is always set to zero.
+        input_is_parallel: If true, we assume that the input is already
+                           split across the GPUs and we do not split
+                           again.
+        init_method: method to initialize weights. Note that bias is always set
+                     to zero.
         stride: For the strided linear layers.
-        keep_master_weight_for_test: This was added for testing and should be set to False. It returns the master weights used for initialization.
-        skip_bias_add: If True, do not add the bias term, instead return it to be added by the caller. This enables performance optimations where bias can be fused with other elementwise operations.
+        keep_master_weight_for_test: This was added for testing and should be
+                                     set to False. It returns the master weights
+                                     used for initialization.
+        skip_bias_add: If True, do not add the bias term, instead
+                       return it to be added by the caller. This
+                       enables performance optimations where bias can
+                       be fused with other elementwise operations.
         is_expert: If True, the layer is treated as an MoE expert layer
         tp_comm_buffer_name: Communication buffer name. Not used in
                              non-Transformer-Engine modules.
@@ -955,7 +975,7 @@ class RowParallelLinear(torch.nn.Module):
         keep_master_weight_for_test: bool = False,
         is_expert: bool = False,
         tp_comm_buffer_name: str = None,  # Not used
-        tp_group: Optional[torch.distributed.ProcessGroup] = None,
+        tp_group=None
     ):
         super(RowParallelLinear, self).__init__()
 
@@ -1047,13 +1067,6 @@ class RowParallelLinear(torch.nn.Module):
             self.sequence_parallel or self.expert_parallel
         )
 
-        # Hook adding a default empty _extra_state for state dict
-        self._register_load_state_dict_pre_hook(
-            lambda state_dict, prefix, *args, **kwargs: state_dict.setdefault(
-                f'{prefix}_extra_state'
-            )
-        )
-
     def forward(self, input_):
         """Forward of RowParallelLinear
 
@@ -1064,13 +1077,6 @@ class RowParallelLinear(torch.nn.Module):
             - output
             - bias
         """
-
-        if self.config._cpu_offloading_context is not None:
-            if self.config._cpu_offloading_context.inside_context == True:
-                assert (
-                    self.config.cpu_offloading == False
-                ), "CPU Offloading cannot be enabled while using non-TE modules"
-
         # Set up backprop all-reduce.
         if self.input_is_parallel:
             input_parallel = input_
@@ -1115,17 +1121,3 @@ class RowParallelLinear(torch.nn.Module):
             output = output_
             output_bias = self.bias
         return output, output_bias
-
-    def sharded_state_dict(self, prefix='', sharded_offsets=(), metadata=None):
-        """ Sharding along axis 1, bias not sharded """
-        state_dict = self.state_dict(prefix='', keep_vars=True)
-        return make_sharded_tensors_for_checkpoint(
-            state_dict, prefix, {'weight': 1}, sharded_offsets
-        )
-
-    def set_extra_state(self, state: Any):
-        """ Extra state is ignored """
-
-    def get_extra_state(self) -> None:
-        """ Keep compatibility with TE state dict. """
-        return None

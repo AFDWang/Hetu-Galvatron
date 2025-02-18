@@ -1,13 +1,7 @@
 # Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 
-""" Core library classes for representing sharding of tensors and objects.
-
-The main expected usage is wrapping torch.Tensors in state dicts with
-ShardedTensor class (mostly with the ShardedTensor.from_rank_offsets classmethod).
-"""
-
+""" Core library classes. """
 import logging
-from abc import ABC
 from dataclasses import dataclass, replace
 from itertools import chain
 from typing import Any, Callable, Dict, Optional, Tuple, Union
@@ -28,31 +22,32 @@ ShardedStateDict = Dict[str, Any]
 ReplicaId = Union[int, Tuple[int, ...]]
 
 
-class ShardedBase(ABC):
-    key: str
-    data: object
-    replica_id: ReplicaId
-
-
 @dataclass
-class ShardedTensor(ShardedBase):
+class ShardedTensor:
     """Represents a mapping between a local tensor and a global tensor.
 
     Global tensor is assumed to consist of many local tensors distributed
     between different processes.
 
-    Args:
+    Attributes:
         key: unique identifier of a global tensor
         data: local tensor data. Can be None only for consistency validation
         dtype: tensor dtype
         local_shape: local tensor shape
         global_shape: global tensor shape
-        global_offset: offset of a local tensor in a global tensor, specified in number of tensor elements
+        global_offset: offset of a local tensor in a global tensor, specified
+            in number of tensor elements
         axis_fragmentations: global tensor fragmentation of each axis
-        replica_id: indicates given local tensor's replication wrt. local tensors in different processes
-        prepend_axis_num: number of axes prepended to the local tensor to reflect global tensor shape. The behavior is similar to unsqueezing the local tensor.
-        allow_shape_mismatch: if True, during loading, the global shape of a stored tensor does not have to match the expected global shape. Useful for representing tensors with flexible shape, e.g. padded.
-        flattened_range: specifies a slice that should be applied to a flattened tensor with `local_shape` in order to get the tensor stored as `data`
+        replica_id: indicates given local tensor's replication wrt. local
+            tensors in different processes
+        prepend_axis_num: number of axes prepended to the local tensor
+            to reflect global tensor shape.
+            The behavior is similar to unsqueezing the local tensor.
+        allow_shape_mismatch: if True, during loading, the global shape of a
+            stored tensor does not have to match the expected global shape.
+            Useful for representing tensors with flexible shape, e.g. padded.
+        flattened_range: specifies a slice that should be applied to a flattened
+            tensor with `local_shape` in order to get the tensor stored as `data`
     """
 
     key: str
@@ -133,17 +128,19 @@ class ShardedTensor(ShardedBase):
         *rank_offsets: Tuple[int, int, int],
         replica_id: ReplicaId = 0,
         prepend_axis_num: int = 0,
-        **init_kwargs,
+        allow_shape_mismatch: bool = False,
     ):
         """Allows to construct the ShardedTensor given offset specified in process ranks.
-
-        Args:
+        Arguments:
             key: unique key
             data: local tensor data
-            rank_offsets: each tuple (axis, axis_rank_offset, axis_fragm) says that if global tensor is divided into `axis_fragm` fragment along `axis` axis, then local tensor data corresponds to the `axis_rank_offset` chunk.
+            rank_offsets: each tuple (axis, axis_rank_offset, axis_fragm)
+                says that if global tensor is divided into `axis_fragm`
+                 fragment along `axis` axis, then local tensor data
+                 corresponds to the `axis_rank_offset` chunk.
             replica_id: see ShardedTensor
             prepend_axis_num: see ShardedTensor
-            init_kwargs: passed to ShardedTensor.__init__
+            allow_shape_mismatch: see ShardedTensor
         """
         global_offset = [0] * (data.ndim + prepend_axis_num)
         global_shape = ([1] * prepend_axis_num) + list(data.shape)
@@ -177,33 +174,14 @@ class ShardedTensor(ShardedBase):
             tuple(axis_fragmentations),
             replica_id,
             prepend_axis_num,
-            **init_kwargs,
+            allow_shape_mismatch,
         )
-
-    def init_data(self, device: torch.device, init_fn=torch.empty):
-        if self.data is not None:
-            return
-        self.data = init_fn(self.local_shape, dtype=self.dtype, device=device)
 
     def __str__(self):
         return f'{self.__class__.__name__}(key=\'{self.key}\')'
 
 
-def is_main_replica(replica_id: ReplicaId):
-    """ Checks if given `replica_id` is considered as main.
-
-    "Main" replica is:
-    - integer 0
-    - or an iterable with all 0 elements
-
-    It is the application responsibility to set correct replicas for sharded tensors.
-
-    Args:
-        replica_id (Union[int, Tuple[int, ...]]): replica id
-
-    Returns:
-        (bool): True for a "main" replica
-    """
+def is_main_replica(replica_id):
     if isinstance(replica_id, int):
         return replica_id == 0
     return all(r == 0 for r in replica_id)
@@ -226,7 +204,7 @@ class LocalNonpersitentObject:
 
 
 @dataclass
-class ShardedObject(ShardedBase):
+class ShardedObject:
     """Represents a mapping between a local object and a global object.
 
     Global object is assumed to consist of many local objects distributed
@@ -236,12 +214,14 @@ class ShardedObject(ShardedBase):
     sharding. Conceptually, ShardedObject is a fully-sharded ShardedTensor
     with atomic arbitrary typed elements.
 
-    Args:
+    Attributes:
         key: unique identifier of a global tensor
         data: local object data. Can be None only for consistency validation
         global_shape: global object shape
-        global_offset: offset of a local object in a global object, specified in number of shards
-        replica_id: indicates local object replication wrt. local objects in different processes
+        global_offset: offset of a local object in a global object, specified
+            in number of shards
+        replica_id: indicates local object replication wrt. local
+            objects in different processes
     """
 
     key: str
@@ -262,7 +242,7 @@ class ShardedObject(ShardedBase):
 
 
 @dataclass
-class ShardedTensorFactory(ShardedBase):
+class ShardedTensorFactory:
     """ Allows to apply transformations to tensors before/after serialization.
 
     The essence of those transformations is that they can be applied to
@@ -270,35 +250,18 @@ class ShardedTensorFactory(ShardedBase):
 
     Builder creates a sub-state-dict out of a tensor before saving, and merger
     merges the corresponding state dict after loading.
-
-    Args:
-        key (str): unique identifier of the factory
-        data (torch.Tensor): original model parameter that will be further transformed by this factory
-        build_fn (callable): function that transforms the original tensor to a sharded state dict
-        merge_fn (callable): function that transforms loaded subtree back into a single tensor (inverse of `build_fn`)
-        replica_id (ReplicaId): indicates factory replication wrt. factories in different processes
     """
 
     key: str
     data: torch.Tensor
-    build_fn: Callable[[str, torch.Tensor, ReplicaId], ShardedStateDict]
+    build_fn: Callable[[str, torch.Tensor], ShardedStateDict]
     merge_fn: Callable[[StateDict], torch.Tensor]
-    replica_id: ReplicaId = 0
 
     def build(self):
-        return self.build_fn(self.key, self.data, self.replica_id)
+        return self.build_fn(self.key, self.data)
 
 
 def apply_factories(sharded_state_dict: ShardedStateDict):
-    """ Turn ShardedTensorFactories into ShardedTensors *in-place*.
-
-    Args:
-        sharded_state_dict (ShardedStateDict): state dict possibly containing ShardedTensorFactory objects
-
-    Returns:
-        None: state dict is modified in place
-    """
-
     def apply(x):
         if isinstance(x, ShardedTensorFactory):
             x = x.build()
@@ -307,20 +270,7 @@ def apply_factories(sharded_state_dict: ShardedStateDict):
     dict_list_map_inplace(apply, sharded_state_dict)
 
 
-def apply_factory_merges(
-    x1: StateDict, x2: ShardedStateDict, key: Tuple[str, ...] = ()
-) -> StateDict:
-    """ Apply merges defined by ShardedTensorFactories *in-place*.
-
-    Args:
-        x1 (StateDict): state dict loaded from the checkpoint
-        x2 (ShardedStateDict): subset of `x1` (in terms of dict keys) with ShardedTensorFactory
-            as (possibly nested) values that define how to merge objects from the `x1` state dict
-        key (Tuple[str, ...]): current key in a recursive call. Used only for reporting meaningful errors
-
-    Returns:
-        StateDict: `x1` modified in-place
-    """
+def apply_factory_merges(x1: StateDict, x2: ShardedStateDict, key: Tuple[str, ...] = ()):
     if isinstance(x2, ShardedTensorFactory):
         return x2.merge_fn(x1)
 

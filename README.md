@@ -1,4 +1,6 @@
-# FlexSP: Accelerating Large Language Model Training via Flexible Sequence Parallelism
+# [ASPLOS'25] FlexSP: Accelerating Large Language Model Training via Flexible Sequence Parallelism
+
+This is the official implementation of ASPLOS'25 paper "FlexSP: Accelerating Large Language Model Training via Flexible Sequence Parallelism" [[Paper Link](https://arxiv.org/abs/2412.01523)].
 
 <p align="center">
 <img src="figs/main-result.jpg" alt="perf" width="700"/>

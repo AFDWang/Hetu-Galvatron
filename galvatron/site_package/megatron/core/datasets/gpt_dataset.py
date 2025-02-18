@@ -14,6 +14,7 @@ from megatron.core.datasets.blended_megatron_dataset_config import BlendedMegatr
 from megatron.core.datasets.indexed_dataset import IndexedDataset
 from megatron.core.datasets.megatron_dataset import LowLevelDataset, MegatronDataset, MockDataset
 from megatron.core.datasets.utils import Split, log_single_rank
+from megatron.core.datasets.blended_megatron_dataset_builder import need_to_build_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -391,7 +392,7 @@ class GPTDataset(MegatronDataset):
         )
 
         if not cache_hit and (
-            not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+            not torch.distributed.is_initialized() or need_to_build_dataset()
         ):
 
             log_single_rank(

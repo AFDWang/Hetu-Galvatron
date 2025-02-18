@@ -188,4 +188,5 @@ def galvatron_training_args(parser, use_megatron=True):
         group.add_argument("--local-rank", type=int, default=0, help="Local rank.")
     else:
         group.add_argument("--local-rank", type=int, default=-1, help="Local rank.")
+        group.add_argument("--no-shared-storage", action="store_false", dest="shared_storage", help="Cluster is not shared storage.")
     return parser

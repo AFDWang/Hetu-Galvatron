@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterable, List, Optional, Tuple, Type, Union
 import numpy
 import torch
 
+from megatron.training import get_args
 from megatron.core.datasets.blended_dataset import BlendedDataset
 from megatron.core.datasets.blended_megatron_dataset_config import BlendedMegatronDatasetConfig
 from megatron.core.datasets.megatron_dataset import LowLevelDataset, MegatronDataset, MockDataset
@@ -22,6 +23,16 @@ TopLevelDataset = Union[BlendedDataset, MidLevelDataset]
 DistributedDataset = Union[
     TopLevelDataset, MidLevelDataset, LowLevelDataset, torch.utils.data.Dataset
 ]
+
+def need_to_build_dataset():
+    args = get_args()
+    share_save = args.shared_storage
+    rank = torch.distributed.get_rank()
+    local_rank = torch.cuda.current_device()
+    if share_save:
+        return rank == 0
+    else:
+        return local_rank == 0
 
 
 class BlendedMegatronDatasetBuilder(object):
@@ -274,11 +285,11 @@ class BlendedMegatronDatasetBuilder(object):
         """
         if torch.distributed.is_initialized():
             rank = torch.distributed.get_rank()
-
             dataset = None
 
+            build_dataset = need_to_build_dataset()
             # First, build on rank 0
-            if rank == 0 and is_built_on_rank():
+            if build_dataset and is_built_on_rank():
                 try:
                     dataset = cls(*args)
                 except OSError as err:
@@ -293,7 +304,7 @@ class BlendedMegatronDatasetBuilder(object):
             torch.distributed.barrier()
 
             # After, build on other ranks
-            if rank != 0 and is_built_on_rank():
+            if not build_dataset and is_built_on_rank():
                 dataset = cls(*args)
 
             return dataset

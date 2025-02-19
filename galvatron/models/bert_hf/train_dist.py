@@ -4,13 +4,13 @@ from torch.optim import Adam
 from tqdm import tqdm
 import os
 from galvatron.utils import set_seed, distributed_dataloader, print_loss
-from galvatron.core import initialize_galvatron, GalvatronProfiler
-from galvatron.models.bert_hf.BertModel_hybrid_parallel import bert_model_hp, get_bert_config
+from galvatron.core import initialize_galvatron
+from galvatron.models.bert_hf.BertModel_hybrid_parallel import bert_model_hp, get_bert_config, get_runtime_profiler
 from galvatron.models.bert_hf.dataloader import DataLoaderForBert, get_batch, get_train_valid_test_data_iterators
 from galvatron.models.bert_hf.meta_configs import model_name, model_layer_configs
 from galvatron.models.bert_hf.arguments import model_args
-from galvatron.core.initialize import init_empty_weights
-from galvatron.core.utils import set_megatron_args_for_dataset
+from galvatron.core.runtime.initialize import init_empty_weights
+from galvatron.core.runtime.utils import set_megatron_args_for_dataset
 from megatron.training.arguments import _print_args
 
 def train(args):
@@ -35,8 +35,7 @@ def train(args):
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.adam_weight_decay)
 
     path = os.path.dirname(os.path.abspath(__file__))
-    profiler = GalvatronProfiler(args)
-    profiler.set_profiler_dist(path, model_layer_configs(config), model_name(config), start_iter=0)
+    profiler = get_runtime_profiler(args, path, config)
     
     profiler.profile_memory(0, "After creating model")
     if local_rank == 0:

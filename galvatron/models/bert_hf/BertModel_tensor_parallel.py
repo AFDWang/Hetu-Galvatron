@@ -1,12 +1,11 @@
 import torch
 from torch import nn
-from megatron.core import tensor_parallel
-from megatron.core.tensor_parallel import VocabParallelEmbedding, ColumnParallelLinear
-from megatron.training.arguments import core_transformer_config_from_args
-from galvatron.core import get_args
-from galvatron.core.tensor_parallel import ParallelMLP, ParallelAttention
-from galvatron.core.tensor_parallel import AttnMaskType, AttnType
 from torch.nn import LayerNorm
+from megatron.core.tensor_parallel import ColumnParallelLinear, VocabParallelEmbedding
+from megatron.training.arguments import core_transformer_config_from_args
+
+from galvatron.core import get_args
+from galvatron.core.runtime.tensor_parallel import AttnMaskType, AttnType, ParallelAttention, ParallelMLP
 
 
 class BertAttention_tp(nn.Module):

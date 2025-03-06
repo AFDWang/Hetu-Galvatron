@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import trange
 from .cost_model import pipeline_costmodel
-from .cost_model import OtherTimeCostModel
+from .cost_model import OtherTimeCostDecoupleModel as OtherTimeCostModel
 
 class DPAlg():
     def __init__(self, max_mem=8200, other_mem_cost=None, other_time_cost = None, layer_num=24, strategy_num=4, strategy_set=None, fine_grained_mode=True, use_cpp_core=True) -> None:

@@ -14,7 +14,8 @@ from galvatron.utils import (
     num2str
 )
 from scipy.optimize import curve_fit
-from .cost_model import MemoryCostModel, TimeCostModel, pipeline_costmodel
+from .cost_model import pipeline_costmodel
+from .cost_model import MemoryCostDecoupleModel as MemoryCostModel, TimeCostDecoupleModel as TimeCostModel
 from .dynamic_programming import DpOnModel
 
 class GalvatronSearchEngine():

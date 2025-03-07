@@ -10,6 +10,27 @@ sh scripts/profile_hardware.sh
 
 Galvatron 将调用 [nccl-tests](https://github.com/NVIDIA/nccl-tests) 或 [pytorch profiler](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) 来分析通信带宽。你可以通过在 ```scripts/profile_hardware.sh``` 中将 ```--backend``` 设置为 ```nccl``` 或 ```torch``` 来选择其中之一。
 
+对于```nccl```格式，用户需要设置以下变量：
+- ```nccl_test_dir```: 用于指定nccl-tests的目录
+- ```mpi_path```: 用于指定mpi的安装路径
+- ```start_mb```: 用于指定开始分析的通信带宽大小
+- ```end_mb```: 用于指定结束分析的通信带宽大小
+- ```scale```: 用于指定通信带宽的缩放因子
+- ```hostfile```: 用于指定主机文件，该文件中需要包含所有节点的IP地址或主机名
+
+此外用户还需要设置环境变量```NCCLTEST_OTHER_ARGS```，该变量用于指定nccl-tests需要的额外环境变量，例如可以用于指定nccl-tests的IB设备。
+
+对于```torch```格式，用户需要设置以下变量：
+- ```master_addr```: 用于指定主节点的IP地址或主机名
+- ```master_port```: 用于指定主节点的端口号
+- ```node_rank```: 用于指定当前节点的rank
+- ```envs```: 用于指定环境变量
+
+在```torch```格式下，运行脚本并不会直接profile带宽，而是会在```scripts```目录下生成四个脚本，分别是```profile_allreduce```, ```profile_p2p```, ```profile_allreduce_sp```, ```profile_all2all_sp```。用户需要在所有节点依次运行这四个脚本，来获取不同通信模式下的带宽。
+注意这里```master_addr```、```master_port```、```node_rank```可以设置成```'$xxx'```的形式，这样在生成脚本的时候保留变量名，运行脚本的时候再从环境变量中获取。
+
+Gavlatron在默认脚本中提供了不同```backend```的配置文件，用户可以在此基础上进行修改。
+
 (2) 其次，要分析模型计算时间和内存使用情况，```cd galvatron/models/model_name``` 并运行：
 ````shell
 sh scripts/profile_computation.sh

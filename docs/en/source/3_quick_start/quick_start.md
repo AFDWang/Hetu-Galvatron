@@ -10,6 +10,30 @@ sh scripts/profile_hardware.sh
 
 Galvatron will call [nccl-tests](https://github.com/NVIDIA/nccl-tests) or [pytorch profiler](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) to profile the communication bandwidth. You can choose one of them by setting ```--backend``` to ```nccl``` or ```torch``` in ```scripts/profile_hardware.sh```.
 
+For ```nccl``` format, users need to set the following variables:
+- ```nccl_test_dir```: the directory of nccl-tests
+- ```mpi_path```: the path of mpi
+- ```start_mb```: the start communication bandwidth
+- ```end_mb```: the end communication bandwidth
+- ```scale```: the scale of communication bandwidth
+- ```hostfile```: the host file, which needs to contain the IP addresses or hostnames of all nodes
+
+Additionally, users need to set the environment variable ```NCCLTEST_OTHER_ARGS```, which is used to specify the additional environment variables for nccl-tests. For example, it can be used to specify the IB device for nccl-tests.
+
+For ```torch``` format, users need to set the following variables:
+- ```master_addr```: the address of master node
+- ```master_port```: the port of master node
+- ```node_rank```: the rank of current node 
+- ```envs```: the environment variables for torch
+
+Additionally, users need to set the environment variable ```ENVS```, which is used to specify the environment variables for torch. 
+
+In ```torch``` format, the script will not directly profile the bandwidth, but will generate four scripts, ```profile_allreduce```, ```profile_p2p```, ```profile_allreduce_sp```, ```profile_all2all_sp```. Users need to run these scripts on all nodes one by one to get the bandwidth of different communication modes.
+
+Note that ```master_addr```, ```master_port```, ```node_rank``` can be set in the form of ```'$xxx'``` in ```scripts/profile_hardware.sh```, so that the variable names can be reserved in the generated scripts, and then retrieves them from environment variables when running the scripts.
+
+Galvatron provides different configuration files for different ```backend``` in the default script. Users can modify them based on the default configurations.
+
 (2) Secondly, to profile the model computation time and memory usage, ```cd galvatron/models/model_name``` and run:
 ``` shell
 sh scripts/profile_computation.sh

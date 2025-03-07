@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import trange
 from .cost_model import pipeline_costmodel
-from .cost_model import OtherTimeCostDecoupleModel as OtherTimeCostModel
+from .cost_model import OtherTimeCostModel
 
 class DPAlg():
     def __init__(self, max_mem=8200, other_mem_cost=None, other_time_cost = None, layer_num=24, strategy_num=4, strategy_set=None, fine_grained_mode=True, use_cpp_core=True) -> None:
@@ -210,8 +210,8 @@ class DpOnModel:
         #         history_results.append(None)
 
         if self.model_microbatch_after_dp:
-            dp_size = self.gpu_num//pp_deg
-            chunks = [timecost_model_args_['optimal_chunk_func'](bsz * min_tp // dp_size, [pp_deg, min_tp, dp_size], mbsz, min_tp) for timecost_model_args_ in self.timecost_model_args]
+            dp_size = self.gpu_num // pp_deg
+            chunks = [timecost_model_args_['parallel_args'].optimal_chunk_func(bsz * min_tp // dp_size, [pp_deg, min_tp, dp_size], mbsz, min_tp) for timecost_model_args_ in self.timecost_model_args]
         strategy_set = list(filter(lambda s: s[0] == pp_deg, self.strategies_set))
         strategy_num = len(strategy_set)
 
@@ -229,17 +229,12 @@ class DpOnModel:
         min_cost_strategy_ids = np.argmin(intra_layer_cost, axis=1)
 
         other_mem_cost = {}
-        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, 
-                                            self.sequence_len,
-                                            self.timecost_model_args[0]['hidden_size'],
-                                            self.timecost_model_args[0]['mixed_precision'],
-                                            self.timecost_model_args[0]['comm_coe_dict'], 
-                                            self.timecost_model_args[0]['allreduce_dict'], 
-                                            self.timecost_model_args[0]['sp_space'], 
-                                            vsp, min_tp, max_tp, 
-                                            self.memcost_model_args[0]['other_memory_pp_on'],
-                                            self.memcost_model_args[0]['other_memory_pp_off'],
-                                            self.other_time_profiled_list[0]).gen_result()
+        other_time_cost = OtherTimeCostModel(mbsz, pp_deg, self.n_gpu, vsp, min_tp, max_tp, self.sequence_len, self.other_time_profiled_list[0], 
+                                            self.timecost_model_args[0]['model_args'],
+                                            self.timecost_model_args[0]['train_args'],
+                                            self.timecost_model_args[0]['parallel_args'],
+                                            self.memcost_model_args[0]['profile_model_args'],
+                                            self.timecost_model_args[0]['profile_hardware_args']).gen_result()
         if self.pipeline_type == "gpipe":
             v_list = []
             for i in range(len(self.layer_num)):

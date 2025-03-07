@@ -1,93 +1,73 @@
 import numpy as np
+from types import SimpleNamespace
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Union
 
 @dataclass
-class MemoryCostDecoupleArgs:
-    strategy:list = field(default_factory=lambda: [1, 2, 4]) # for example: [pp_deg, tp_deg, dp_deg, {'sp': 1, 'cpt': 1}]
-    global_batch_size:int = 8
-    parameter_size:int = 48
-    tp_activation_per_bsz_dict:dict = field(default_factory={1:85, 2:47, 4:28, 8:18.5})
-    other_memory_pp_off:dict = field(default_factory={'model_states': 640, 'activation': 320})
-    other_memory_pp_on:dict = field(default_factory={'first_stage':{'model_states': 640, 'activation': 320}, 'last_stage':{'model_states': 640, 'activation': 320}})
-    peak_reduction_with_chunks:Optional[int] = None
-    microbatch:bool = True
-    optimal_chunk_func:Optional[Callable] = None
-    pytorch_context_mem:int = 1024
-    model_type:str ='bert'
-    checkpoint:int = 0
-    use_zero2_for_dp:int = 0
-    use_zero3_for_embed:int = 0
-    mixed_precision:bool = False
-    pipeline_type:str = 'gpipe',
-    disable_vtp:int = 0
-    max_tp_deg:int = 8
-    stage_idx:int = 0
-    mbsz:int = -1
-    min_tp:int = -1
-    gpu_num:int = 8
-    chunks:Optional[int] = None
-    async_grad_reduce:bool = True
-    sequence_parallel:bool = True
-    vsp:int = 0
+class ModelArgs:
+    model_type: str = 'bert'
+    seq_length: int = 1024
+    hidden_size: int = 4096
+    layer_num:int = 16
+    
+@dataclass
+class TrainArgs:
+    nodes:int = 1
+    gpu_num: int = 8
+    checkpoint: bool = False
+    mixed_precision: bool = False
+    async_grad_reduce: bool = True
+    pytorch_context_mem: int = 1024
+    
+@dataclass
+class ParallelArgs:
+    use_zero2_for_dp: bool = False
+    use_zero3_for_embed: bool = False
+    
+    max_tp_deg: int = 1
+    disable_vtp: bool = False
+    sequence_parallel: bool = False
+    
+    pipeline_type: str = 'gpipe'
+    sp_space:str = 'sp+tp'
+    microbatch: bool = False
+    optimal_chunk_func: Optional[Callable] = None
+    chunks: Optional[int] = None
+    
+@dataclass
+class ProfileModelArgs:
+    parameter_size: int = 48
+    tp_activation_per_bsz_dict:dict = field(default_factory=lambda: {1:85, 2:47, 4:28, 8:18.5})
+    other_memory_pp_off:dict = field(default_factory=lambda: {'model_states': 640, 'activation': 320})
+    other_memory_pp_on:dict = field(default_factory=lambda: {'first_stage':{'model_states': 640, 'activation': 320}, 'last_stage':{'model_states': 640, 'activation': 320}})
+    
+@dataclass
+class ProfileHardwareArgs:
+    forward_computation_time: Optional[Union[float, np.ndarray]] = 35 / 24
+    bct_fct_coe: float = 2
+    extra_overhead: float = 0
+    comm_coe_dict: dict = field(default_factory=lambda: {'8': 0.0062326653993580354, '4_0': 0.006042551648710218, '4_1': 0.006087464692704782, '2_0': 0.006496332820123041, '2_1': 0.006424794567193714, '1': 0})
+    dp_overlap_coe: float = 1.3
+    bct_overlap_coe: float = 1.3
+    p2p_comm_coe_dict: dict = field(default_factory=lambda: {2: 0.006787944610371979, 4: 0.0074923765069042254, 8: 0.00920674670398468})
+    allreduce_dict: dict = field(default_factory=lambda: {})
+    all2all_dict: dict = field(default_factory=lambda: {})
+    costmodel_coe: float = 1.0
 
-class MemoryCostDecoupleModel:
-    def __init__(self,
-            strategy,
-            global_batch_size = 8,
-            parameter_size = 48,
-            tp_activation_per_bsz_dict = {1:85, 2:47, 4:28, 8:18.5},
-            other_memory_pp_off = {'model_states': 640, 'activation': 320},
-            other_memory_pp_on = {'first_stage':{'model_states': 640, 'activation': 320}, 'last_stage':{'model_states': 640, 'activation': 320}},
-            peak_reduction_with_chunks=None,
-            microbatch=True,
-            optimal_chunk_func=None,
-            pytorch_context_mem = 1024,
-            model_type='bert',
-            checkpoint=0,
-            use_zero2_for_dp=0,
-            use_zero3_for_embed=0,
-            mixed_precision=False,
-            pipeline_type='gpipe', 
-            disable_vtp=0,
-            max_tp_deg=8,
-            stage_idx=0,
-            mbsz=-1,
-            min_tp = -1,
-            gpu_num = 8,
-            chunks=None,
-            async_grad_reduce=True,
-            sequence_parallel=True,
-            vsp=0):
-        self.args = MemoryCostDecoupleArgs(
-            strategy=strategy,
-            global_batch_size=global_batch_size,
-            parameter_size=parameter_size,
-            tp_activation_per_bsz_dict=tp_activation_per_bsz_dict,
-            other_memory_pp_off=other_memory_pp_off,
-            other_memory_pp_on=other_memory_pp_on,
-            peak_reduction_with_chunks=peak_reduction_with_chunks,
-            microbatch=microbatch,
-            optimal_chunk_func=optimal_chunk_func,
-            pytorch_context_mem=pytorch_context_mem,
-            model_type=model_type,
-            checkpoint=checkpoint,
-            use_zero2_for_dp=use_zero2_for_dp,
-            use_zero3_for_embed=use_zero3_for_embed,
-            mixed_precision=mixed_precision,
-            pipeline_type=pipeline_type,
-            disable_vtp=disable_vtp,
-            max_tp_deg=max_tp_deg,
-            stage_idx=stage_idx,
-            mbsz=mbsz,
-            min_tp=min_tp,
-            gpu_num=gpu_num,
-            chunks=chunks,
-            async_grad_reduce=async_grad_reduce,
-            sequence_parallel=sequence_parallel,
-            vsp=vsp
-        )
-        self._validate()
+class MemoryCostModel:
+    def __init__(self, 
+                stategy, 
+                global_batch_size:int = 8, 
+                mbsz: int = -1, 
+                min_tp: int = -1, 
+                stage_idx: int = 0,
+                vsp: int = 0, 
+                model_args: ModelArgs = None,
+                train_args: TrainArgs = None,
+                parallel_args: ParallelArgs = None,
+                profile_model_args: ProfileModelArgs = None):
+        
+        self.__post_init__(stategy, global_batch_size, mbsz, min_tp, stage_idx, vsp, model_args, train_args, parallel_args, profile_model_args)
         self.initialize()
         self.estimate_parameter_size()
         self.estimate_model_states_size()
@@ -95,10 +75,25 @@ class MemoryCostDecoupleModel:
         self.estimate_other_memory_cost()
         
     
-    def _validate(self):
-        args = self.args
-        assert args.mbsz > -1, f'Invalid mbsz: {args.mbsz}'
-        assert args.min_tp > -1, f'Invalid min_tp: {args.min_tp}'
+    def __post_init__(self, stategy, global_batch_size: int = 8, mbsz: int = -1, min_tp: int = -1, stage_idx: int = 0, vsp: int = 0, 
+                        model_args: ModelArgs = None, train_args:TrainArgs = None, parallel_args: ParallelArgs = None, profile_model_args: ProfileModelArgs = None):
+        # validate arguments
+        assert mbsz > -1, f'Invalid mbsz: {mbsz}'
+        assert min_tp > -1, f'Invalid min_tp: {min_tp}'
+        assert all(x is not None for x in (model_args, train_args, parallel_args, profile_model_args)), "One or more variables are None"
+
+        # Aggregate all arguments
+        self.args = SimpleNamespace()
+        self.args.strategy = stategy
+        self.args.global_batch_size = global_batch_size
+        self.args.mbsz = mbsz
+        self.args.min_tp = min_tp
+        self.args.stage_idx = stage_idx
+        self.args.vsp = vsp
+        components = {'ProfileModelArgs': profile_model_args, 'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args}
+        for class_name, instance in components.items():
+            for key, value in instance.__dict__.items():
+                setattr(self.args, key, value)
 
     def initialize(self):
         args = self.args
@@ -257,98 +252,39 @@ class MemoryCostDecoupleModel:
         result['other'] = self.other_memory_cost
         return result
     
-@dataclass
-class TimeCostDecoupleArgs:
-    strategy: str  # for example: [pp_deg, tp_deg, dp_deg, {'sp': 1, 'cpt': 1}]
-    global_batch_size: int = 8
-    parameter_size: int = 48
-    microbatch: bool = True
-    optimal_chunk_func: Optional[Callable] = None
-    sequence_length: int = 512
-    hidden_size: int = 1024
-    vocab_size:int = 32000
-    forward_computation_time: Optional[Union[float, np.ndarray]] = 35 / 24
-    bct_fct_coe: float = 2
-    extra_overhead: float = 0
-    comm_coe_dict: dict = field(default_factory=lambda: {'8': 0.0062326653993580354, '4_0': 0.006042551648710218, '4_1': 0.006087464692704782, '2_0': 0.006496332820123041, '2_1': 0.006424794567193714, '1': 0})
-    dp_overlap_coe: float = 1.3
-    bct_overlap_coe: float = 1.3
-    p2p_comm_coe_dict: dict = field(default_factory=lambda: {2: 0.006787944610371979, 4: 0.0074923765069042254, 8: 0.00920674670398468})
-    layer_num: Optional[int] = None
-    use_zero2_for_dp: int = 0
-    mixed_precision: bool = False
-    no_comm: bool = False
-    costmodel_coe: float = 1.0
-    async_grad_reduce: bool = True
-    allreduce_dict: dict = field(default_factory=lambda: {})
-    all2all_dict: dict = field(default_factory=lambda: {})
-    sp_space: str = 'tp'
-    
-class TimeCostDecoupleModel:
+class TimeCostModel:
     def __init__(self, 
-            strategy,
-            global_batch_size,
-            parameter_size = 48,
-            microbatch=True,
-            optimal_chunk_func = None,
-            sequence_length=512,
-            hidden_size=1024,
-            vocab_size=32000,
-            forward_computation_time=35 / 24,
-            bct_fct_coe=2,
-            extra_overhead=0,
-            comm_coe_dict={},
-            dp_overlap_coe=1.3,
-            bct_overlap_coe=1.3,
-            p2p_comm_coe_dict=None,
-            layer_num=None,
-            use_zero2_for_dp=0,
-            mixed_precision=False,
-            no_comm=False,
-            costmodel_coe=1.0,
-            async_grad_reduce=True,
-            allreduce_dict = None,
-            all2all_dict = None,
-            sp_space = 'tp'):
-        self.args = TimeCostDecoupleArgs(
-            strategy=strategy,
-            global_batch_size=global_batch_size,
-            parameter_size=parameter_size,
-            microbatch=microbatch,
-            optimal_chunk_func=optimal_chunk_func,
-            sequence_length=sequence_length,
-            hidden_size=hidden_size,
-            vocab_size=vocab_size,
-            forward_computation_time=forward_computation_time,
-            bct_fct_coe=bct_fct_coe,
-            extra_overhead=extra_overhead,
-            comm_coe_dict=comm_coe_dict,
-            dp_overlap_coe=dp_overlap_coe,
-            bct_overlap_coe=bct_overlap_coe,
-            p2p_comm_coe_dict=p2p_comm_coe_dict,
-            layer_num=layer_num,
-            use_zero2_for_dp=use_zero2_for_dp,
-            mixed_precision=mixed_precision,
-            no_comm=no_comm,
-            costmodel_coe=costmodel_coe,
-            async_grad_reduce=async_grad_reduce,
-            allreduce_dict=allreduce_dict,
-            all2all_dict=all2all_dict,
-            sp_space=sp_space
-        )
-        
-        self._validate_and_correct_args()
+                strategy, 
+                global_batch_size:int = 8, 
+                no_comm: bool = False, 
+                model_args: ModelArgs=None, 
+                train_args:TrainArgs = None,
+                parallel_args:ParallelArgs = None, 
+                profile_model_args:ProfileModelArgs=None,
+                profile_hardware_args:ProfileHardwareArgs = None):
+        self.__post_init__(strategy, global_batch_size, no_comm, model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)
         self.initialize()
         self.estimate_computation_time()
         self.estimate_dp_communication_cost()
         self.estimate_tp_communication_cost()
         self.estimate_pp_communication_cost()
+    
+    def __post_init__(self,strategy, global_batch_size:int = 8, no_comm: bool = False, 
+                      model_args=None, train_args=None, parallel_args=None, profile_model_args=None, profile_hardware_args=None):
+        # Validate and correct arguments
+        assert all(x is not None for x in (model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)), "One or more variables are None"
+        assert parallel_args.microbatch == False, f'Invalid microbatch: {parallel_args.micobatch}'
+        model_args.layer_num = 24 if model_args.layer_num is None else model_args.layer_num
         
-    def _validate_and_correct_args(self):
-        args = self.args
-        assert args.microbatch == False
-        # correct layer_num. (Dummy layer_num, can be any multiple of 8. We estimate the time cost of single layer by averaging the time of whole model to deal with pipeline parallel)
-        self.layer_num = 24 if args.layer_num is None else args.layer_num
+        # Aggregate all arguments
+        self.args = SimpleNamespace()
+        self.args.strategy = strategy
+        self.args.global_batch_size = global_batch_size
+        self.args.no_comm = no_comm
+        components = {'ProfileModelArgs': profile_model_args, 'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args, 'ProfileHardwareArgs': profile_hardware_args}
+        for class_name, instance in components.items():
+            for key, value in instance.__dict__.items():
+                setattr(self.args, key, value)
     
     def initialize(self):
         args = self.args
@@ -358,8 +294,6 @@ class TimeCostDecoupleModel:
         self.tp_size = args.strategy[1]
         self.dp_size = args.strategy[2]
         self.sp_space = args.sp_space
-        self.seq_len = args.sequence_length
-        self.hidden_size = args.hidden_size
         self.fsdp = True if 'fsdp' in args.strategy[-1].keys() and args.strategy[-1]['fsdp'] else False
         self.checkpoint = True if 'cpt' in args.strategy[-1].keys() and args.strategy[-1]['cpt'] else False
         if 'sp' in args.strategy[-1].keys() and args.strategy[-1]['sp'] == 1:
@@ -375,7 +309,10 @@ class TimeCostDecoupleModel:
             else:
                 self.sp_dict = args.allreduce_dict[self.tp_size]
                 
-        # [initialize]:initialize local batch size, optimal_microbatch, parameter_size
+        # [initialize]:copy some attributes and initialize local batch size, optimal_microbatch, parameter_size
+        self.seq_len = args.seq_length
+        self.hidden_size = args.hidden_size
+        self.layer_num = args.layer_num
         self.bsz = args.global_batch_size / self.dp_size
         self.optimal_microbatch = args.optimal_chunk_func(self.bsz, args.strategy) if args.microbatch else 1
         if 'sp' in args.strategy[-1].keys() and args.strategy[-1]['sp'] == 1:
@@ -576,62 +513,27 @@ class TimeCostDecoupleModel:
         result = result * coe
         result = result / self.layer_num
         return result
-  
-@dataclass
-class OtherTimeCostDecoupleArgs:
-    mbsz: int = 1
-    pp_deg: int = 2
-    world_size: int = 8
-    sequence_length: int = 2048
-    hidden_size: int = 4096
-    mixed_precision: bool = False
-    comm_coe_dict: dict = field(default_factory=lambda: {})
-    allreduce_dict: dict = field(default_factory=lambda: {})
-    sp_space: str = 'tp+sp'
-    vsp: int = 0
-    min_tp: int = 1
-    max_tp: int = 8
-    other_memory_pp_on: dict = field(default_factory=lambda: {})
-    other_memory_pp_off: dict = field(default_factory=lambda: {})
-    other_time_profiled_list: list = field(default_factory=lambda: [])
-
-class OtherTimeCostDecoupleModel:
-    def __init__(self,
-            mbsz,
-            pp_deg,
-            world_size,
-            sequence_length,
-            hidden_size,
-            mixed_precision,
-            comm_coe_dict,
-            allreduce_dict,
-            sp_space,
-            vsp,
-            min_tp,
-            max_tp,
-            other_memory_pp_on,
-            other_memory_pp_off,
-            other_time_profiled_list):
-        self.args = OtherTimeCostDecoupleArgs(
-            mbsz=mbsz,
-            pp_deg=pp_deg,
-            world_size=world_size,
-            sequence_length=sequence_length,
-            hidden_size=hidden_size,
-            mixed_precision=mixed_precision,
-            comm_coe_dict=comm_coe_dict,
-            allreduce_dict=allreduce_dict,
-            sp_space=sp_space,
-            vsp=vsp,
-            min_tp=min_tp,
-            max_tp=max_tp,
-            other_memory_pp_on=other_memory_pp_on,
-            other_memory_pp_off=other_memory_pp_off,
-            other_time_profiled_list=other_time_profiled_list
-        )
+    
+class OtherTimeCostModel:
+    def __init__(self, 
+                mbsz:int = 1, 
+                pp_deg:int = 2, 
+                world_size:int = 8, 
+                vsp:bool = False, 
+                min_tp:int = 1, 
+                max_tp:int = 8, 
+                sequence_length_list:list = [512], 
+                other_time_profiled_list:float = 0,
+                model_args:ModelArgs = None, 
+                train_args:TrainArgs = None, 
+                parallel_args:ParallelArgs = None, 
+                profile_model_args:ProfileModelArgs = None, 
+                profile_hardware_args:ProfileHardwareArgs = None):
+        self.__post_init__(mbsz, pp_deg, world_size, vsp, min_tp, max_tp, sequence_length_list, other_time_profiled_list, model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)
+    
         args = self.args
         
-        self.seq_len = args.sequence_length
+        self.sequence_length_list = args.sequence_length_list
         self.hidden_size = args.hidden_size
         self.sp_space = args.sp_space
         
@@ -645,16 +547,36 @@ class OtherTimeCostDecoupleModel:
         self.estimate_tp_time()
         self.estimate_fct_time()
         self.estimate_dp_time()
+    
+    def __post_init__(self, mbsz:int = 1, pp_deg:int = 2, world_size:int = 8, vsp:bool = False, min_tp:int = 1, max_tp:int = 8, sequence_length_list:list = [512], other_time_profiled_list:float = 0,
+             model_args:ModelArgs = None, train_args:TrainArgs = None, parallel_args:ParallelArgs = None, profile_model_args:ProfileModelArgs = None, profile_hardware_args:ProfileHardwareArgs = None):
+        # Validate
+        assert all(x is not None for x in (model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)), "One or more variables are None"
         
+        # Aggregate all arguments
+        self.args = SimpleNamespace()
+        self.args.mbsz = mbsz
+        self.args.pp_deg = pp_deg
+        self.args.world_size = world_size
+        self.args.vsp = vsp
+        self.args.min_tp = min_tp
+        self.args.max_tp = max_tp
+        self.args.sequence_length_list = sequence_length_list
+        self.args.other_time_profiled_list = other_time_profiled_list
+        components = {'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args, 'ProfileModelArgs': profile_model_args, 'ProfileHardwareArgs': profile_hardware_args}
+        for class_name, instance in components.items():
+            for key, value in instance.__dict__.items():
+                setattr(self.args, key, value)
+    
     def estimate_tp_time(self):
         args = self.args
         # calc tp comm size
         k = args.min_tp
-        while k <=  args.max_tp and args.world_size // args.pp_deg >= k:
+        while k <= args.max_tp and args.world_size // args.pp_deg >= k:
             self.per_tp_message_size = []
             self.per_tp_message_time = []
             self.tp_message_size = []
-            for seq_len in self.seq_len:
+            for seq_len in self.sequence_length_list:
                 if args.vsp == 0:
                     if self.sp_space == 'tp+sp':
                         self.per_tp_message_size.append(args.mbsz * seq_len* args.hidden_size * (2 if args.mixed_precision else 4))

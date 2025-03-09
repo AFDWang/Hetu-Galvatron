@@ -5,17 +5,15 @@ from typing import Optional, Callable, Union
 
 @dataclass
 class ModelArgs:
-    model_type: str = 'bert'
+    parameter_size: int = 48
     seq_length: int = 1024
     hidden_size: int = 4096
     layer_num:int = 16
     
 @dataclass
 class TrainArgs:
-    nodes:int = 1
-    gpu_num: int = 8
-    checkpoint: bool = False
     mixed_precision: bool = False
+    checkpoint: bool = False
     async_grad_reduce: bool = True
     pytorch_context_mem: int = 1024
     
@@ -27,23 +25,22 @@ class ParallelArgs:
     max_tp_deg: int = 1
     disable_vtp: bool = False
     sequence_parallel: bool = False
+    sp_space:str = 'sp+tp'
     
     pipeline_type: str = 'gpipe'
-    sp_space:str = 'sp+tp'
-    microbatch: bool = False
     optimal_chunk_func: Optional[Callable] = None
     chunks: Optional[int] = None
     
 @dataclass
 class ProfileModelArgs:
-    parameter_size: int = 48
     tp_activation_per_bsz_dict:dict = field(default_factory=lambda: {1:85, 2:47, 4:28, 8:18.5})
     other_memory_pp_off:dict = field(default_factory=lambda: {'model_states': 640, 'activation': 320})
     other_memory_pp_on:dict = field(default_factory=lambda: {'first_stage':{'model_states': 640, 'activation': 320}, 'last_stage':{'model_states': 640, 'activation': 320}})
+    forward_computation_time: Optional[Union[float, np.ndarray]] = 35 / 24
+    other_time_profiled: Optional[Union[float, np.ndarray]] = 0
     
 @dataclass
 class ProfileHardwareArgs:
-    forward_computation_time: Optional[Union[float, np.ndarray]] = 35 / 24
     bct_fct_coe: float = 2
     extra_overhead: float = 0
     comm_coe_dict: dict = field(default_factory=lambda: {'8': 0.0062326653993580354, '4_0': 0.006042551648710218, '4_1': 0.006087464692704782, '2_0': 0.006496332820123041, '2_1': 0.006424794567193714, '1': 0})
@@ -55,6 +52,13 @@ class ProfileHardwareArgs:
     costmodel_coe: float = 1.0
 
 class MemoryCostModel:
+    memory_args_list = {
+        'ModelArgs':['parameter_size'], 
+        'TrainArgs':['mixed_precision', 'checkpoint', 'async_grad_reduce', 'pytorch_context_mem'], 
+        'ParallelArgs':['use_zero2_for_dp', 'use_zero3_for_embed', 'max_tp_deg', 'disable_vtp', 'sequence_parallel', 'sp_space', 'pipeline_type', 'optimal_chunk_func', 'chunks'], 
+        'ProfileModelArgs':['tp_activation_per_bsz_dict', 'other_memory_pp_off', 'other_memory_pp_on']
+    }
+    
     def __init__(self, 
                 stategy, 
                 global_batch_size:int = 8, 
@@ -93,7 +97,8 @@ class MemoryCostModel:
         components = {'ProfileModelArgs': profile_model_args, 'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args}
         for class_name, instance in components.items():
             for key, value in instance.__dict__.items():
-                setattr(self.args, key, value)
+                if key in self.memory_args_list[class_name]:
+                    setattr(self.args, key, value)
 
     def initialize(self):
         args = self.args
@@ -108,9 +113,8 @@ class MemoryCostModel:
             self.sdp_size = self.dp_size
     
         # [adjust]:calculate chunks
-        # TODO: args.chunks其实可以直接在输入时就进行确定,而不是在本函数内部进行确定,如此可以避免optimal_chunk_func函数的调用,以及args,mbsz的输入,减少函数参数
         if args.chunks is None:
-            args.chunks = args.optimal_chunk_func(args.global_batch_size // self.dp_size, args.strategy, args.mbsz, args.min_tp)  # FIXME:没有看懂这个函数的意义 以及这个函数的参数
+            args.chunks = args.optimal_chunk_func(args.global_batch_size // self.dp_size, args.strategy, args.mbsz, args.min_tp)
         max_chunks = args.global_batch_size // (self.tp_size * self.dp_size // args.min_tp)
         max_chunks = 1 if max_chunks == 0 else max_chunks
         self.chunks = max_chunks if args.chunks > max_chunks else args.chunks
@@ -203,9 +207,7 @@ class MemoryCostModel:
             else:
                 model_tp = tp
                 other_ms_zero2_ratio = self.zero3_ratio(self.tp_size * self.dp_size // tp) if args.use_zero3_for_embed else (self.zero2_ratio(self.tp_size * self.dp_size // tp) if args.use_zero2_for_dp else 1.0)
-            
-            args.model_type = 'gpt' if args.model_type not in ['bert', 't5', 'vit', 'swin', 'gpt'] else args.model_type
-            
+                        
             # Handle different memory consumption scenarios based on pipeline size (PP Size)
             if self.pp_size == 1:
                 tp_other_memory_cost[0] += (
@@ -253,6 +255,14 @@ class MemoryCostModel:
         return result
     
 class TimeCostModel:
+    time_args_list = {
+        'ModelArgs':['parameter_size', 'seq_length', 'hidden_size', 'layer_num'],
+        'TrainArgs':['mixed_precision', 'async_grad_reduce'],
+        'ParallelArgs':['sp_space', 'optimal_chunk_func'],
+        'ProfileModelArgs': ['forward_computation_time'],
+        'ProfileHardwareArgs':['bct_fct_coe', 'extra_overhead', 'comm_coe_dict', 'dp_overlap_coe', 'bct_overlap_coe', 'p2p_comm_coe_dict', 'costmodel_coe', 'allreduce_dict', 'all2all_dict']
+    }
+    
     def __init__(self, 
                 strategy, 
                 global_batch_size:int = 8, 
@@ -260,7 +270,7 @@ class TimeCostModel:
                 model_args: ModelArgs=None, 
                 train_args:TrainArgs = None,
                 parallel_args:ParallelArgs = None, 
-                profile_model_args:ProfileModelArgs=None,
+                profile_model_args:ProfileModelArgs = None,
                 profile_hardware_args:ProfileHardwareArgs = None):
         self.__post_init__(strategy, global_batch_size, no_comm, model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)
         self.initialize()
@@ -272,8 +282,7 @@ class TimeCostModel:
     def __post_init__(self,strategy, global_batch_size:int = 8, no_comm: bool = False, 
                       model_args=None, train_args=None, parallel_args=None, profile_model_args=None, profile_hardware_args=None):
         # Validate and correct arguments
-        assert all(x is not None for x in (model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)), "One or more variables are None"
-        assert parallel_args.microbatch == False, f'Invalid microbatch: {parallel_args.micobatch}'
+        assert all(x is not None for x in (model_args, train_args, parallel_args, profile_hardware_args)), "One or more variables are None"
         model_args.layer_num = 24 if model_args.layer_num is None else model_args.layer_num
         
         # Aggregate all arguments
@@ -281,10 +290,11 @@ class TimeCostModel:
         self.args.strategy = strategy
         self.args.global_batch_size = global_batch_size
         self.args.no_comm = no_comm
-        components = {'ProfileModelArgs': profile_model_args, 'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args, 'ProfileHardwareArgs': profile_hardware_args}
+        components = {'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args, 'ProfileModelArgs': profile_model_args, 'ProfileHardwareArgs': profile_hardware_args}
         for class_name, instance in components.items():
             for key, value in instance.__dict__.items():
-                setattr(self.args, key, value)
+                if key in TimeCostModel.time_args_list[class_name]:
+                    setattr(self.args, key, value)
     
     def initialize(self):
         args = self.args
@@ -314,7 +324,7 @@ class TimeCostModel:
         self.hidden_size = args.hidden_size
         self.layer_num = args.layer_num
         self.bsz = args.global_batch_size / self.dp_size
-        self.optimal_microbatch = args.optimal_chunk_func(self.bsz, args.strategy) if args.microbatch else 1
+        self.optimal_microbatch = 1
         if 'sp' in args.strategy[-1].keys() and args.strategy[-1]['sp'] == 1:
             self.parameter_size = args.parameter_size
         else:
@@ -452,10 +462,6 @@ class TimeCostModel:
             rest_dp_flag = False
         rest_dp_flag = False
         return overlap_part, rest_part, rest_dp_flag
-
-    def pipe_with_microbatch(self, computation_overhead, communication_overhead):
-        result = computation_overhead * (self.pp_size + self.optimal_microbatch - 1) / (self.pp_size * self.optimal_microbatch) + communication_overhead
-        return result
     
     def gen_result(self):
         args = self.args
@@ -463,43 +469,20 @@ class TimeCostModel:
             if self.tp_size == 1 and self.dp_size > 1: # pp+dp
                 overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
                 overall_overhead = self.fct + overlap_part + rest_part + args.extra_overhead
-                if args.microbatch == False:
-                    result = overall_overhead
-                else:
-                    computation_overhead = self.fct + self.bct
-                    communication_overhead = overall_overhead - computation_overhead
-                    result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
+                result = overall_overhead
             elif self.dp_size == 1 and self.tp_size > 1: # pp+tp
-                if args.microbatch == False:
-                    result = self.fct + self.bct + self.tp_communication_time
-                else:
-                    overall_overhead = self.fct + self.bct + self.tp_communication_time
-                    result = self.pipe_with_microbatch(overall_overhead, 0)
+                result = self.fct + self.bct + self.tp_communication_time
             elif self.dp_size == 1 and self.tp_size == 1: # pure pp
-                if args.microbatch == False:
-                    result = self.fct + self.bct
-                else:
-                    overall_overhead = self.fct + self.bct
-                    result = self.pipe_with_microbatch(overall_overhead, 0)
+                result = self.fct + self.bct
             else: # pp+dp+tp
                 if self.tp_size < self.tp_size * self.dp_size // 2:
                     overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct)
                     overall_overhead = self.fct + overlap_part + rest_part + self.tp_communication_time + args.extra_overhead
-                    if args.microbatch == False:
-                        result = overall_overhead
-                    else:
-                        computation_overhead = self.fct + self.bct + self.tp_communication_time
-                        communication_overhead = overall_overhead - computation_overhead
-                        result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
+                    result = overall_overhead
                 else:
                     overlap_part, rest_part, _ = self.bct_dp_overlap(self.dp_message_size, self.bct * 1 / 2)
                     overall_overhead = self.fct + 1 / 2 * self.bct + overlap_part + rest_part + self.tp_communication_time + args.extra_overhead
-                    if args.microbatch == False:
-                        result = overall_overhead
-                    else:
-                        computation_overhead = self.fct + self.bct + self.tp_communication_time
-                        communication_overhead = overall_overhead - computation_overhead
-                        result = self.pipe_with_microbatch(computation_overhead, communication_overhead)
+                    result = overall_overhead
 
         # For fsdp, add allgather time of forward and backward
         if self.fsdp:
@@ -515,6 +498,14 @@ class TimeCostModel:
         return result
     
 class OtherTimeCostModel:
+    othertime_args_list = {
+        'ModelArgs': ['hidden_size'],
+        'TrainArgs': ['mixed_precision'],
+        'ParallelArgs': ['sp_space'],
+        'ProfileModelArgs': ['other_memory_pp_on', 'other_memory_pp_off', 'other_time_profiled'],
+        'ProfileHardwareArgs':['comm_coe_dict', 'allreduce_dict']
+    }
+    
     def __init__(self, 
                 mbsz:int = 1, 
                 pp_deg:int = 2, 
@@ -523,13 +514,12 @@ class OtherTimeCostModel:
                 min_tp:int = 1, 
                 max_tp:int = 8, 
                 sequence_length_list:list = [512], 
-                other_time_profiled_list:float = 0,
                 model_args:ModelArgs = None, 
                 train_args:TrainArgs = None, 
                 parallel_args:ParallelArgs = None, 
                 profile_model_args:ProfileModelArgs = None, 
                 profile_hardware_args:ProfileHardwareArgs = None):
-        self.__post_init__(mbsz, pp_deg, world_size, vsp, min_tp, max_tp, sequence_length_list, other_time_profiled_list, model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)
+        self.__post_init__(mbsz, pp_deg, world_size, vsp, min_tp, max_tp, sequence_length_list, model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)
     
         args = self.args
         
@@ -548,7 +538,7 @@ class OtherTimeCostModel:
         self.estimate_fct_time()
         self.estimate_dp_time()
     
-    def __post_init__(self, mbsz:int = 1, pp_deg:int = 2, world_size:int = 8, vsp:bool = False, min_tp:int = 1, max_tp:int = 8, sequence_length_list:list = [512], other_time_profiled_list:float = 0,
+    def __post_init__(self, mbsz:int = 1, pp_deg:int = 2, world_size:int = 8, vsp:bool = False, min_tp:int = 1, max_tp:int = 8, sequence_length_list:list = [512],
              model_args:ModelArgs = None, train_args:TrainArgs = None, parallel_args:ParallelArgs = None, profile_model_args:ProfileModelArgs = None, profile_hardware_args:ProfileHardwareArgs = None):
         # Validate
         assert all(x is not None for x in (model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)), "One or more variables are None"
@@ -562,11 +552,11 @@ class OtherTimeCostModel:
         self.args.min_tp = min_tp
         self.args.max_tp = max_tp
         self.args.sequence_length_list = sequence_length_list
-        self.args.other_time_profiled_list = other_time_profiled_list
         components = {'ModelArgs': model_args, 'TrainArgs': train_args, 'ParallelArgs': parallel_args, 'ProfileModelArgs': profile_model_args, 'ProfileHardwareArgs': profile_hardware_args}
         for class_name, instance in components.items():
             for key, value in instance.__dict__.items():
-                setattr(self.args, key, value)
+                if key in OtherTimeCostModel.othertime_args_list[class_name]:
+                    setattr(self.args, key, value)
     
     def estimate_tp_time(self):
         args = self.args
@@ -615,17 +605,17 @@ class OtherTimeCostModel:
             def linear_func(x, m, c):
                 return m * x + c
             if args.pp_deg == 1:
-                if isinstance(args.other_time_profiled_list ,np.ndarray):
-                    self.fct[k] = linear_func(args.mbsz / args.min_tp, *args.other_time_profiled_list)
+                if isinstance(args.other_time_profiled ,np.ndarray):
+                    self.fct[k] = linear_func(args.mbsz / args.min_tp, *args.other_time_profiled)
                 else:
-                    self.fct[k] = args.mbsz / args.min_tp * k * args.other_time_profiled_list
+                    self.fct[k] = args.mbsz / args.min_tp * k * args.other_time_profiled
             else:
-                if isinstance(args.other_time_profiled_list, np.ndarray):
-                    self.fct[k] = (linear_func(args.mbsz / args.min_tp, *args.other_time_profiled_list) / 2, \
-                                linear_func(args.mbsz / args.min_tp, *args.other_time_profiled_list) / 2)
+                if isinstance(args.other_time_profiled, np.ndarray):
+                    self.fct[k] = (linear_func(args.mbsz / args.min_tp, *args.other_time_profiled) / 2, \
+                                linear_func(args.mbsz / args.min_tp, *args.other_time_profiled) / 2)
                 else:
-                    self.fct[k] = (args.mbsz / args.min_tp * k * args.other_time_profiled_list / 2, \
-                                args.mbsz / args.min_tp * k * args.other_time_profiled_list / 2)
+                    self.fct[k] = (args.mbsz / args.min_tp * k * args.other_time_profiled / 2, \
+                                args.mbsz / args.min_tp * k * args.other_time_profiled / 2)
             k *= 2
     
     def estimate_dp_time(self):
@@ -704,7 +694,7 @@ def get_time_cost_all_stages(layer_timecosts, pp_stage_division):
         stage_timecosts.append(np.sum(layer_timecosts[layer_start_id:layer_end_id]))
     return stage_timecosts
 
-def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, strategies, partition, chunks, bsz, min_tp, other_time_cost, return_stage_cost=False):
+def pipeline_costmodel(timecostmodel, layer_num_list, model_args_list, train_args_list, parallel_args_list, profile_model_args_list, profile_hardware_args_list, strategies, partition, chunks, bsz, min_tp, other_time_cost, return_stage_cost=False):
     if strategies is None:
         if return_stage_cost:
             return [np.inf] * len(partition), np.inf
@@ -733,8 +723,14 @@ def pipeline_costmodel(timecostmodel, layer_num_list, timecostmodel_args_list, s
     for layer_type_id in range(len(layer_num_list)):
         timecosts_dict_bsz_chunked[layer_type_id], timecosts_dict_compute[layer_type_id] = {}, {}
         for s in strategies_set:
-            timecosts_dict_bsz_chunked[layer_type_id][s] = timecostmodel(strategy_str2list(s), bsz_chunked[layer_type_id], **timecostmodel_args_list[layer_type_id]).gen_result()
-            timecosts_dict_compute[layer_type_id][s] = timecostmodel(strategy_str2list(s), bsz_chunked[layer_type_id], no_comm=True, **timecostmodel_args_list[layer_type_id]).gen_result()
+            timecosts_dict_bsz_chunked[layer_type_id][s] = timecostmodel(strategy_str2list(s), bsz_chunked[layer_type_id],
+                                                                        model_args=model_args_list[layer_type_id], train_args=train_args_list[layer_type_id],
+                                                                        parallel_args=parallel_args_list[layer_type_id], profile_model_args=profile_model_args_list[layer_type_id],
+                                                                        profile_hardware_args=profile_hardware_args_list[layer_type_id]).gen_result()
+            timecosts_dict_compute[layer_type_id][s] = timecostmodel(strategy_str2list(s), bsz_chunked[layer_type_id], no_comm=True, 
+                                                                    model_args=model_args_list[layer_type_id], train_args=train_args_list[layer_type_id],
+                                                                    parallel_args=parallel_args_list[layer_type_id], profile_model_args=profile_model_args_list[layer_type_id],
+                                                                    profile_hardware_args=profile_hardware_args_list[layer_type_id]).gen_result()
     timecosts_bsz_chunked = [timecosts_dict_bsz_chunked[layer_type_ids[i]][form_strategy(strategies[i])] for i in range(layer_num)]
     timecosts_bsz_compute = [timecosts_dict_compute[layer_type_ids[i]][form_strategy(strategies[i])] for i in range(layer_num)]
     stage_costs_bsz_chunked = get_time_cost_all_stages(timecosts_bsz_chunked, partition)

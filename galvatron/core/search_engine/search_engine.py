@@ -379,6 +379,8 @@ class GalvatronSearchEngine():
                 chunk_list = [self.args.settle_chunk]
             for chunk in chunk_list:
                 results[bsz][chunk] = dict()
+                if bsz % chunk != 0:
+                    continue
                 for min_tp in total_min_tp:
                     results[bsz][chunk][min_tp] = dict()
                     for max_tp in total_max_tp:

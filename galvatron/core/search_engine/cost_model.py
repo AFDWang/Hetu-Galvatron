@@ -287,12 +287,12 @@ class TimeCostModel:
             if self.tp_size == 1:
                 self.per_tp_message_time = 0
             else:
-                if (self.per_tp_message_size//self.tp_size) in self.sp_dict:
-                    self.per_tp_message_time = self.sp_dict[self.per_tp_message_size // self.tp_size]
+                if (self.per_tp_message_size) in self.sp_dict:
+                    self.per_tp_message_time = self.sp_dict[self.per_tp_message_size]
                 else:
                     def linear_func(x, m, c):
                         return m * x + c
-                    self.per_tp_message_time = linear_func( 1 / 1024 / 1024 * self.per_tp_message_size / self.tp_size, *self.sp_dict["popt"] )
+                    self.per_tp_message_time = linear_func( 1 / 1024 / 1024 * self.per_tp_message_size, *self.sp_dict["popt"] )
         else:
             tp_comm_times = 4
             self.tp_message_size = 2*(self.tp_size-1)/self.tp_size*(self.bs*self.sl*self.hs*tp_comm_times*4/1024/1024) * self.layer_num

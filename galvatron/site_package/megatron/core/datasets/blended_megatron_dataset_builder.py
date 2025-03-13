@@ -8,6 +8,7 @@ import numpy
 import torch
 
 from megatron.training import get_args
+from megatron.core import mpu
 from megatron.core.datasets.blended_dataset import BlendedDataset
 from megatron.core.datasets.blended_megatron_dataset_config import BlendedMegatronDatasetConfig
 from megatron.core.datasets.megatron_dataset import LowLevelDataset, MegatronDataset, MockDataset
@@ -32,7 +33,7 @@ def need_to_build_dataset():
     if share_save:
         return rank == 0
     else:
-        return local_rank == 0
+        return mpu.get_tensor_model_parallel_rank() == 0
 
 
 class BlendedMegatronDatasetBuilder(object):

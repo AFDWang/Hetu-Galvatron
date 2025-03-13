@@ -7,6 +7,7 @@ import torch.distributed
 from megatron.core import mpu
 from megatron.core.optimizer.clip_grads import clip_grad_norm_fp32
 from megatron.training.global_vars import rebuild_tokenizer
+from megatron.core.datasets.blended_megatron_dataset_builder import need_to_build_dataset
 from torch import distributed as dist
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp._common_utils import _named_parameters_with_duplicates
@@ -64,7 +65,7 @@ def rhasattr(obj, attr):
 
 
 def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_group):
-    if torch.distributed.get_rank() == 0:
+    if need_to_build_dataset():
         compile_helpers()
     torch.distributed.barrier()
 

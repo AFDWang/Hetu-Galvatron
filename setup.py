@@ -61,6 +61,12 @@ if FLASH_ATTN_INSTALL:
     _deps.append("packaging")
     _deps.append("flash-attn>=2.0.8")
 
+data_files = [
+    (os.path.join('galvatron', 'site_package', 'megatron', 'core', 'datasets'),
+     [os.path.join('galvatron', 'site_package', 'megatron', 'core', 'datasets', 'helpers.cpp'),
+      os.path.join('galvatron', 'site_package', 'megatron', 'core', 'datasets', 'Makefile')])
+]
+
 setup(
     name="hetu-galvatron",
     version="1.0.0",
@@ -87,5 +93,6 @@ setup(
     },
     install_requires=_deps,
     setup_requires=["pybind11>=2.9.1"],
-    ext_modules=[dp_core_ext]
+    ext_modules=[dp_core_ext],
+    data_files=data_files
 )

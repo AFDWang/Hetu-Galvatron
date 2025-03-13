@@ -56,6 +56,8 @@ Galvatron 在搜索空间中包含五个并行维度（`dp` 用于数据并行�
 
 设置 `no_global_memory_buffer` 以禁用使用 Megatron-SP 时全局内存的 all-gather 缓冲区估算。在 Megatron-SP 中，会分配一个缓冲区来存储 all-gather 通信操作的结果。这个内存不会被释放，随着序列长度的增加，这个缓冲区的内存使用量可能会变得很大。
 
+此外，为了加速搜索，我们还提供了并行搜索选项，可以通过开启`parallel_search`启用并行搜索，并使用`worker`参数设置并行搜索的线程数，默认是2xCPU核心数，此外，我们还提供了`log_dir`参数设置搜索日志保存路径。
+
 **`sp_space` 设为 `tp+sp` 与 `tp_consec` 设为 0 不兼容。`tp_consec` 的搜索很少见，我们计划在未来版本中移除它。**
 
 ## 使用 Galvatron 进行训练
@@ -146,7 +148,8 @@ JSON 配置模式是一种**推荐的**逐层混合并行训练模式，通过�
     
     // 词汇并行配置
     "vtp": <vocab_tp_size>,
-    "vsp": <vocab_sp_flag>
+    "vsp": <vocab_sp_flag>,
+    "embed_sdp": <embed_sdp_flag>
 }
 ````
 
@@ -178,6 +181,7 @@ JSON 配置字段按类别组织：
 ### 词表并行
 - `vtp`：词表的张量并行度
 - `vsp`：词表的序列并行标志（0=禁用，1=启用）
+- `embed_sdp`：词表的数据并行策略（0=使用默认并行策略，1=使用zero3）
 
 #### 全局配置模式
 全局配置模式是一种全局混合并行训练模式，通过将参数 `galvatron_config_path` 设为 `None` 来激活。在此模式下，你可以指定 `pp_deg`、`global_tp_deg`、`global_tp_consec`、`sdp`、`global_train_batch_size`、`chunks`、`global_checkpoint`、`pipeline_type` 来确定全局并行策略，Transformer 模型的所有层都使用你指定的相同混合并行策略（就像在 Megatron-LM 中一样）。

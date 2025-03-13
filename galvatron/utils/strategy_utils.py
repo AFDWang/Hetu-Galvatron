@@ -59,20 +59,38 @@ def strategy_str2list(strategy_str):
         re[-1]['sp'] = 1
     return re
 
-def print_strategies(strategy_list):
-    if strategy_list is None or isinstance(strategy_list, str):
-        print(None)
-        return
-    if isinstance(strategy_list[0][0],list):
-        result_list = []
-        for sub_strategy_list in strategy_list:
-            sub_result_list = []
-            for strategy in sub_strategy_list:
-                sub_result_list.append(form_strategy(strategy))
-            result_list.append(', '.join(sub_result_list))
-        print(' || '.join(result_list))
+def print_strategies(strategy_list, logger=None):
+    if logger is None:
+        if strategy_list is None or isinstance(strategy_list, str):
+            print(None)
+            return
+        if isinstance(strategy_list[0][0],list):
+            result_list = []
+            for sub_strategy_list in strategy_list:
+                sub_result_list = []
+                for strategy in sub_strategy_list:
+                    sub_result_list.append(form_strategy(strategy))
+                result_list.append(', '.join(sub_result_list))
+            print(' || '.join(result_list))
+        else:
+            result_list = []
+            for strategy in strategy_list:
+                result_list.append(form_strategy(strategy))
+            print(', '.join(result_list))
     else:
-        result_list = []
-        for strategy in strategy_list:
-            result_list.append(form_strategy(strategy))
-        print(', '.join(result_list))
+        if strategy_list is None or isinstance(strategy_list, str):
+            logger.info(None)
+            return
+        if isinstance(strategy_list[0][0],list):
+            result_list = []
+            for sub_strategy_list in strategy_list:
+                sub_result_list = []
+                for strategy in sub_strategy_list:
+                    sub_result_list.append(form_strategy(strategy))
+                result_list.append(', '.join(sub_result_list))
+            logger.info(' || '.join(result_list))
+        else:
+            result_list = []
+            for strategy in strategy_list:
+                result_list.append(form_strategy(strategy))
+            logger.info(', '.join(result_list))

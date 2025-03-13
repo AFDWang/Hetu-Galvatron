@@ -73,9 +73,9 @@ def galvatron_search_args(parser):
     group.add_argument(
         "--default_dp_type", type=str, default="ddp", help="Default data parallel type", choices=["ddp","zero2"],
     )
-    group.add_argument(
-        "--embed_sdp", type=int, default=0, help="Apply SDP (zero-3) for Embeddings and cls", choices=[0, 1],
-    )
+    # group.add_argument(
+    #     "--embed_sdp", type=int, default=0, help="Apply SDP (zero-3) for Embeddings and cls", choices=[0, 1],
+    # )
     group.add_argument(
         "--mixed_precision", type=str, default="bf16", help="Mixed precision option.", choices=["fp32", "fp16", "bf16"],
     )
@@ -133,5 +133,14 @@ def galvatron_search_args(parser):
     )
     group.add_argument(
         "--memory_profile_mode", type=str, default="static", help="Galvatron profiling mode", choices=["static", "batch", "sequence", "hybrid"]
+    )
+    group.add_argument(
+        "--parallel_search", action="store_true", help="Enable parallel search for faster execution"
+    )
+    group.add_argument(
+        "--worker", type=int, default=0, help="Number of worker threads for parallel search. Default is 2x CPU cores"
+    )
+    group.add_argument(
+        "--log_dir", type=str, default="logs", help="Log directory for search engine."
     )
     return parser

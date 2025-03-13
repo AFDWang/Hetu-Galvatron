@@ -430,6 +430,7 @@ class OtherTimeCostModel:
             allreduce_dict,
             sp_space,
             vsp,
+            embed_sdp,
             min_tp,
             max_tp,
             other_memory_pp_on,
@@ -440,6 +441,7 @@ class OtherTimeCostModel:
         self.sl = sequence_length
         self.hs = hidden_size
         self.vsp = vsp
+        self.embed_sdp = embed_sdp
         self.min_tp = min_tp
         self.max_tp = max_tp
         self.comm_coe_dict = comm_coe_dict
@@ -533,17 +535,23 @@ class OtherTimeCostModel:
                     self.dp_size[k] = (other_memory_pp_on['first_stage']['model_states'][1] / 4, other_memory_pp_on['last_stage']['model_states'][1] / 4)
             k *= 2
 
+        if embed_sdp:
+            self.factor = 1.5
+        else:
+            self.factor = 1.0
+
     def gen_result(self):
         
         other_time_cost = dict()
         k = self.min_tp
         for k in self.dp_size.keys():
             other_time_cost[k] = [0] * self.pp_deg 
+            # TODO: add overlap
             if self.pp_deg  == 1:
-                other_time_cost[k][0] = 0.001 * (self.dp_size[k] * self.dp_coe[k] + self.fct[k] * 3 + self.tp_time[k]) # + 4 * self.sp_time[k] # fwd + bwd
+                other_time_cost[k][0] = 0.001 * (self.dp_size[k] * self.dp_coe[k] * self.factor + self.fct[k] * 3 + self.tp_time[k]) # + 4 * self.sp_time[k] # fwd + bwd
             else:
-                other_time_cost[k][0] = 0.001 * (self.dp_size[k][0] * self.dp_coe[k] + self.fct[k][0] * 3 + self.tp_time[k][0]) # + 2 * self.sp_time[k]
-                other_time_cost[k][-1] = 0.001 * (self.dp_size[k][-1] * self.dp_coe[k] + self.fct[k][-1] * 3 + self.tp_time[k][-1]) # + 2 * self.sp_time[k]
+                other_time_cost[k][0] = 0.001 * (self.dp_size[k][0] * self.dp_coe[k] * self.factor + self.fct[k][0] * 3 + self.tp_time[k][0]) # + 2 * self.sp_time[k]
+                other_time_cost[k][-1] = 0.001 * (self.dp_size[k][-1] * self.dp_coe[k] * self.factor + self.fct[k][-1] * 3 + self.tp_time[k][-1]) # + 2 * self.sp_time[k]
         return other_time_cost
 
 def chunk_like_torch(size, chunks):

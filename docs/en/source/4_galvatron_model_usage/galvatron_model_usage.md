@@ -57,6 +57,8 @@ Set `sp_space` to `tp+sp` / `tp` (default:`tp`) to determine the search space fo
 
 Set `no_global_memory_buffer` to disable the estimation of global memory for all-gather buffer when using Megatron-SP. In Megatron-SP, a buffer is allocated to store the results of all-gather communication operations. This memory is not released, and as the sequence length increases, the memory usage of this buffer can become significant.
 
+Moreover, we provide parallel searching options, which can be enabled by enable `parallel_search` and using `worker` to set the number of threads for parallel searching, default is 2xCPU cores. We also provide `log_dir` to set the path for saving the searching log.
+
 **`sp_space` set to `tp+sp` is incompatible with `tp_consec` set to 0. The search for `tp_consec` is quite uncommon, and we plan to remove it in future versions.**
 
 ## Training with Galvatron
@@ -146,7 +148,8 @@ A hybrid parallel strategy is represented in JSON format as follows:
     
     // Vocabulary parallelism configuration
     "vtp": <vocab_tp_size>,
-    "vsp": <vocab_sp_flag>
+    "vsp": <vocab_sp_flag>,
+    "embed_sdp": <embed_sdp_flag>
 }
 ```
 
@@ -178,6 +181,7 @@ The JSON configuration fields are organized by category:
 ### Vocab Embedding Parallelism
 - `vtp`: Tensor parallelism degree for vocab embedding
 - `vsp`: Vocab embedding sequence parallelism flag (0=disabled, 1=enabled)
+- `embed_sdp`: Vocab embedding data parallelism flag (0=default_dp_type, 1=zero3)
 
 #### GLOBAL Config Mode
 GLOBAL config mode is a global hybrid parallel training mode, activated by assigning argument `galvatron_config_path` as `None`. In this mode, you can specify `pp_deg`, `global_tp_deg`, `global_tp_consec`, `sdp`, `global_train_batch_size`, `chunks`, `global_checkpoint`, `pipeline_type` to determine the global parallelism strategy, and all the layers of the Transformer model uses the same hybrid parallelism strategy assigned by the you (just as in Megatron-LM).

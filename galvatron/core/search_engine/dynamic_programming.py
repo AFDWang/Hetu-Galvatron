@@ -143,7 +143,8 @@ class DpOnModel:
                     mem_cache=True,
                     model_microbatch_after_dp=False,
                     pipeline_type='gpipe',
-                    config = None):
+                    config = None,
+                    logger = None):
         self.strategies_set = strategies_set
         self.memcost_model = memcost_model
         self.timecost_model = timecost_model
@@ -160,6 +161,7 @@ class DpOnModel:
         self.comm_coe_dict = comm_coe_dict
         self.gpu_num = gpu_num
         self.config = config
+        self.logger = logger
         if multi_layer_type:
             # If multi_layer_type == True, layer_num/memcost_model_args/timecost_model_args should be list.
             # e.g. for T5, layer_num = [12, 12], memcost_model_args = [memcost_model_args_enc, memcost_model_args_dec]
@@ -199,7 +201,7 @@ class DpOnModel:
                     return False
         return True
 
-    def _build_dp_and_run_multi_layer_type(self, pp_deg, bsz, mbsz, min_tp, max_tp, vsp, sp_search):
+    def _build_dp_and_run_multi_layer_type(self, pp_deg, bsz, mbsz, min_tp, max_tp, vsp, embed_sdp, sp_search):
         # Look for results in search history
         # history_results = []
         # for i in range(pp_deg):
@@ -236,14 +238,14 @@ class DpOnModel:
                                             self.timecost_model_args[0]['comm_coe_dict'], 
                                             self.timecost_model_args[0]['allreduce_dict'], 
                                             self.timecost_model_args[0]['sp_space'], 
-                                            vsp, min_tp, max_tp, 
+                                            vsp, embed_sdp, min_tp, max_tp, 
                                             self.memcost_model_args[0]['other_memory_pp_on'],
                                             self.memcost_model_args[0]['other_memory_pp_off'],
                                             self.other_time_profiled_list[0]).gen_result()
         if self.pipeline_type == "gpipe":
             v_list = []
             for i in range(len(self.layer_num)):
-                mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
+                mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, vsp = vsp, use_zero3_for_embed = embed_sdp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
                 # TODO: mulitple layer type
                 if i == 0:
                     for k, v in mem_cost_list[0]['other'].items():
@@ -259,7 +261,7 @@ class DpOnModel:
             for stage_idx in range(pp_deg):
                 v_list = []
                 for i in range(len(self.layer_num)):
-                    mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, stage_idx = stage_idx, vsp = vsp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
+                    mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, stage_idx = stage_idx, vsp = vsp, use_zero3_for_embed = embed_sdp, **self.memcost_model_args[i]).get_memory_cost() for strategy in strategy_set]
                     # TODO: mulitple layer type
                     if stage_idx == 0 and i == 0:
                         for k, v in mem_cost_list[0]['other'].items():
@@ -483,7 +485,7 @@ class DpOnModel:
             res_list_list, mem_remain_list, mem_cost_list = None, [-1 for v2 in mem_remain_list], [-1 for v2 in mem_cost_list]
         return comm_cost, res_list_list, mem_remain_list, mem_cost_list, vtp, best_strategy_flag, from_history
 
-    def fit(self, bsz, min_tp, max_tp, vsp, sp_search, print_=True, mbsz_dict=None):
+    def fit(self, bsz, min_tp, max_tp, vsp, embed_sdp, sp_search, print_=True, mbsz_dict=None):
         min_comm_cost = np.inf
         min_res_list = None
         min_pp_deg = -1
@@ -499,21 +501,32 @@ class DpOnModel:
             if pp_deg * min_tp > self.gpu_num:
                 continue
             if print_:
-                print(f'bsz={bsz}, pp_deg={pp_deg}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, sp_search={sp_search}:', flush=True)
+                if self.logger is not None:
+                    self.logger.info(f'bsz={bsz}, pp_deg={pp_deg}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}, sp_search={sp_search}:')
+                else:
+                    print(f'bsz={bsz}, pp_deg={pp_deg}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}, sp_search={sp_search}:', flush=True)
             if bsz % (self.gpu_num//(pp_deg*min_tp)):
                 comm_cost, res_list, mem_remain, mem_cost, best_strategy_flag, from_history = np.inf, None, -1, np.inf, False, False
                 if min_res_list is None:
                     min_res_list = '[current bsz is not divisible by bsz_scale]'
                 if print_:
-                    print('Best strategy:', best_strategy_flag, '\nFrom history:', from_history)
-                    print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
+                    if self.logger is not None:
+                        self.logger.info(f'Best strategy: {best_strategy_flag} \nFrom history: {from_history}')
+                        self.logger.info(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
+                    else:
+                        print(f'Best strategy: {best_strategy_flag} \nFrom history: {from_history}')
+                        print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
                 continue
             assert self.multi_layer_type
-            comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, sp_search)
+            comm_cost, res_list, mem_remain, mem_cost, vtp, best_strategy_flag, from_history = self._build_dp_and_run_multi_layer_type(pp_deg, bsz, mbsz_dict[pp_deg], min_tp, max_tp, vsp, embed_sdp, sp_search)
             mem_cost = [m + self.mem_cache for m in mem_cost] if isinstance(mem_cost, list) else mem_cost + self.mem_cache
             if print_:
-                print('Best strategy:', best_strategy_flag, '\nFrom history:', from_history)
-                print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
+                if self.logger is not None:
+                    self.logger.info(f'Best strategy: {best_strategy_flag} \nFrom history: {from_history}')
+                    self.logger.info(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
+                else:
+                    print(f'Best strategy: {best_strategy_flag} \nFrom history: {from_history}')
+                    print(f'time cost: {comm_cost}, memory remaining: {mem_remain}, memory cost: {mem_cost}')
             if min_comm_cost > comm_cost:
                 min_res_list = res_list
                 min_comm_cost = comm_cost

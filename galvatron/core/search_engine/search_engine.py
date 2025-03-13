@@ -1,5 +1,6 @@
 import os
 import copy
+import logging
 import numpy as np
 from galvatron.utils import (
     read_allreduce_bandwidth_config, 
@@ -16,6 +17,7 @@ from galvatron.utils import (
 from scipy.optimize import curve_fit
 from .cost_model import MemoryCostModel, TimeCostModel, pipeline_costmodel
 from .dynamic_programming import DpOnModel
+from .utils import ensure_log_dir, get_thread_logger
 
 class GalvatronSearchEngine():
     def __init__(self, args):
@@ -326,7 +328,7 @@ class GalvatronSearchEngine():
                     'model_type': self.model_type,
                     'checkpoint': 0 if self.args.disable_ckpt else 1,
                     'use_zero2_for_dp':1 if self.args.default_dp_type == 'zero2' else 0,
-                    'use_zero3_for_embed':self.args.embed_sdp,
+                    # 'use_zero3_for_embed':self.args.embed_sdp,
                     'mixed_precision': False if self.args.mixed_precision == 'fp32' else True,
                     'pipeline_type': self.args.pipeline_type,
                     'disable_vtp': self.args.disable_vtp,
@@ -371,95 +373,158 @@ class GalvatronSearchEngine():
             total_vsp = [1]
             sp_search_speace = [2]
 
-        for bsz in self.BSZs:
-            results[bsz] = dict()
-            chunk_list = range(1,bsz+1)
-            # assert(bsz % self.args.gpu_num == 0), "bdz should be divisible by world size"
-            if self.args.settle_chunk != -1:
-                chunk_list = [self.args.settle_chunk]
-            for chunk in chunk_list:
-                results[bsz][chunk] = dict()
-                if bsz % chunk != 0:
-                    continue
-                for min_tp in total_min_tp:
-                    results[bsz][chunk][min_tp] = dict()
-                    for max_tp in total_max_tp:
-                        if min_tp > max_tp:
-                            continue
-                        results[bsz][chunk][min_tp][max_tp] = dict()
-                        for vsp in total_vsp:
-                            results[bsz][chunk][min_tp][max_tp][vsp] = dict()
+        if self.args.disable_sdp:
+            total_embed_sdp = [0]
+        else:
+            total_embed_sdp = [0, 1]
+
+        def search_for_chunk(bsz, chunk):
+            log_dir = ensure_log_dir(self.args.log_dir)
+            logger = get_thread_logger(bsz, chunk, log_dir)
+            logger.info(f"Starting search for bsz={bsz}, chunk={chunk}")
+            
+            results = dict()
+            for min_tp in total_min_tp:
+                results[min_tp] = dict()
+                for max_tp in total_max_tp:
+                    if min_tp > max_tp:
+                        continue
+                    results[min_tp][max_tp] = dict()
+                    for vsp in total_vsp:
+                        results[min_tp][max_tp][vsp] = dict()
+                        for embed_sdp in total_embed_sdp:
+                            results[min_tp][max_tp][vsp][embed_sdp] = dict()
                             for sp_search in sp_search_speace:
                                 if sp_search == 1 and vsp == 1:
                                     continue
                                 if sp_search == 2 and vsp == 0:
                                     continue
                         
-                                self.strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
-                                self.strategies = [s for s in self.strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
+                                strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
+                                strategies = [s for s in strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
                                 if sp_search == 1:
-                                    self.strategies = [s for s in self.strategies if 'sp' in s[-1] and s[-1]['sp'] == 0]
+                                    strategies = [s for s in strategies if 'sp' in s[-1] and s[-1]['sp'] == 0]
                                 if sp_search == 2:
-                                    self.strategies = [s for s in self.strategies if 'sp' in s[-1] and s[-1]['sp'] == 0]
-                                if len(self.strategies) == 0:
+                                    strategies = [s for s in strategies if 'sp' in s[-1] and s[-1]['sp'] == 0]
+                                if len(strategies) == 0:
                                     continue
                                 
-                                pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
+                                pp_deg_list = sorted(list(set([s[0] for s in strategies])))
                                 
                                 pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
                                 
                                 if len(pp_deg_list) == 0:
                                     continue
                                 
-                                self.strategies = [s for s in self.strategies if s[0] in pp_deg_list]
+                                strategies = [s for s in strategies if s[0] in pp_deg_list]
                                 
                                 mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
                                 for pp in pp_deg_list:
                                     mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
                                 
                                 # strict mode: search chunk must be equal to real chunk 
-                                self.strategies = [s for s in self.strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
+                                strategies = [s for s in strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
                                 
-                                if len(self.strategies) == 0:
+                                if len(strategies) == 0:
                                     continue
 
-                                pp_stage_dict = get_pp_stage_for_bsz(self.strategies, self.memcost_model_args_list, self.layernum_list, bsz, mbsz_dict)
+                                pp_stage_dict = get_pp_stage_for_bsz(strategies, self.memcost_model_args_list, self.layernum_list, bsz, mbsz_dict)
                                 
-                                results[bsz][chunk][min_tp][max_tp][vsp][sp_search] = self.dynamic_programming(bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, sp_search)
-                                min_res_list, min_pp_deg, throughput = results[bsz][chunk][min_tp][max_tp][vsp][sp_search]['min_res_list'], results[bsz][chunk][min_tp][max_tp][vsp][sp_search]['min_pp_deg'], results[bsz][chunk][min_tp][max_tp][vsp][sp_search]['throughput']
-                                if throughput > max_throughput:
-                                    max_throughput = throughput
-                                    optimal_bsz = bsz
-                                    optimal_chunk = chunk
-                                    optimal_min_tp = min_tp
-                                    optimal_max_tp = max_tp
-                                    optimal_vsp = vsp
-                                    optimal_sp_search = sp_search
-                                    optimal_pp_stage_dict = pp_stage_dict
-                                # if min_pp_deg == -1 and min_res_list is None:
-                                #     break
-                                max_bsz = bsz
+                                results[min_tp][max_tp][vsp][embed_sdp][sp_search] = self.dynamic_programming(strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, embed_sdp, sp_search, logger)
+                                results[min_tp][max_tp][vsp][embed_sdp][sp_search]['pp_stage_dict'] = copy.deepcopy(pp_stage_dict)
+                                # min_res_list, min_pp_deg, throughput = results[min_tp][max_tp][vsp][sp_search]['min_res_list'], results[min_tp][max_tp][vsp][sp_search]['min_pp_deg'], results[min_tp][max_tp][vsp][sp_search]['throughput']
+            return results
+        if self.args.parallel_search:
+            import concurrent.futures
+            import threading
+            import time
+    
+            all_tasks = []
+            for bsz in self.BSZs:
+                results[bsz] = dict()
+                chunk_list = range(1, bsz+1)
+                if self.args.settle_chunk != -1:
+                    chunk_list = [self.args.settle_chunk]
+                
+                for chunk in chunk_list:
+                    if bsz % chunk != 0:
+                        continue
+                    results[bsz][chunk] = dict()
+                    all_tasks.append((bsz, chunk))
+            
+            results_lock = threading.Lock()
 
-        print('\nFinal results of max memory %d MB:'%self.memory_constraint)
-        re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp][optimal_vsp][optimal_sp_search]
-        re['vsp'] = optimal_vsp
-        print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Optimal vocab sp = {optimal_vsp} Max throughput={re['throughput']} samples/s")
-        print(f"pp_deg={re['min_pp_deg']} Minimized timecost={re['min_cost']} Memory remaining={re['mem_remain']} Memory cost={re['mem_cost']}")
-        print(f"Min_tp={optimal_min_tp} Max_tp={optimal_max_tp} ")
-        print_strategies(re['min_res_list'])
+
+            import multiprocessing
+            if hasattr(self.args, 'worker') and self.args.worker > 0:
+                num_threads = min(self.args.worker, len(all_tasks))
+            else:
+                num_threads = min(multiprocessing.cpu_count() * 2, len(all_tasks))
+            print(f"Starting parallel search with {num_threads} threads for {len(all_tasks)} tasks...")
+            
+            def process_task(bsz, chunk):
+                thread_id = threading.get_ident() % 1000
+                print(f"[Thread {thread_id:03d}] Start processing: bsz={bsz}, chunk={chunk}")
+
+                chunk_results = search_for_chunk(bsz, chunk)
+                with results_lock:
+                    results[bsz][chunk] = chunk_results
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                futures = [executor.submit(process_task, bsz, chunk) for bsz, chunk in all_tasks]
+                concurrent.futures.wait(futures)
+        else:
+            for bsz in self.BSZs:
+                results[bsz] = dict()
+                chunk_list = range(1,bsz+1)
+                # assert(bsz % self.args.gpu_num == 0), "bdz should be divisible by world size"
+                if self.args.settle_chunk != -1:
+                    chunk_list = [self.args.settle_chunk]
+                for chunk in chunk_list:
+                    results[bsz][chunk] = dict()
+                    if bsz % chunk != 0:
+                        continue
+                    # 多线程搜索
+                    results[bsz][chunk] = search_for_chunk(bsz, chunk)
+
+        for bsz in results:
+            for chunk in results[bsz]:
+                for min_tp in results[bsz][chunk]:
+                    for max_tp in results[bsz][chunk][min_tp]:
+                        for vsp in results[bsz][chunk][min_tp][max_tp]:
+                            for embed_sdp in results[bsz][chunk][min_tp][max_tp][vsp]:
+                                for sp_search in results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp]:
+                                    throughput = results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp][sp_search]['throughput']
+                                    pp_stage_dict = results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp][sp_search]['pp_stage_dict']
+                                    if throughput > max_throughput:
+                                        max_throughput = throughput
+                                        optimal_bsz = bsz
+                                        optimal_chunk = chunk
+                                        optimal_min_tp = min_tp
+                                        optimal_max_tp = max_tp
+                                        optimal_vsp = vsp
+                                        optimal_embed_sdp = embed_sdp
+                                        optimal_sp_search = sp_search
+                                        optimal_pp_stage_dict = pp_stage_dict
+
+        if max_throughput > 0:
+            print('\nFinal results of max memory %d MB:'%self.memory_constraint)
+            re = results[optimal_bsz][optimal_chunk][optimal_min_tp][optimal_max_tp][optimal_vsp][optimal_embed_sdp][optimal_sp_search]
+            re['vsp'] = optimal_vsp
+            re['embed_sdp'] = optimal_embed_sdp
+            print(f"Optimal bsz = {optimal_bsz} Optimal chunk = {optimal_chunk} Optimal vocab tp = {re['vtp']} Optimal vocab sp = {optimal_vsp} Optimal embed sdp = {optimal_embed_sdp} Max throughput={re['throughput']} samples/s")
+            print(f"pp_deg={re['min_pp_deg']} Minimized timecost={re['min_cost']} Memory remaining={re['mem_remain']} Memory cost={re['mem_cost']}")
+            print(f"Min_tp={optimal_min_tp} Max_tp={optimal_max_tp} ")
+            print_strategies(re['min_res_list'])
+            
+            self.save_results(re, optimal_bsz, optimal_chunk, optimal_pp_stage_dict)
+        else:
+            print("No valid configuration found.")
         
-        self.save_results(re, optimal_bsz, optimal_chunk, optimal_pp_stage_dict)
-        
-        # if max_bsz > -1 and max_bsz != optimal_bsz:
-        #     re = results[max_bsz]
-        #     chunk = max(re,key=re.get)
-        #     print(f"\nMax bsz = {max_bsz} Optimal chunk = {chunk} Optimal vocab tp = {re['vtp'] if 'vtp' in re else -1} Max throughput={re[chunk]['throughput']} samples/s")
-        #     print(f"pp_deg={re[chunk]['min_pp_deg']} Minimized timecost={re[chunk]['min_cost']} Memory remaining={re[chunk]['mem_remain']} Memory cost={re[chunk]['mem_cost']}")
-        #     print_strategies(re[chunk]['min_res_list'])
         print("-----------------------------------------")
         print('='*25, 'Galvatron Search Engine End Searching','='*25)
 
-        return re['throughput']
+        return max_throughput
 
     def set_searching_bsz(self):
         args = self.args
@@ -521,10 +586,10 @@ class GalvatronSearchEngine():
             bsz += scale
         return max_bsz
 
-    def dynamic_programming(self, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, sp_search):
+    def dynamic_programming(self, strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, embed_sdp, sp_search, logger):
         args = self.args
-        print('bsz=%d'%bsz, pp_stage_dict)
-        dp_on_model = DpOnModel(self.strategies, 
+        logger.info(f'bsz={bsz} {pp_stage_dict}')
+        dp_on_model = DpOnModel(strategies, 
                                 MemoryCostModel, 
                                 TimeCostModel, 
                                 memcost_model_args=self.memcost_model_args_list,
@@ -540,18 +605,19 @@ class GalvatronSearchEngine():
                                 gpu_num=args.gpu_num,
                                 model_microbatch_after_dp=args.use_pipeline_costmodel,
                                 pipeline_type=args.pipeline_type,
-                                config = self.args)
+                                config = self.args,
+                                logger=logger)
         
-        print("****Searching with bsz=", bsz, " chunk=", chunk, " min_tp =", min_tp, " max_tp =", max_tp, "****")
-        chunk_dict = check_optimal_chunks(args.gpu_num, self.strategies, self.optimal_chunk_func, bsz, mbsz_dict, min_tp)
-        print('Chunk_dict for bsz %d: '%bsz, chunk_dict)
-        print('Mbsz_dict for bsz %d'%bsz, mbsz_dict)
+        logger.info(f"****Searching with bsz={bsz} chunk={chunk} min_tp={min_tp} max_tp={max_tp} vsp={vsp} embed_sdp={embed_sdp} sp_search={sp_search}****")
+        chunk_dict = check_optimal_chunks(args.gpu_num, strategies, self.optimal_chunk_func, bsz, mbsz_dict, min_tp)
+        logger.info(f'Chunk_dict for bsz {bsz}: {chunk_dict}')
+        logger.info(f'Mbsz_dict for bsz {bsz}: {mbsz_dict}')
         
-        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_vtp = dp_on_model.fit(bsz, min_tp, max_tp, vsp, sp_search, mbsz_dict = mbsz_dict)
+        min_cost, min_res_list, min_pp_deg, mem_remain, mem_cost, min_vtp = dp_on_model.fit(bsz, min_tp, max_tp, vsp, embed_sdp, sp_search, mbsz_dict = mbsz_dict)
         throughput = bsz / min_cost
-        print(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Min tp={min_tp} Max tp={max_tp} Vocab tp={min_vtp} Vocab sp={vsp}")
-        print(f"Max throughput={throughput} samples/s")
-        print_strategies(min_res_list)
+        logger.info(f"[Optimal pp_deg={min_pp_deg}] Minimized timecost={min_cost} Memory remaining={mem_remain} Memory cost={mem_cost} Vocab tp={min_vtp}")
+        logger.info(f"Max throughput={throughput} samples/s")
+        print_strategies(min_res_list, logger)
         # print(min_res_list)
         result = {'min_cost': min_cost, 'min_res_list': min_res_list, 'min_pp_deg': min_pp_deg, 
                         'mem_remain': mem_remain, 'mem_cost': mem_cost, 'throughput': throughput, "vtp": min_vtp}
@@ -577,8 +643,9 @@ class GalvatronSearchEngine():
             config['default_dp_type'] = args.default_dp_type
             config['vtp'] = re['vtp']
             config['vsp'] = re['vsp']
-            if args.embed_sdp:
-                config['embed_sdp'] = 1
+            config['embed_sdp'] = re['embed_sdp']
+            # if args.embed_sdp:
+            #     config['embed_sdp'] = 1
             
             mixed_precision = '_%s'%args.mixed_precision
             settle_bsz = '_bsz%d'%args.settle_bsz if args.settle_bsz > 0 else ''
@@ -833,8 +900,8 @@ class GalvatronSearchEngine():
         print('Pipeline Type:', self.args.pipeline_type)
         print('Default DP Type:', self.args.default_dp_type)
         print('Mixed Precision:', self.args.mixed_precision)
-        if self.args.embed_sdp:
-            print('Embedding SDP: ON')
+        # if self.args.embed_sdp:
+        #     print('Embedding SDP: ON')
         print('Search Space:')
         print_strategies(self.strategies)
         print('================================================================================')

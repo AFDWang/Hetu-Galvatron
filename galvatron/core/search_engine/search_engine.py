@@ -378,61 +378,53 @@ class GalvatronSearchEngine():
         else:
             total_embed_sdp = [0, 1]
 
-        def search_for_chunk(bsz, chunk):
-            log_dir = ensure_log_dir(self.args.log_dir)
-            logger = get_thread_logger(bsz, chunk, log_dir)
-            logger.info(f"Starting search for bsz={bsz}, chunk={chunk}")
-            
-            results = dict()
-            for min_tp in total_min_tp:
-                results[min_tp] = dict()
-                for max_tp in total_max_tp:
-                    if min_tp > max_tp:
-                        continue
-                    results[min_tp][max_tp] = dict()
-                    for vsp in total_vsp:
-                        results[min_tp][max_tp][vsp] = dict()
-                        for embed_sdp in total_embed_sdp:
-                            results[min_tp][max_tp][vsp][embed_sdp] = dict()
-                            for sp_search in sp_search_speace:
-                                if sp_search == 1 and vsp == 1:
-                                    continue
-                                if sp_search == 2 and vsp == 0:
-                                    continue
-                        
-                                strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
-                                strategies = [s for s in strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
-                                if sp_search == 1:
-                                    strategies = [s for s in strategies if 'sp' in s[-1] and s[-1]['sp'] == 0]
-                                if sp_search == 2:
-                                    strategies = [s for s in strategies if 'sp' in s[-1] and s[-1]['sp'] == 0]
-                                if len(strategies) == 0:
-                                    continue
-                                
-                                pp_deg_list = sorted(list(set([s[0] for s in strategies])))
-                                
-                                pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
-                                
-                                if len(pp_deg_list) == 0:
-                                    continue
-                                
-                                strategies = [s for s in strategies if s[0] in pp_deg_list]
-                                
-                                mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
-                                for pp in pp_deg_list:
-                                    mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
-                                
-                                # strict mode: search chunk must be equal to real chunk 
-                                strategies = [s for s in strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
-                                
-                                if len(strategies) == 0:
-                                    continue
+        def search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp):
+            log_dir = self.args.log_dir + '/%s_%dnodes_%dgpus_%dGB'%(self.model_name, self.args.num_nodes, self.args.num_gpus_per_node, self.memory_constraint//1024)
+            log_dir = ensure_log_dir(log_dir)
+            logger = get_thread_logger(bsz, chunk, min_tp, max_tp, vsp, embed_sdp, log_dir)
+            logger.info(f"Starting search for bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}")
 
-                                pp_stage_dict = get_pp_stage_for_bsz(strategies, self.memcost_model_args_list, self.layernum_list, bsz, mbsz_dict)
-                                
-                                results[min_tp][max_tp][vsp][embed_sdp][sp_search] = self.dynamic_programming(strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, embed_sdp, sp_search, logger)
-                                results[min_tp][max_tp][vsp][embed_sdp][sp_search]['pp_stage_dict'] = copy.deepcopy(pp_stage_dict)
-                                # min_res_list, min_pp_deg, throughput = results[min_tp][max_tp][vsp][sp_search]['min_res_list'], results[min_tp][max_tp][vsp][sp_search]['min_pp_deg'], results[min_tp][max_tp][vsp][sp_search]['throughput']
+            results = dict()
+            
+            for sp_search in sp_search_speace:
+                if sp_search == 1 and vsp == 1:
+                    continue
+                if sp_search == 2 and vsp == 0:
+                    continue
+        
+                strategies = [s for s in temp_strategies if min_tp <= s[1] and max_tp >= s[1]]
+                strategies = [s for s in strategies if chunk <= bsz // (self.args.gpu_num // s[0] // min_tp) ]
+                if sp_search == 1:
+                    strategies = [s for s in strategies if 'sp' not in s[-1] or ('sp' in s[-1] and s[-1]['sp'] == 0)]
+                if sp_search == 2:
+                    strategies = [s for s in strategies if 'sp' not in s[-1] or ('sp' in s[-1] and s[-1]['sp'] == 1)]
+                if len(strategies) == 0:
+                    continue
+                
+                pp_deg_list = sorted(list(set([s[0] for s in strategies])))
+                
+                pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
+                
+                if len(pp_deg_list) == 0:
+                    continue
+                
+                strategies = [s for s in strategies if s[0] in pp_deg_list]
+                
+                mbsz_dict = dict() # calc micro batch size in different pp size when tp = min_tp
+                for pp in pp_deg_list:
+                    mbsz_dict[pp] = (bsz // (self.args.gpu_num // pp // min_tp) + chunk - 1) // chunk
+                
+                # strict mode: search chunk must be equal to real chunk 
+                strategies = [s for s in strategies if chunk == (bsz // (self.args.gpu_num // s[0] // min_tp) + mbsz_dict[s[0]] - 1) // mbsz_dict[s[0]]]
+                
+                if len(strategies) == 0:
+                    continue
+
+                pp_stage_dict = get_pp_stage_for_bsz(strategies, self.memcost_model_args_list, self.layernum_list, bsz, mbsz_dict)
+                
+                results[sp_search] = self.dynamic_programming(strategies, bsz, chunk, mbsz_dict, pp_stage_dict, min_tp, max_tp, vsp, embed_sdp, sp_search, logger)
+                results[sp_search]['pp_stage_dict'] = copy.deepcopy(pp_stage_dict)
+                # min_res_list, min_pp_deg, throughput = results[min_tp][max_tp][vsp][sp_search]['min_res_list'], results[min_tp][max_tp][vsp][sp_search]['min_pp_deg'], results[min_tp][max_tp][vsp][sp_search]['throughput']
             return results
         if self.args.parallel_search:
             import concurrent.futures
@@ -450,7 +442,17 @@ class GalvatronSearchEngine():
                     if bsz % chunk != 0:
                         continue
                     results[bsz][chunk] = dict()
-                    all_tasks.append((bsz, chunk))
+                    for min_tp in total_min_tp:
+                        results[bsz][chunk][min_tp] = dict()
+                        for max_tp in total_max_tp:
+                            if min_tp > max_tp:
+                                continue
+                            results[bsz][chunk][min_tp][max_tp] = dict()
+                            for vsp in total_vsp:
+                                results[bsz][chunk][min_tp][max_tp][vsp] = dict()
+                                for embed_sdp in total_embed_sdp:
+                                    results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = dict()
+                                    all_tasks.append((bsz, chunk, min_tp, max_tp, vsp, embed_sdp))
             
             results_lock = threading.Lock()
 
@@ -462,16 +464,16 @@ class GalvatronSearchEngine():
                 num_threads = min(multiprocessing.cpu_count() * 2, len(all_tasks))
             print(f"Starting parallel search with {num_threads} threads for {len(all_tasks)} tasks...")
             
-            def process_task(bsz, chunk):
+            def process_task(bsz, chunk, min_tp, max_tp, vsp, embed_sdp):
                 thread_id = threading.get_ident() % 1000
-                print(f"[Thread {thread_id:03d}] Start processing: bsz={bsz}, chunk={chunk}")
+                print(f"[Thread {thread_id:03d}] Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}", flush=True)
 
-                chunk_results = search_for_chunk(bsz, chunk)
+                chunk_results = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp)
                 with results_lock:
-                    results[bsz][chunk] = chunk_results
+                    results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = copy.deepcopy(chunk_results)
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-                futures = [executor.submit(process_task, bsz, chunk) for bsz, chunk in all_tasks]
+                futures = [executor.submit(process_task, bsz, chunk, min_tp, max_tp, vsp, embed_sdp) for bsz, chunk, min_tp, max_tp, vsp, embed_sdp in all_tasks]
                 concurrent.futures.wait(futures)
         else:
             for bsz in self.BSZs:
@@ -484,8 +486,16 @@ class GalvatronSearchEngine():
                     results[bsz][chunk] = dict()
                     if bsz % chunk != 0:
                         continue
-                    # 多线程搜索
-                    results[bsz][chunk] = search_for_chunk(bsz, chunk)
+                    for min_tp in total_min_tp:
+                        results[bsz][chunk][min_tp] = dict()
+                        for max_tp in total_max_tp:
+                            if min_tp > max_tp:
+                                continue
+                            results[bsz][chunk][min_tp][max_tp] = dict()
+                            for vsp in total_vsp:
+                                results[bsz][chunk][min_tp][max_tp][vsp] = dict()
+                                for embed_sdp in total_embed_sdp:
+                                    results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp)
 
         for bsz in results:
             for chunk in results[bsz]:

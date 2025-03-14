@@ -431,8 +431,8 @@ class DpOnModel:
                     global_memory = global_memory / 2
             else:
                 global_memory = 0
-            if sp_search != 1:
-                global_memory += 8192 # reserved memory for efficient all2all communication
+            # if sp_search != 1:
+            #     global_memory += 8192 # reserved memory for efficient all2all communication
             nw_other_mem_cost = {k:v[i] + int(global_memory) for k,v in other_mem_cost.items()}
             nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
             mem_cost = {k:0 for k,v in other_time_cost.items()}

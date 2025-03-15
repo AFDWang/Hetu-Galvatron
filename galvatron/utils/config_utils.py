@@ -104,6 +104,8 @@ def remap_config(config, op):
     remap_config = {}
     for key, val in config.items():
         if key.startswith(op):
+            if op == "allreduce":
+                val /= 2 # trans to all_gather / reduce_scatter time
             split = key.split("_")
             world_size, size = int(split[-3]), int(split[-2][:-2])
             if world_size in remap_config:

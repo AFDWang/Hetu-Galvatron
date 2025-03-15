@@ -687,8 +687,10 @@ class GalvatronSearchEngine():
     def check_cost_model(self, bsz, chunk, min_tp):
         memory = [[] for _ in range(self.num_layertype)]
         memory_total = [[] for _ in range(self.num_layertype)]
-
-        pp_deg_list = sorted(list(set([s[0] for s in self.strategies])))
+        strategies = copy.deepcopy(self.strategies)
+        strategies = [s for s in strategies if s[1] >= min_tp]
+        print(strategies)
+        pp_deg_list = sorted(list(set([s[0] for s in strategies])))
         
         pp_deg_list = [pp for pp in pp_deg_list if pp * min_tp <= self.args.gpu_num and bsz % (self.args.gpu_num // pp // min_tp) == 0]
                     
@@ -699,7 +701,7 @@ class GalvatronSearchEngine():
         other = []
         for i in range(self.num_layertype):
             memcost_model_args, timecost_model_args, layer_num = self.memcost_model_args_list[i], self.timecost_model_args_list[i], self.layernum_list[i]
-            for strategy in self.strategies:
+            for strategy in strategies:
                 re = MemoryCostModel(strategy, global_batch_size=bsz, mbsz = mbsz_dict[strategy[0]], min_tp = min_tp, **memcost_model_args).get_memory_cost()
                 re_total = re['enc_total']*layer_num/strategy[0]
                 print(form_strategy(strategy), re['enc_total'], re['other'], [re_total + re_other for re_other in re['other'][min_tp]])
@@ -709,7 +711,7 @@ class GalvatronSearchEngine():
                     other.append(re['other'])
             print()
         # print(other)
-        for i, strategy in enumerate(self.strategies):
+        for i, strategy in enumerate(strategies):
             if strategy[0]==1:
                 print(form_strategy(strategy), np.sum([memory_total[j][i] for j in range(self.num_layertype)])+other[i][min_tp][0])
             else:
@@ -720,9 +722,9 @@ class GalvatronSearchEngine():
         
         print()
         if self.num_layertype == 1:
-            for strategy in self.strategies:
+            for strategy in strategies:
                 other_time_cost = {}
-                n_gpu = self.strategies[0][0] * self.strategies[0][1] * self.strategies[0][2]
+                n_gpu = strategies[0][0] * strategies[0][1] * strategies[0][2]
                 for k, v in other[0].items():
                     other_time_cost[k] = [0] * strategy[0]
                     
@@ -751,7 +753,6 @@ class GalvatronSearchEngine():
                 res = []
                 for i in self.layernum_list:
                     res += [strategy for _ in range(i)]
-                
                 # print(other_time_cost[1])
                 pipeline_cost = pipeline_costmodel(TimeCostModel,
                                                     self.layernum_list,
@@ -766,7 +767,7 @@ class GalvatronSearchEngine():
         else:
             if self.num_layertype > 1:
                 assert False, "Not implemented with multi-layertype"
-                for i, strategy in enumerate(self.strategies):
+                for i, strategy in enumerate(strategies):
                     print(form_strategy(strategy), np.sum([timecost_total[j][i] for j in range(self.num_layertype)]))
         
     # =============== Strategies & Search Space Utils ===============

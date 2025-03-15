@@ -38,15 +38,15 @@ def strategy_str2list(strategy_str):
         s[2] = s[2][:-1]
     else:
         fsdp = 0
-    if len(s) >= 4 and s[3] == 'c':
-        cpt = 1
-    else:
-        cpt = 0
+    cpt = 0
+    sp = 0
+    if len(s) >= 4:
+        if s[3] == 'c':
+            cpt = 1
+        if s[3] == 'sp':
+            sp = 1
     if len(s) >= 5 and s[4] == 'sp':
         sp = 1
-    else:
-        sp = 0
-    
     pp_deg, tp_deg, dp_deg = int(s[0]), int(s[1]), int(s[2])
     re = [pp_deg, tp_deg, dp_deg, {}]
     if tp_deg > 1 and dp_deg > 1:

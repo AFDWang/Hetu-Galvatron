@@ -16,6 +16,7 @@ solve_process = None
 mp_manager = mp.Manager()
 solved_globalbatch_gps =mp_manager.list()
 flexSP_optimizer = None
+prev_batch = None
 
 def solve_target(seqs, shared_globalbatch_gps):
     args = get_args()
@@ -79,7 +80,7 @@ def set_seed():
     
 
 def collate_fn(batch):
-    global is_first_iter, solve_process, solved_globalbatch_gps
+    global is_first_iter, solve_process, solved_globalbatch_gps, prev_batch
     max_len = max([len(seq) for seq in batch])
     world_size = torch.distributed.get_world_size()
     max_len = ((max_len - 1) // world_size + 1) * world_size
@@ -104,6 +105,7 @@ def collate_fn(batch):
                 solve_process.start()
             if is_first_iter:
                 is_first_iter = False
+                prev_batch = batch
                 return None
             
             # flexSP_results = flexSP_optimizer.solve_flexSP_bucket_seqs(seqs, bucket_num = 10)
@@ -148,9 +150,8 @@ def collate_fn(batch):
                         seqs_ = [j.item() for j in seq_ids_]
                         microbatch_group.append((sp_size_.item(), seqs_))
                 batch_indices, sp_group = convert_microbatch_res(microbatch_group)
-                m_batch = [batch[idx] for idx in batch_indices]
+                m_batch = [prev_batch[idx] for idx in batch_indices]
                 args.sp_groups.append(sp_group)
-                seqlens = [seqs[idx].seq for idx in batch_indices]
                 # if torch.distributed.get_rank(sp_group) == 0:
                 #     print(f"sp_group ranks:{torch.distributed.get_process_group_ranks(sp_group)} micro_batch_rank: {n_mbatch}, \tallocated_seqs: {seqlens}, \ttot_seqlens:{sum(seqlens)}, \tsp_size: {torch.distributed.get_world_size(sp_group)}")
                 torch.distributed.barrier()
@@ -160,6 +161,7 @@ def collate_fn(batch):
                     cu_seqlens[_] = cu_seqlens[_-1] + len(m_batch[_ - 1])
                 m_batch = torch.concat(m_batch)
                 microbatches.append([[m_batch, cu_seqlens]])
+            prev_batch = batch
             return microbatches
         else:
             cu_seqlens = torch.empty(len(batch)+1, dtype=torch.int64)

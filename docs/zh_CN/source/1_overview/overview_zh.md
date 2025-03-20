@@ -6,7 +6,7 @@ Galvatron 是一个为 Transformer 模型（包括大语言模型 LLMs）设计�
 ### (1) 通过自动并行提升效率
 
 #### 扩展的并行搜索空间
-整合了分布式训练中多个流行的并行维度，包括 DP（数据并行）、SDP（分片数据并行，支持 ZeRO-2 和 ZeRO-3）、PP（流水线并行，支持 GPipe 和 Pipedream-flush / 1F1B-flush）、TP（张量并行）、SP（序列并行，支持 Megatron-SP 和 Deepspeed-Ulysses）。同时将 CKPT（激活检查点）作为一个特殊的并行维度。
+整合了分布式训练中多个流行的并行维度，包括 DP（数据并行）、SDP（分片数据并行，支持 ZeRO-1, ZeRO-2 和 ZeRO-3）、PP（流水线并行，支持 GPipe 和 Pipedream-flush / 1F1B-flush）、TP（张量并行）、SP（序列并行，支持 Megatron-SP 和 Deepspeed-Ulysses）。同时将 CKPT（激活检查点）作为一个特殊的并行维度。
 
 #### 细粒度混合并行
 Galvatron的混合并行方法代表了分布式训练优化的重大进步。系统不采用统一的策略，而是实现了层级并行化，允许每个transformer层使用独立的并行策略组合。这种精细的方法通过适应每一层特定的计算和内存需求，确保了最佳的资源利用。

@@ -1,3 +1,5 @@
+<div align=center> <img src="./figs/Galvatron.png" width="800" /> </div>
+
 # Galvatron-2
 
 [![GitHub License](https://img.shields.io/github/license/PKU-DAIR/Hetu-Galvatron)](https://github.com/PKU-DAIR/Hetu-Galvatron/blob/main/LICENSE)
@@ -8,7 +10,7 @@
 ![visitors](https://visitor-badge.laobi.icu/badge?page_id=PKU-DAIR.Hetu-Galvatron)
 [![CodeCov](https://codecov.io/gh/PKU-DAIR/Hetu-Galvatron/branch/main/graph/badge.svg)](https://codecov.io/gh/PKU-DAIR/Hetu-Galvatron)
 
-[Galvatron Documents](https://hetu-galvatron.readthedocs.io)
+[Galvatron Documents](https://hetu-galvatron.readthedocs.io) | [Galvatron 中文文档](https://hetu-galvatron.readthedocs.io/zh_CN/)
 
 Galvatron is an automatic distributed training system designed for Transformer models, including Large Language Models (LLMs). It leverages advanced automatic parallelism techniques to deliver exceptional training efficiency. This repository houses the official implementation of Galvatron-2, our latest version enriched with several new features.
 
@@ -16,7 +18,7 @@ Galvatron is an automatic distributed training system designed for Transformer m
 ### (1) Enhanced Efficiency via Automatic Parallelism
 
 #### Enlarged Parallelism Search Space
-Incorporate multiple popular parallelism dimensions of distributed training, including DP (Data Parallelism), SDP (Sharded Data Parallelism, support both ZeRO-2 & ZeRO-3), PP (Pipeline Parallelism, support both GPipe & Pipedream-flush / 1F1B-flush), TP (Tensor Parallelism), SP (Sequence Parallelism, support Megatron-SP and Deepspeed-Ulysses). Also incorporate CKPT (Activation Checkpointing) as a special parallelism dimension.
+Incorporate multiple popular parallelism dimensions of distributed training, including DP (Data Parallelism), SDP (Sharded Data Parallelism, support ZeRO-1, ZeRO-2 and ZeRO-3), PP (Pipeline Parallelism, support both GPipe & Pipedream-flush / 1F1B-flush), TP (Tensor Parallelism), SP (Sequence Parallelism, support Megatron-SP and Deepspeed-Ulysses). Also incorporate CKPT (Activation Checkpointing) as a special parallelism dimension.
 
 #### Fine-grained Hybrid Parallelism
 Galvatron's approach to hybrid parallelism represents a significant advancement in distributed training optimization. Rather than applying a one-size-fits-all strategy, the system enables layer-wise parallelization, allowing each transformer layer to utilize an independent combination of parallel strategies. This granular approach ensures optimal resource utilization by adapting to the specific computational and memory requirements of each layer.
@@ -61,7 +63,7 @@ Through this modular design, Galvatron achieves a balance between automation and
 
 ## Installation
 Requirements:
-- PyTorch > 2.0.1
+- PyTorch >= 2.1.0
 
 To install Galvatron:
 
@@ -80,8 +82,7 @@ To use FlashAttention-2 features in Galvatron-2, you can either:
 GALVATRON_FLASH_ATTN_INSTALL=TRUE pip install hetu-galvatron
 ```
 
-
-## Usage
+## Quick Start
 
 ### Profiling with Galvatron
 The first step to use Galvatron is to profile the hardware environment and the model computation time. Galvatron will automatically save the profiled results into config files.
@@ -118,3 +119,72 @@ sh scripts/train_dist.sh
 ```
 
 See detailed guidance and more customized training options in [Galvatron Model Usage](galvatron/models/README.md#training-with-galvatron).
+
+## Enterprise Users
+
+<table>
+  <tr>
+    <td><img src="./figs/huawei.png" width="100" /></td>
+    <td><a href="https://www.huawei.com/en/">Huawei</a></td>
+  </tr>
+  <tr>
+    <td><img src="./figs/zte.png" width="100" /></td>
+    <td><a href="https://www.zte.com.cn/global/index.html">ZTE</a></td>
+  </tr>
+  <tr>
+    <td><img src="./figs/alibaba.png" width="100" /></td>
+    <td><a href="https://www.alibabagroup.com/en-US/">Alibaba</a></td>
+  </tr>
+  <tr>
+    <td><img src="./figs/bytedance.png" width="100" /></td>
+    <td><a href="https://www.bytedance.com/en/">ByteDance</a></td>
+  </tr>
+  <tr>
+  
+  
+
+</table>
+
+## Upcoming Features
+
+Check our [release plan](https://github.com/PKU-DAIR/Hetu-Galvatron/issues/14) for upcoming features.
+
+## Feedback
+
+[Fill an issue](https://github.com/PKU-DAIR/Hetu-Galvatron/issues) or contact us via Xinyi Liu, xy.liu@stu.pku.edu.cn, Yujie Wang, alfredwang@pku.edu.cn, or Shenhan Zhu, 
+shenhan.zhu@pku.edu.cn.
+
+## Related Publications
+
+**Galvatron: Efficient transformer training over multiple gpus using automatic parallelism.**
+Xupeng Miao, Yujie Wang, Youhe Jiang, Chunan Shi, Xiaonan Nie, Hailin Zhang, Bin Cui; VLDB 2023, CCF-A. [[paper](https://www.vldb.org/pvldb/vol16/p470-miao.pdf)] [[arxiv](https://arxiv.org/abs/2211.13878)]
+
+**Improving automatic parallel training via balanced memory workload optimization.**
+Yujie Wang, Youhe Jiang, Xupeng Miao, Fangcheng Fu, Shenhan Zhu, Xiaonan Nie, Yaofeng Tu, Bin Cui; TKDE 2024, CCF-A. [[paper](https://www.computer.org/csdl/journal/tk/2024/08/10449463/1USuxtStYVG)] [[arxiv](https://arxiv.org/abs/2307.02031)]
+
+**FlexSP: Accelerating Large Language Model Training via Flexible Sequence Parallelism**
+Yujie Wang, Shiju Wang, Shenhan Zhu, Fangcheng Fu, Xinyi Liu, Xuefeng Xiao, Huixia Li, Jiashi Li, Faming Wu, Bin Cui; ASPLOS 2025, CCF-A. [[arxiv](https://arxiv.org/abs/2412.01523)]
+
+## Citing
+
+If you use Galvatron in your research, please cite the following paper:
+
+```
+@article{DBLP:journals/pvldb/MiaoWJSNZ022,
+  author       = {Xupeng Miao and
+                  Yujie Wang and
+                  Youhe Jiang and
+                  Chunan Shi and
+                  Xiaonan Nie and
+                  Hailin Zhang and
+                  Bin Cui},
+  title        = {Galvatron: Efficient Transformer Training over Multiple GPUs Using
+                  Automatic Parallelism},
+  journal      = {Proc. {VLDB} Endow.},
+  volume       = {16},
+  number       = {3},
+  pages        = {470--479},
+  year         = {2022},
+  url          = {https://www.vldb.org/pvldb/vol16/p470-miao.pdf},
+}
+```

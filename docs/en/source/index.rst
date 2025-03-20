@@ -54,7 +54,7 @@ Supported Parallelism Strategies
 +========================+==================+========================+
 | Data Parallelism (DP)  | Basic            | Traditional DP         |
 +------------------------+------------------+------------------------+
-| Sharded DP (SDP)       | Memory-Efficient | ZeRO-2, ZeRO-3         |
+| Sharded DP (SDP)       | Memory-Efficient | ZeRO-1, ZeRO-2, ZeRO-3 |
 +------------------------+------------------+------------------------+
 | Pipeline (PP)          | Model Split      | GPipe, 1F1B-flush      |
 +------------------------+------------------+------------------------+

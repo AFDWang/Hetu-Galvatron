@@ -4,9 +4,9 @@ from galvatron.core import construct_hybrid_parallel_model_api, get_hybrid_paral
 from galvatron.models.bert_hf.BertModel_sequential import BertModelInfo, construct_sequential_model, BertEmbeddings_,BertMLMCls_
 from galvatron.models.bert_hf.BertModel_tensor_parallel import construct_tensor_parallel_model, BertLayer_tp
 from galvatron.models.bert_hf.BertModel_checkpoint import load_bert_module
-from galvatron.core import get_args
+from galvatron.core import get_args, RuntimeProfiler
 from galvatron.core.runtime.initialize import init_empty_weights
-from galvatron.models.bert_hf.meta_configs import config_from_meta, set_model_config
+from galvatron.models.bert_hf.meta_configs import config_from_meta,  model_name, set_model_config, model_layer_configs
 
 def get_hybrid_parallel_configs(model_config, training_args):
     hybrid_parallel_configs = get_hybrid_parallel_configs_api(
@@ -77,9 +77,9 @@ def bert_model_hp(config, args):
     )
     return model
 
-    def get_runtime_profiler(args, path, config, start_iter=10, end_iter=20):
-        profiler = RuntimeProfiler(args)
-        profiler.set_profiler_dist(
-            path, model_layer_configs(config), model_name(config), start_iter=start_iter, end_iter=end_iter
-        )
-        return profiler
+def get_runtime_profiler(args, path, config, start_iter=10, end_iter=20):
+    profiler = RuntimeProfiler(args)
+    profiler.set_profiler_dist(
+        path, model_layer_configs(config), model_name(config), start_iter=start_iter, end_iter=end_iter
+    )
+    return profiler

@@ -489,6 +489,8 @@ class GalvatronSearchEngine():
                             for vsp in total_vsp:
                                 results[bsz][chunk][min_tp][max_tp][vsp] = dict()
                                 for embed_sdp in total_embed_sdp:
+                                    print(f"Start processing: bsz={bsz}, chunk={chunk}, min_tp={min_tp}, max_tp={max_tp}, vsp={vsp}, embed_sdp={embed_sdp}", flush=True)
+
                                     results[bsz][chunk][min_tp][max_tp][vsp][embed_sdp] = search_for_chunk(bsz, chunk, min_tp, max_tp, vsp, embed_sdp)
 
         for bsz in results:

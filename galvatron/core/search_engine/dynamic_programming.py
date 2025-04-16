@@ -232,12 +232,12 @@ class DpOnModel:
                 intra_layer_cost = [self.timecost_model(strategy, bsz/chunks[i],
                                                         model_args=self.model_args_list[i], train_args=self.train_args_list[i],
                                                         parallel_args=self.parallel_args_list[i], profile_model_args=self.profile_model_args_list[i],
-                                                        profile_hardware_args=self.profile_hardware_args_list[i]).gen_result() for strategy in strategy_set]
+                                                        profile_hardware_args=self.profile_hardware_args_list[i], logger=self.logger).gen_result() for strategy in strategy_set]
             else:
                 intra_layer_cost = [self.timecost_model(strategy, bsz, 
                                                         model_args=self.model_args_list[i], train_args=self.train_args_list[i],
                                                         parallel_args=self.parallel_args_list[i], profile_model_args=self.profile_model_args_list[i],
-                                                        profile_hardware_args=self.profile_hardware_args_list[i]).gen_result() for strategy in strategy_set]
+                                                        profile_hardware_args=self.profile_hardware_args_list[i], logger=self.logger).gen_result() for strategy in strategy_set]
             intra_layer_cost = np.array(intra_layer_cost, dtype=np.float64).reshape(1, -1).repeat(self.layer_num[i], axis=0)
             intra_layer_cost_list.append(intra_layer_cost)
 
@@ -250,13 +250,13 @@ class DpOnModel:
                                             train_args=self.train_args_list[0],
                                             parallel_args=self.parallel_args_list[0],
                                             profile_model_args=self.profile_model_args_list[0],
-                                            profile_hardware_args=self.profile_hardware_args_list[0]).gen_result()
+                                            profile_hardware_args=self.profile_hardware_args_list[0], logger=self.logger).gen_result()
         if self.pipeline_type == "gpipe":
             v_list = []
             for i in range(len(self.layer_num)):
                 mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, max_tp = max_tp, vsp = vsp, embed_sdp = embed_sdp, 
                                                     model_args=self.model_args_list[i], train_args=self.train_args_list[i], parallel_args=self.parallel_args_list[i], 
-                                                    profile_model_args=self.profile_model_args_list[i]).get_memory_cost() for strategy in strategy_set]
+                                                    profile_model_args=self.profile_model_args_list[i], logger=self.logger).get_memory_cost() for strategy in strategy_set]
                 # TODO: mulitple layer type
                 if i == 0:
                     for k, v in mem_cost_list[0]['other'].items():
@@ -274,7 +274,7 @@ class DpOnModel:
                 for i in range(len(self.layer_num)):
                     mem_cost_list = [self.memcost_model(strategy, bsz, mbsz = mbsz, min_tp = min_tp, max_tp = max_tp, stage_idx = stage_idx, vsp = vsp, embed_sdp = embed_sdp,
                                                         model_args=self.model_args_list[i], train_args=self.train_args_list[i], parallel_args=self.parallel_args_list[i], 
-                                                        profile_model_args=self.profile_model_args_list[i]).get_memory_cost() for strategy in strategy_set]
+                                                        profile_model_args=self.profile_model_args_list[i], logger=self.logger).get_memory_cost() for strategy in strategy_set]
                     # TODO: mulitple layer type
                     if stage_idx == 0 and i == 0:
                         for k, v in mem_cost_list[0]['other'].items():
@@ -389,8 +389,8 @@ class DpOnModel:
                     else:
                         global_memory = 0
                     nw_other_mem_cost = {k:v[i] + int(global_memory) for k,v in other_mem_cost.items()}
-                    nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
-                    mem_cost = {k:0 for k,v in other_time_cost.items()}
+                    nw_other_time_cost = {k:v[i] for k,v in other_time_cost[0].items()}
+                    mem_cost = {k:0 for k,v in other_time_cost[0].items()}
                     dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], 1, local_strategy_set, self.config.fine_grained_mode)
                     if self.pipeline_type == "pipedream_flush":
                         v = v_list_stage_idx[i]
@@ -413,7 +413,7 @@ class DpOnModel:
                     mem_cost_list.append(mem_cost)
                     start_layer += pp_stage_list[i]
                 
-                for k in other_time_cost.keys():
+                for k in other_time_cost[0].keys():
                     nw_res_list_list = [v2[k] for v2 in res_list_list]
                     nw_comm_cost_list = [v2[k] for v2 in comm_cost_list]
                     if self.model_microbatch_after_dp:
@@ -421,7 +421,7 @@ class DpOnModel:
                             res_list = []
                             for res in nw_res_list_list:
                                 res_list += res
-                            pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.profile_hardware_args_list, res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[k])
+                            pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.profile_hardware_args_list, res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[1][k], self.logger)
                             # print(sum(comm_cost_list),pipeline_cost)
                             # print(pp_stage_list, res_list_list)
                             if final_comm_cost > pipeline_cost:
@@ -447,8 +447,8 @@ class DpOnModel:
             # if sp_search != 1:
             #     global_memory += 8192 # reserved memory for efficient all2all communication
             nw_other_mem_cost = {k:v[i] + int(global_memory) for k,v in other_mem_cost.items()}
-            nw_other_time_cost = {k:v[i] for k,v in other_time_cost.items()}
-            mem_cost = {k:0 for k,v in other_time_cost.items()}
+            nw_other_time_cost = {k:v[i] for k,v in other_time_cost[0].items()}
+            mem_cost = {k:0 for k,v in other_time_cost[0].items()}
             dp = DPAlg(self.max_mem, nw_other_mem_cost, nw_other_time_cost, pp_stage_list[i], strategy_num, strategy_set, self.config.fine_grained_mode)
             if self.pipeline_type == "pipedream_flush":
                 v = v_list_stage_idx[i]
@@ -474,7 +474,7 @@ class DpOnModel:
             start_layer += pp_stage_list[i]
         comm_cost = np.inf
         vtp = -1
-        for k in other_time_cost.keys():
+        for k in other_time_cost[0].keys():
             nw_res_list_list = [v2[k] for v2 in res_list_list]
             nw_comm_cost_list = [v2[k] for v2 in comm_cost_list]
             if self.model_microbatch_after_dp:
@@ -482,7 +482,7 @@ class DpOnModel:
                     res_list = []
                     for res in nw_res_list_list:
                         res_list += res
-                    pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.profile_hardware_args_list, res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[k])
+                    pipeline_cost = pipeline_costmodel(self.timecost_model, self.layer_num, self.model_args_list, self.train_args_list, self.parallel_args_list, self.profile_model_args_list, self.profile_hardware_args_list, res_list, pp_stage_list, chunks, bsz, min_tp, other_time_cost[1][k], self.logger)
                     # print(sum(comm_cost_list),pipeline_cost)
                     # print(pp_stage_list, res_list_list)
                     if comm_cost > pipeline_cost:

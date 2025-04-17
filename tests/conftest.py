@@ -103,3 +103,10 @@ def profiler_hardware_configs_dir(tmp_path: Path) -> Path:
     os.makedirs(scripts_dir, exist_ok=True)
     return tmp_path
 
+@pytest.fixture
+def base_log_dirs(tmp_path: Path) -> str:
+    """Create and return log directories"""
+    log_dir = tmp_path / "logs"
+    os.makedirs(log_dir, exist_ok=True)
+    return str(log_dir)
+

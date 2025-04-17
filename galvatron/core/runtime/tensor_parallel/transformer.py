@@ -651,34 +651,34 @@ class ParallelAttention(MegatronModule):
             tp_group=tp_group,
         )
 
-    def _checkpointed_attention_forward(self, query_layer, key_layer, value_layer, attention_mask, rotary_pos_emb=None):
-        """Forward method with activation checkpointing."""
+    # def _checkpointed_attention_forward(self, query_layer, key_layer, value_layer, attention_mask, rotary_pos_emb=None):
+    #     """Forward method with activation checkpointing."""
 
-        def custom_forward(*inputs):
-            query_layer = inputs[0]
-            key_layer = inputs[1]
-            value_layer = inputs[2]
-            attention_mask = inputs[3]
-            output_ = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
-            return output_
+    #     def custom_forward(*inputs):
+    #         query_layer = inputs[0]
+    #         key_layer = inputs[1]
+    #         value_layer = inputs[2]
+    #         attention_mask = inputs[3]
+    #         output_ = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
+    #         return output_
 
-        q_pos_emb, k_pos_emb = (None, None) if rotary_pos_emb is None else rotary_pos_emb
+    #     q_pos_emb, k_pos_emb = (None, None) if rotary_pos_emb is None else rotary_pos_emb
 
-        hidden_states = tensor_parallel.checkpoint(
-            custom_forward, False, query_layer, key_layer, value_layer, attention_mask, q_pos_emb, k_pos_emb
-        )
+    #     hidden_states = tensor_parallel.checkpoint(
+    #         custom_forward, False, query_layer, key_layer, value_layer, attention_mask, q_pos_emb, k_pos_emb
+    #     )
 
-        return hidden_states
+    #     return hidden_states
 
-    def _allocate_memory(self, inference_max_sequence_len, batch_size, num_attention_heads):
-        return torch.empty(
-            inference_max_sequence_len,
-            batch_size,
-            num_attention_heads,
-            self.hidden_size_per_attention_head,
-            dtype=self.params_dtype,
-            device=torch.cuda.current_device(),
-        )
+    # def _allocate_memory(self, inference_max_sequence_len, batch_size, num_attention_heads):
+    #     return torch.empty(
+    #         inference_max_sequence_len,
+    #         batch_size,
+    #         num_attention_heads,
+    #         self.hidden_size_per_attention_head,
+    #         dtype=self.params_dtype,
+    #         device=torch.cuda.current_device(),
+    #     )
 
     def forward(self, hidden_states, attention_mask, encoder_output=None, inference_params=None, rotary_pos_emb=None):
         # hidden_states: [sq, b, h]
@@ -687,24 +687,24 @@ class ParallelAttention(MegatronModule):
         # Pre-allocate memory for key-values for inference.
         # =================================================
         is_first_step = False
-        if inference_params:
-            if self.layer_number not in inference_params.key_value_memory_dict:
-                inf_max_seq_len = inference_params.max_sequence_length
-                inf_max_batch_size = inference_params.max_batch_size
-                inference_key_memory = self._allocate_memory(
-                    inf_max_seq_len, inf_max_batch_size, self.num_query_groups_per_partition
-                )
-                inference_value_memory = self._allocate_memory(
-                    inf_max_seq_len, inf_max_batch_size, self.num_query_groups_per_partition
-                )
+        # if inference_params:
+        #     if self.layer_number not in inference_params.key_value_memory_dict:
+        #         inf_max_seq_len = inference_params.max_sequence_length
+        #         inf_max_batch_size = inference_params.max_batch_size
+        #         inference_key_memory = self._allocate_memory(
+        #             inf_max_seq_len, inf_max_batch_size, self.num_query_groups_per_partition
+        #         )
+        #         inference_value_memory = self._allocate_memory(
+        #             inf_max_seq_len, inf_max_batch_size, self.num_query_groups_per_partition
+        #         )
 
-                inference_params.key_value_memory_dict[self.layer_number] = (
-                    inference_key_memory,
-                    inference_value_memory,
-                )
-                is_first_step = True
-            else:
-                inference_key_memory, inference_value_memory = inference_params.key_value_memory_dict[self.layer_number]
+        #         inference_params.key_value_memory_dict[self.layer_number] = (
+        #             inference_key_memory,
+        #             inference_value_memory,
+        #         )
+        #         is_first_step = True
+        #     else:
+        #         inference_key_memory, inference_value_memory = inference_params.key_value_memory_dict[self.layer_number]
 
         # =====================
         # Query, Key, and Value
@@ -783,38 +783,38 @@ class ParallelAttention(MegatronModule):
             else:
                 rotary_pos_emb = (rotary_pos_emb,) * 2
 
-        if inference_params:
-            batch_start = inference_params.batch_size_offset
-            batch_end = batch_start + key_layer.size(1)
-            assert batch_end <= inference_key_memory.size(1)
-            sequence_start = inference_params.sequence_len_offset
-            sequence_end = sequence_start + key_layer.size(0)
-            assert sequence_end <= inference_key_memory.size(0)
-            # Copy key and values.
-            inference_key_memory[sequence_start:sequence_end, batch_start:batch_end, ...] = key_layer
-            inference_value_memory[sequence_start:sequence_end, batch_start:batch_end, ...] = value_layer
-            key_layer = inference_key_memory[:sequence_end, batch_start:batch_end, ...]
-            value_layer = inference_value_memory[:sequence_end, batch_start:batch_end, ...]
+        # if inference_params:
+        #     batch_start = inference_params.batch_size_offset
+        #     batch_end = batch_start + key_layer.size(1)
+        #     assert batch_end <= inference_key_memory.size(1)
+        #     sequence_start = inference_params.sequence_len_offset
+        #     sequence_end = sequence_start + key_layer.size(0)
+        #     assert sequence_end <= inference_key_memory.size(0)
+        #     # Copy key and values.
+        #     inference_key_memory[sequence_start:sequence_end, batch_start:batch_end, ...] = key_layer
+        #     inference_value_memory[sequence_start:sequence_end, batch_start:batch_end, ...] = value_layer
+        #     key_layer = inference_key_memory[:sequence_end, batch_start:batch_end, ...]
+        #     value_layer = inference_value_memory[:sequence_end, batch_start:batch_end, ...]
 
-            # adjust the key rotary positional embedding
-            if rotary_pos_emb is not None:
-                q_pos_emb, k_pos_emb = rotary_pos_emb
-                # need to cross check this condition during inference
-                # if not set_inference_key_value_memory:
-                if not is_first_step:
-                    # In inference, we compute one token at a time.
-                    # Select the correct positional embedding
-                    # (only the last token in the sequence)
-                    q_pos_emb = q_pos_emb[sequence_end - 1 : sequence_end]
-                else:
-                    # In the first forward pass of inference,
-                    # we use the entire provided prefix.
-                    # q_pos_emb here has the rope embeddings of the entire
-                    # prefix + to-be-generated output so
-                    # we slice to just the prefix.
-                    q_pos_emb = q_pos_emb[:sequence_end, :, :, :]
-                k_pos_emb = k_pos_emb[:sequence_end, :, :, :]
-                rotary_pos_emb = (q_pos_emb, k_pos_emb)
+        #     # adjust the key rotary positional embedding
+        #     if rotary_pos_emb is not None:
+        #         q_pos_emb, k_pos_emb = rotary_pos_emb
+        #         # need to cross check this condition during inference
+        #         # if not set_inference_key_value_memory:
+        #         if not is_first_step:
+        #             # In inference, we compute one token at a time.
+        #             # Select the correct positional embedding
+        #             # (only the last token in the sequence)
+        #             q_pos_emb = q_pos_emb[sequence_end - 1 : sequence_end]
+        #         else:
+        #             # In the first forward pass of inference,
+        #             # we use the entire provided prefix.
+        #             # q_pos_emb here has the rope embeddings of the entire
+        #             # prefix + to-be-generated output so
+        #             # we slice to just the prefix.
+        #             q_pos_emb = q_pos_emb[:sequence_end, :, :, :]
+        #         k_pos_emb = k_pos_emb[:sequence_end, :, :, :]
+        #         rotary_pos_emb = (q_pos_emb, k_pos_emb)
 
         # ==================================
         # core attention computation

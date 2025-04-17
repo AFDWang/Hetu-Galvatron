@@ -71,4 +71,6 @@ class SearchArgs:
         self.sp_time_path: str = None
         self.output_config_path: str = None
 
+        self.log_dir: str = "logs"
+        self.parallel_search: bool = False
 

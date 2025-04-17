@@ -608,7 +608,7 @@ def write_hardware_config(
     with open(hardware_dir / f"sp_time_{num_nodes}nodes_{gpus_per_node}gpus_per_node.json", "w") as f:
         json.dump(hw_configs["sp"], f)
 
-def initialize_search_engine(base_config_dirs, model_type, backend, time_mode = "static", memory_mode = "static", sp_enabled = False, seqlen_list = None, **kwargs):
+def initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backend, time_mode = "static", memory_mode = "static", sp_enabled = False, seqlen_list = None, **kwargs):
     """Initialize search engine"""
     configs_dir, hardware_dir, output_dir = base_config_dirs
 
@@ -618,6 +618,7 @@ def initialize_search_engine(base_config_dirs, model_type, backend, time_mode = 
     config_json = ConfigFactory.get_config_json(model_type)
     args.model_size = config_json
     args.local_rank = 0
+    args.log_dir = base_log_dirs
     config = ModelFactory.create_config(model_type, backend, args)
 
     # Set profiling paths and modes

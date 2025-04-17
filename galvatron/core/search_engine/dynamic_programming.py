@@ -303,11 +303,13 @@ class DpOnModel:
                         case3 = (world_size == 8 and strategy_set[i][1] == 4 and strategy_set[j][1] == 2 \
                             and strategy_set[j][-1]['tp'] != strategy_set[i][-1]['tp'])
                     sample_num = self.sequence_len[idx] * self.config.hidden_size * (4 if self.config.mixed_precision == "fp32" else 2)
-                    if case1 or case2 or case3:
-                        inter_layer_cost[i, j] = (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / 2
-                    if self.config.sequence_parallel:
-                        if strategy_set[j][1] != strategy_set[i][1]:
-                            inter_layer_cost[i, j] += (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / strategy_set[j][1] / 2
+                    case4 = self.config.sequence_parallel and strategy_set[j][1] != strategy_set[i][1]
+                    if case1 or case2 or case3 or case4:
+                        nw_max_tp = max(strategy_set[j][1], strategy_set[i][1])
+                        inter_layer_cost[i, j] = (nw_max_tp-1) / nw_max_tp * mbsz * (nw_max_tp // min_tp) * sample_num
+                    # if self.config.sequence_parallel:
+                    #     if strategy_set[j][1] != strategy_set[i][1]:
+                    #         inter_layer_cost[i, j] += (strategy_set[j][1]-1) / strategy_set[j][1] * mbsz * sample_num / strategy_set[j][1] / 2
 
                 # if case1 or case2 or case3:
                 #      ratio = strategy_set[j][1]
@@ -317,17 +319,21 @@ class DpOnModel:
             # find corresponding communication coefficient
             for i in range(strategy_num):
                 for j in range(strategy_num):
-                    tp_size, dp_size = strategy_set[j][1], strategy_set[j][2]
+                    tp_size, dp_size = max(strategy_set[j][1], strategy_set[i][1]), min(strategy_set[j][2], strategy_set[i][2])
                     if tp_size == 1 or dp_size == 1:
                         coe = self.comm_coe_dict['%d'%tp_size] if '%d'%tp_size in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%tp_size]
                     else:
                         # In this case, strategy[-1]['tp'] represents tp_consecutive_flag
-                        info = strategy_set[j][-1]
+                        if strategy_set[j][1] > strategy_set[i][1]:
+                            info = strategy_set[j][-1]
+                        else:
+                            info = strategy_set[i][-1]
                         assert 'tp' in info.keys() and info['tp'] in [0, 1]
                         if info['tp']:
                             coe = self.comm_coe_dict['%d_1'%tp_size]
                         else:
                             coe = self.comm_coe_dict['%d_0'%tp_size]
+                    # Expand communication cost
                     inter_layer_cost[i, j] = inter_layer_cost[i, j] * coe * 1e-7
 
                     # add a small bias to sort fsdp and dp
@@ -467,6 +473,14 @@ class DpOnModel:
                     res_list[k] = list(map(lambda x: strategy_set[x], res_list[k]))
                 mem_cost[k] = self.max_mem - mem_remain[k] if mem_remain[k] >= 0 else np.inf
                 
+                # if res_list[k] is not None:
+                #     if self.config.sequence_parallel and res_list[k][0][1] != k: # vsp != first layer tp
+                #         sample_num = self.sequence_len[0] * self.config.hidden_size * (4 if self.config.mixed_precision == "fp32" else 2)
+                #         nw_max_tp = max(res_list[k][0][1], k)
+                #         comm_num = (nw_max_tp-1) / nw_max_tp * mbsz * (nw_max_tp // min_tp) * sample_num
+                #         coe = self.comm_coe_dict['%d'%nw_max_tp] if '%d'%nw_max_tp in self.comm_coe_dict.keys() else self.comm_coe_dict['%d_1'%nw_max_tp]
+                #         comm_cost[k] += comm_num * coe * 1e-7
+                        
             comm_cost_list.append(comm_cost)
             res_list_list.append(res_list)
             mem_remain_list.append(mem_remain)

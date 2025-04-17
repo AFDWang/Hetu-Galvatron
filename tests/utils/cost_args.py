@@ -8,6 +8,7 @@ from tests.utils.search_configs import (
 )
 from galvatron.core.search_engine.search_engine import optimal_chunk_func_default
 from galvatron.utils.config_utils import read_allreduce_bandwidth_config, read_p2p_bandwidth_config, remap_config
+from galvatron.core.search_engine.cost_model_args import ModelArgs, TrainArgs, ParallelArgs, ProfileModelArgs, ProfileHardwareArgs
 
 @dataclass
 class MemoryModelArgs:
@@ -115,3 +116,53 @@ class TimeModelArgs:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+def create_model_args_from_dict(config_dict):
+    """Create model args from dict
+    
+    Args:
+        config_dict: A dictionary containing configuration parameters
+    
+    Returns:
+        tuple: (model_args, train_args, parallel_args, profile_model_args, profile_hardware_args)
+    """
+    # Create parameter objects
+    model_args = ModelArgs()
+    train_args = TrainArgs()
+    parallel_args = ParallelArgs()
+    profile_model_args = ProfileModelArgs()
+    profile_hardware_args = ProfileHardwareArgs()
+    
+    # ModelArgs's parameter list
+    model_args_keys = ['parameter_size', 'seq_length', 'hidden_size', 'layer_num']
+    
+    # TrainArgs's parameter list
+    train_args_keys = ['mixed_precision', 'checkpoint', 'async_grad_reduce', 'pytorch_context_mem']
+    
+    # ParallelArgs's parameter list
+    parallel_args_keys = ['use_zero2_for_dp', 'disable_vtp', 'sequence_parallel', 'sp_space', 
+                          'pipeline_type', 'optimal_chunk_func', 'chunks']
+    
+    # ProfileModelArgs's parameter list
+    profile_model_args_keys = ['tp_activation_per_bsz_dict', 'other_memory_pp_off', 
+                               'other_memory_pp_on', 'forward_computation_time', 'other_time_profiled']
+    
+    # ProfileHardwareArgs's parameter list
+    profile_hardware_args_keys = ['bct_fct_coe', 'extra_overhead', 'comm_coe_dict', 'dp_overlap_coe',
+                                 'bct_overlap_coe', 'p2p_comm_coe_dict', 'allreduce_dict', 
+                                 'all2all_dict', 'costmodel_coe']
+    
+    # Assign parameters to the corresponding objects
+    for key, value in config_dict.items():
+        if key in model_args_keys:
+            setattr(model_args, key, value)
+        elif key in train_args_keys:
+            setattr(train_args, key, value)
+        elif key in parallel_args_keys:
+            setattr(parallel_args, key, value)
+        elif key in profile_model_args_keys:
+            setattr(profile_model_args, key, value)
+        elif key in profile_hardware_args_keys:
+            setattr(profile_hardware_args, key, value)
+    
+    return model_args, train_args, parallel_args, profile_model_args, profile_hardware_args

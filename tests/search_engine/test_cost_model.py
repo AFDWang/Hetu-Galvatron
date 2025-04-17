@@ -1,9 +1,9 @@
 import pytest
 import numpy as np
-from galvatron.core.search_engine.cost_model import MemoryCostDecoupleModel as MemoryCostModel
-from galvatron.core.search_engine.cost_model import TimeCostDecoupleModel as TimeCostModel
-from galvatron.core.search_engine.cost_model import OtherTimeCostDecoupleModel as OtherTimeCostModel
-from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs
+from galvatron.core.search_engine.cost_model import MemoryCostModel
+from galvatron.core.search_engine.cost_model import TimeCostModel
+from galvatron.core.search_engine.cost_model import OtherTimeCostModel
+from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs, create_model_args_from_dict
 
 @pytest.fixture
 def memory_model_args():
@@ -123,9 +123,28 @@ def test_memory_cost_model(memory_model_args, strategy, config_updates, expected
 
     config_updates['mbsz'] = 2
     config_updates['min_tp'] = 1
+    config_updates['max_tp'] = 8
     args = memory_model_args.with_updates(**config_updates)
+    
+    # Convert config_updates to model parameter object
+    model_args, train_args, parallel_args, profile_model_args, _ = create_model_args_from_dict(args.__dict__)
 
-    model = MemoryCostModel(strategy=strategy, **args.__dict__)
+    print(args, profile_model_args)
+    
+    model = MemoryCostModel(
+        strategy=strategy, 
+        global_batch_size=args.__dict__.get('global_batch_size', 8),
+        mbsz=args.__dict__.get('mbsz', -1),
+        min_tp=args.__dict__.get('min_tp', -1),
+        max_tp=args.__dict__.get('max_tp', -1),
+        stage_idx=args.__dict__.get('stage_idx', 0),
+        vsp=args.__dict__.get('vsp', 0),
+        embed_sdp=args.__dict__.get('embed_sdp', False),
+        model_args=model_args,
+        train_args=train_args,
+        parallel_args=parallel_args,
+        profile_model_args=profile_model_args
+    )
     costs = model.get_memory_cost()
     
     # Basic structure check
@@ -138,6 +157,7 @@ def test_memory_cost_model(memory_model_args, strategy, config_updates, expected
     
     # Verify pipeline stages
     if 'pp_stages' in expected:
+        print(costs)
         assert len(costs['other'][1]) == expected['pp_stages']
     
     # Verify checkpoint related calculations
@@ -296,8 +316,24 @@ def test_time_cost_model(time_model_args, strategy, config_updates, expected):
     # Update base parameters
     args = time_model_args.with_updates(**config_updates)
     
-    # Create model
-    model = TimeCostModel(strategy=strategy, **args.__dict__)
+    # Convert config_updates to model parameter object
+    model_args, train_args, parallel_args, profile_model_args, profile_hardware_args = create_model_args_from_dict(args.__dict__)
+    
+    # Extract global_batch_size and no_comm parameters
+    global_batch_size = args.__dict__.get('global_batch_size', 8)
+    no_comm = args.__dict__.get('no_comm', False)
+    
+    # Create model instance
+    model = TimeCostModel(
+        strategy=strategy,
+        global_batch_size=global_batch_size,
+        no_comm=no_comm,
+        model_args=model_args,
+        train_args=train_args,
+        parallel_args=parallel_args,
+        profile_model_args=profile_model_args,
+        profile_hardware_args=profile_hardware_args
+    )
     result = model.gen_result()
     
     # Basic checks
@@ -517,9 +553,38 @@ def test_other_time_cost_model(base_other_time_args, config_updates, expected):
     # Update configuration
     args = {**base_other_time_args, **config_updates}
     
-    # Create model
-    model = OtherTimeCostModel(**args)
-    result = model.gen_result()
+    # Convert config_updates to model parameter object
+    model_args, train_args, parallel_args, profile_model_args, profile_hardware_args = create_model_args_from_dict(args)
+    
+    # Fix parameter names
+    if 'sequence_length' in args:
+        sequence_length_list = args['sequence_length']
+    else:
+        sequence_length_list = [512]
+        
+    if 'other_time_profiled_list' in args:
+        profile_model_args.other_time_profiled = args['other_time_profiled_list']
+    
+    # Create model instance
+    model = OtherTimeCostModel(
+        mbsz=args.get('mbsz', 1),
+        pp_deg=args.get('pp_deg', 2),
+        world_size=args.get('world_size', 8),
+        vsp=args.get('vsp', False),
+        embed_sdp=args.get('embed_sdp', False),
+        min_tp=args.get('min_tp', 1),
+        max_tp=args.get('max_tp', 8),
+        sequence_length_list=sequence_length_list,
+        model_args=model_args,
+        train_args=train_args,
+        parallel_args=parallel_args,
+        profile_model_args=profile_model_args,
+        profile_hardware_args=profile_hardware_args
+    )
+    
+    # OtherTimeCostModel.gen_result() returns two values
+    other_time_cost, _ = model.gen_result()
+    result = other_time_cost
     
     # Basic checks
     assert isinstance(result, dict)

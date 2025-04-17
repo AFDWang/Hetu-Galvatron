@@ -11,7 +11,7 @@ from tests.utils.search_configs import (
     (0, "llama_search", "hf", "sequence", "sequence", True, 64, 32, 36, [8192], "tp+sp", 1),
     (1, "llama_search", "hf", "sequence", "sequence", True, 64, 8, 36, [8192], "tp+sp", 0),
 ])
-def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode, memory_mode, sp_enabled, settle_bsz, settle_chunk, memory_constraint, seqlen_list, sp_space, fine_grained_mode):
+def test_basic_search_flow(base_config_dirs, base_log_dirs, idx, model_type, backend, time_mode, memory_mode, sp_enabled, settle_bsz, settle_chunk, memory_constraint, seqlen_list, sp_space, fine_grained_mode):
     
     kwargs = {
         "settle_bsz": settle_bsz,
@@ -25,14 +25,14 @@ def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode
         "fine_grained_mode": fine_grained_mode,
     }
 
-    search_engine = initialize_search_engine(base_config_dirs, model_type, backend, time_mode, memory_mode, sp_enabled, seqlen_list, **kwargs)
+    search_engine = initialize_search_engine(base_config_dirs, base_log_dirs, model_type, backend, time_mode, memory_mode, sp_enabled, seqlen_list, **kwargs)
     
 
     
     throughput = search_engine.parallelism_optimization()
 
     if idx == 0:
-        assert abs(throughput - 2.5578320019881313) < 1e-6
+        assert abs(throughput - 2.8074257503114315) < 1e-6
 
         output_dir = base_config_dirs[2]
         json_files = glob.glob(os.path.join(output_dir, '*.json'))
@@ -55,17 +55,18 @@ def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode
         for field in expected_fields:
             assert field in config, f"Missing field: {field}"
 
-        assert config["pp_deg"] == 2
+        assert config["pp_deg"] == 1
         assert config["global_bsz"] == 64
         assert config["chunks"] == 32
-        assert config["pp_division"] == "14,14"
+        assert config["pp_division"] == "28"
         assert config["pipeline_type"] == "pipedream_flush"
         assert config["default_dp_type"] == "zero2"
-        assert config["vtp"] == 2
+        assert config["vtp"] == 8
         assert config["vsp"] == 0
+        assert config["embed_sdp"] == 0
 
         array_fields = {
-            "tp_sizes_enc": "4",
+            "tp_sizes_enc": "8",
             "tp_consecutive_flags": "1",
             "dp_types_enc": "0",
             "use_sp": "0"
@@ -78,10 +79,10 @@ def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode
 
         checkpoint_values = config["checkpoint"].split(',')
         assert len(checkpoint_values) == 28
-        expected_checkpoint = "1,1,1,1,1,1,1,1,1,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0"
+        expected_checkpoint = "1,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
         assert config["checkpoint"] == expected_checkpoint
     else:
-        assert abs(throughput - 2.5077387851394093) < 1e-6
+        assert abs(throughput - 2.5234175303522344) < 1e-6
 
         output_dir = base_config_dirs[2]
         json_files = glob.glob(os.path.join(output_dir, '*.json'))
@@ -112,6 +113,7 @@ def test_basic_search_flow(base_config_dirs, idx, model_type, backend, time_mode
         assert config["default_dp_type"] == "zero2"
         assert config["vtp"] == 1
         assert config["vsp"] == 0
+        assert config["embed_sdp"] == 1
 
         array_fields = {
             "tp_sizes_enc": "1",

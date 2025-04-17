@@ -16,7 +16,7 @@ class MemoryCostModel:
     }
     
     def __init__(self, 
-                stategy, 
+                strategy, 
                 global_batch_size:int = 8, 
                 mbsz: int = -1, 
                 min_tp: int = -1, 
@@ -30,7 +30,7 @@ class MemoryCostModel:
                 profile_model_args: ProfileModelArgs = None,
                 logger:Logger = None):
         
-        self.__post_init__(stategy, global_batch_size, mbsz, min_tp, max_tp, stage_idx, vsp, embed_sdp, model_args, train_args, parallel_args, profile_model_args, logger)
+        self.__post_init__(strategy, global_batch_size, mbsz, min_tp, max_tp, stage_idx, vsp, embed_sdp, model_args, train_args, parallel_args, profile_model_args, logger)
         self.initialize()
         self.estimate_parameter_size()
         self.estimate_model_states_size()
@@ -38,7 +38,7 @@ class MemoryCostModel:
         self.estimate_other_memory_cost()
         
     
-    def __post_init__(self, stategy, global_batch_size: int = 8, mbsz: int = -1, min_tp: int = -1, max_tp: int = -1, stage_idx: int = 0, vsp: int = 0, embed_sdp: bool = False,
+    def __post_init__(self, strategy, global_batch_size: int = 8, mbsz: int = -1, min_tp: int = -1, max_tp: int = -1, stage_idx: int = 0, vsp: int = 0, embed_sdp: bool = False,
                         model_args: ModelArgs = None, train_args:TrainArgs = None, parallel_args: ParallelArgs = None, profile_model_args: ProfileModelArgs = None, logger:Logger = None):
         # validate arguments
         assert mbsz > -1, f'Invalid mbsz: {mbsz}'
@@ -47,7 +47,7 @@ class MemoryCostModel:
 
         # Aggregate all arguments
         self.args = SimpleNamespace()
-        self.args.strategy = stategy
+        self.args.strategy = strategy
         self.args.global_batch_size = global_batch_size
         self.args.mbsz = mbsz
         self.args.min_tp = min_tp
@@ -579,14 +579,14 @@ class OtherTimeCostModel:
                 if isinstance(args.other_time_profiled ,np.ndarray):
                     self.fct[k] = linear_func(args.mbsz / args.min_tp, *args.other_time_profiled)
                 else:
-                    self.fct[k] = args.mbsz / args.min_tp * k * args.other_time_profiled
+                    self.fct[k] = args.mbsz / args.min_tp * args.other_time_profiled
             else:
                 if isinstance(args.other_time_profiled, np.ndarray):
                     self.fct[k] = (linear_func(args.mbsz / args.min_tp, *args.other_time_profiled) / 2, \
                                 linear_func(args.mbsz / args.min_tp, *args.other_time_profiled) / 2)
                 else:
-                    self.fct[k] = (args.mbsz / args.min_tp * k * args.other_time_profiled / 2, \
-                                args.mbsz / args.min_tp * k * args.other_time_profiled / 2)
+                    self.fct[k] = (args.mbsz / args.min_tp * args.other_time_profiled / 2, \
+                                args.mbsz / args.min_tp * args.other_time_profiled / 2)
             k *= 2
     
     def estimate_dp_time(self):
@@ -626,7 +626,6 @@ class OtherTimeCostModel:
 
     # In new vesion, we assume that comm overlap_coe(bct_overlap_coe)=1, so we only need to calculate comp overlap time
     def get_overlap_time(self, forward_comm_time, forward_comp_time, backward_comm_time, backward_comp_time, tp_time):
-        self.logger.info(f"forward_comp_time: {forward_comp_time}, forward_comm_time: {forward_comm_time}, backward_comp_time: {backward_comp_time}, backward_comm_time: {backward_comm_time}, tp_time: {tp_time}")
         forward_comp_time = forward_comp_time * self.args.dp_overlap_coe
         backward_comp_time = backward_comp_time * self.args.dp_overlap_coe
         if forward_comp_time > forward_comm_time:

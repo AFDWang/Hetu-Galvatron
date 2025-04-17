@@ -969,7 +969,7 @@ def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_
     model_args_list, train_args_list= [copy.deepcopy(model_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(train_args_list[i]) for i in range(len(layer_num))]
     parallel_args_list, profile_model_args_list = [copy.deepcopy(parallel_args_list[i]) for i in range(len(layer_num))], [copy.deepcopy(profile_model_args_list[i]) for i in range(len(layer_num))]
     for i in range(len(parallel_args_list)):
-        parallel_args_list[i]['pipeline_type'] = 'gpipe'
+        parallel_args_list[i].pipeline_type = 'gpipe'
     assert(len(model_args_list) == len(layer_num) and len(train_args_list) == len(layer_num) and len(parallel_args_list) == len(layer_num) and len(profile_model_args_list) == len(layer_num))
     if pp_deg == 1:
         return [np.sum(layer_num)], None
@@ -982,10 +982,10 @@ def pp_division_memory_balanced(model_args_list, train_args_list, parallel_args_
     for i in range(layer_type_num):
         # memcosts = [MemoryCostModel(strategy, global_batch_size=bsz, model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total'] for strategy in strategies]
         # layer_min_memcost.append(np.min(memcosts))
-        memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1,
+        memcost = MemoryCostModel([pp_deg, 1, gpu_num//pp_deg, {}], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
                                   model_args=model_args_list[i], train_args=train_args_list[i], parallel_args=parallel_args_list[i], profile_model_args=profile_model_args_list[i]).get_memory_cost()['enc_total']
         layer_min_memcost.append(np.min(memcost))
-    other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, 
+    other_cost = MemoryCostModel(strategies[0], global_batch_size=bsz, mbsz = mbsz, min_tp = 1, max_tp = 1,
                                  model_args=model_args_list[0], train_args=train_args_list[0], parallel_args=parallel_args_list[0], profile_model_args=profile_model_args_list[0]).get_memory_cost()['other'][1]
     # print(other_cost)
     # print(layer_min_memcost, other_cost)

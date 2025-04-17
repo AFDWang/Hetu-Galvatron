@@ -113,7 +113,7 @@ def test_hardware_config_loading(base_config_dirs, num_nodes, gpus_per_node):
     assert abs(allreduce_bandwidth['4_1'] - 164.272) < 1e-3
     assert abs(p2p_bandwidth[2] - 147.32) < 1e-3
     assert abs(overlap_coe - 1.1534195950157762) < 1e-6
-    assert abs(sp_allreduce[8][8*1024*1024] - 0.1827) < 1e-4
-    assert abs(sp_allreduce[8][16*1024*1024] - 0.29410000000000003) < 1e-4
+    assert abs(sp_allreduce[8][8*1024*1024] - 0.1827 / 2) < 1e-4
+    assert abs(sp_allreduce[8][16*1024*1024] - 0.29410000000000003 / 2) < 1e-4
     assert abs(sp_all2all[4][8*1024*1024] - 0.1255) < 1e-4
     assert abs(sp_all2all[4][16*1024*1024] - 0.1514) < 1e-4

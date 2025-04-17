@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import copy
 from galvatron.core.search_engine.search_engine import pp_division_memory_balanced, get_pp_stage_for_bsz, check_optimal_chunks, optimal_chunk_func_default
-from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs
+from tests.utils.cost_args import MemoryModelArgs, TimeModelArgs, create_model_args_from_dict
 
 @pytest.fixture
 def memory_model_args():
@@ -18,7 +18,23 @@ def time_model_args():
 def test_pp_division_memory_balanced(memory_model_args):
     """Test pipeline division based on memory balance"""
     # Prepare test data
-    memcost_model_args = [copy.deepcopy(memory_model_args.to_dict()) for _ in range(2)]
+    memory_args_dicts = [copy.deepcopy(memory_model_args.to_dict()) for _ in range(2)]
+    
+    # Convert config dictionaries to list of five parameter objects
+    model_args_list = []
+    train_args_list = []
+    parallel_args_list = []
+    profile_model_args_list = []
+    profile_hardware_args_list = []
+    for args_dict in memory_args_dicts:
+        model_args, train_args, parallel_args, profile_model_args, profile_hardware_args = create_model_args_from_dict(args_dict)
+        # Combine five parameter objects into a tuple and add to list
+        model_args_list.append(model_args)
+        train_args_list.append(train_args)
+        parallel_args_list.append(parallel_args)
+        profile_model_args_list.append(profile_model_args)
+        profile_hardware_args_list.append(profile_hardware_args)
+    
     layer_num = [16, 16]
     pp_deg = 4
     bsz = 32
@@ -30,7 +46,10 @@ def test_pp_division_memory_balanced(memory_model_args):
     ]
 
     pp_divide, mem_costs = pp_division_memory_balanced(
-        memcost_model_args,
+        model_args_list,
+        train_args_list,
+        parallel_args_list,
+        profile_model_args_list,
         layer_num,
         pp_deg,
         bsz,
@@ -57,7 +76,23 @@ def test_pp_division_memory_balanced(memory_model_args):
 @pytest.mark.parametrize("single_layer_even", [True, False])
 def test_get_pp_stage_for_bsz(memory_model_args, single_layer_even):
     """Test getting pipeline stages for different batch sizes"""
-    memcost_model_args_list = [copy.deepcopy(memory_model_args.to_dict()) for _ in range(2)]
+    memory_args_dicts = [copy.deepcopy(memory_model_args.to_dict()) for _ in range(2)]
+    
+    # Convert config dictionaries to list of five parameter objects
+    model_args_list = []
+    train_args_list = []
+    parallel_args_list = []
+    profile_model_args_list = []
+    profile_hardware_args_list = []
+    for args_dict in memory_args_dicts:
+        model_args, train_args, parallel_args, profile_model_args, profile_hardware_args = create_model_args_from_dict(args_dict)
+        # Combine five parameter objects into a tuple and add to list
+        model_args_list.append(model_args)
+        train_args_list.append(train_args)
+        parallel_args_list.append(parallel_args)
+        profile_model_args_list.append(profile_model_args)
+        profile_hardware_args_list.append(profile_hardware_args)
+    
     layer_num_list = [16, 16]
     bsz = 32
     mbsz_dict = {1: 8, 2: 8, 4: 8}
@@ -69,7 +104,10 @@ def test_get_pp_stage_for_bsz(memory_model_args, single_layer_even):
 
     pp_stage_dict = get_pp_stage_for_bsz(
         strategies,
-        memcost_model_args_list,
+        model_args_list,
+        train_args_list,
+        parallel_args_list,
+        profile_model_args_list,
         layer_num_list,
         bsz,
         mbsz_dict,

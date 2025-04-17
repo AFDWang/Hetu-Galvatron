@@ -120,6 +120,16 @@ sh scripts/train_dist.sh
 
 See detailed guidance and more customized training options in [Galvatron Model Usage](galvatron/models/README.md#training-with-galvatron).
 
+## (New Feature!) Galvatron Visualizer
+
+Galvatron Visualizer is an interactive tool for analyzing and visualizing memory usage in large language models. Based on the Galvatron memory cost model, this tool provides users with intuitive visual representations of memory allocation for different model configurations and distributed training strategies.
+
+To use Galvatron Visualizer, please refer to [galvatron-visualizer branch](https://github.com/PKU-DAIR/Hetu-Galvatron/tree/galvatron-visualizer) for more details.
+
+Online version: [Galvatron Visualizer](http://galvatron-visualizer.pkudair.site/)
+
+<div align=center> <img src="./docs/imgs/visualizer-demo.gif" width="800" /> </div>
+
 ## Enterprise Users
 
 <table>
@@ -159,11 +169,8 @@ shenhan.zhu@pku.edu.cn.
 **Galvatron: Efficient transformer training over multiple gpus using automatic parallelism.**
 Xupeng Miao, Yujie Wang, Youhe Jiang, Chunan Shi, Xiaonan Nie, Hailin Zhang, Bin Cui; VLDB 2023, CCF-A. [[paper](https://www.vldb.org/pvldb/vol16/p470-miao.pdf)] [[arxiv](https://arxiv.org/abs/2211.13878)]
 
-**Improving automatic parallel training via balanced memory workload optimization.**
-Yujie Wang, Youhe Jiang, Xupeng Miao, Fangcheng Fu, Shenhan Zhu, Xiaonan Nie, Yaofeng Tu, Bin Cui; TKDE 2024, CCF-A. [[paper](https://www.computer.org/csdl/journal/tk/2024/08/10449463/1USuxtStYVG)] [[arxiv](https://arxiv.org/abs/2307.02031)]
-
 **FlexSP: Accelerating Large Language Model Training via Flexible Sequence Parallelism**
-Yujie Wang, Shiju Wang, Shenhan Zhu, Fangcheng Fu, Xinyi Liu, Xuefeng Xiao, Huixia Li, Jiashi Li, Faming Wu, Bin Cui; ASPLOS 2025, CCF-A. [[arxiv](https://arxiv.org/abs/2412.01523)]
+Yujie Wang, Shiju Wang, Shenhan Zhu, Fangcheng Fu, Xinyi Liu, Xuefeng Xiao, Huixia Li, Jiashi Li, Faming Wu, Bin Cui; ASPLOS 2025, CCF-A. [[paper](https://dl.acm.org/doi/10.1145/3676641.3715998)] [[arxiv](https://arxiv.org/abs/2412.01523)]
 
 ## Citing
 

@@ -44,6 +44,7 @@ Galvatron is an automatic distributed training system designed for Transformer m
    Quick Start <3_quick_start/quick_start>
    Galvatron Model Usage <4_galvatron_model_usage/galvatron_model_usage>
    Search Engine Usage <5_search_engine_usage/search_engine_usage>
+   Visualization(New Feature!) <7_visualization/visualization>
    Developer Guide <6_developer_guide/developer_guide>
 
 Supported Parallelism Strategies
@@ -76,11 +77,11 @@ Supported Models
 +------------------+------------------+------------------------+
 | LLMs             | LLaMA            | Huggingface, flash-attn|
 +------------------+------------------+------------------------+
-| LLMs             | BERT             | Coming Soon            |
+| LLMs             | BERT             | Huggingface            |
 +------------------+------------------+------------------------+
 | LLMs             | T5               | Huggingface            |
 +------------------+------------------+------------------------+
-| Vision Models    | ViT              | Coming Soon            |
+| Vision Models    | ViT              | Huggingface            |
 +------------------+------------------+------------------------+
 | Vision Models    | Swin             | Huggingface            |
 +------------------+------------------+------------------------+

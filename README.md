@@ -150,6 +150,10 @@ Online version: [Galvatron Visualizer](http://galvatron-visualizer.pkudair.site/
     <td><a href="https://www.bytedance.com/en/">ByteDance</a></td>
   </tr>
   <tr>
+    <td><img src="./figs/baai.png" width="100" /></td>
+    <td><a href="https://www.baai.ac.cn/en/">BAAI</a></td>
+  </tr>
+  <tr>
   
   
 
@@ -167,7 +171,7 @@ shenhan.zhu@pku.edu.cn.
 ## Related Publications
 
 **Galvatron: Efficient transformer training over multiple gpus using automatic parallelism.**
-Xupeng Miao, Yujie Wang, Youhe Jiang, Chunan Shi, Xiaonan Nie, Hailin Zhang, Bin Cui; VLDB 2023, CCF-A. [[paper](https://www.vldb.org/pvldb/vol16/p470-miao.pdf)] [[arxiv](https://arxiv.org/abs/2211.13878)]
+Xupeng Miao, Yujie Wang, Youhe Jiang, Chunan Shi, Xiaonan Nie, Hailin Zhang, Bin Cui; VLDB 2022, CCF-A. [[paper](https://www.vldb.org/pvldb/vol16/p470-miao.pdf)] [[arxiv](https://arxiv.org/abs/2211.13878)]
 
 **FlexSP: Accelerating Large Language Model Training via Flexible Sequence Parallelism**
 Yujie Wang, Shiju Wang, Shenhan Zhu, Fangcheng Fu, Xinyi Liu, Xuefeng Xiao, Huixia Li, Jiashi Li, Faming Wu, Bin Cui; ASPLOS 2025, CCF-A. [[paper](https://dl.acm.org/doi/10.1145/3676641.3715998)] [[arxiv](https://arxiv.org/abs/2412.01523)]

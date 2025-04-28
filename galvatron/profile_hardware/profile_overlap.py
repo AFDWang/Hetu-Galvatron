@@ -175,6 +175,8 @@ def profile(args):
         print('Overlap coefficient:', config[key])
         write_json_config(config, env_config_path)
         print('Already written overlap_coefficient into env config file %s!'%(env_config_path))
+    # cleanup, ref: https://pytorch.org/docs/stable/distributed.html#shutdown
+    torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

@@ -42,64 +42,78 @@ def profile(args):
     def compute_comm_func(dummy_input, compute_iters, comm_iters):
         comm_func(dummy_input, comm_iters)
         compute_func(dummy_input, compute_iters)
+        
+    """
+        Time conversion is now handled directly in the trace_handler function
+        using the profiler's native nanosecond measurements
+        will be removed in the future
+        def str2time(s):
+            if 'ms' in s:
+                return float(s[:-2])
+            elif 'us' in s:
+                return float(s[:-2])*1e-3
+            else:
+                return float(s[:-1])*1e3
+        
+        def average_op_time(op_str, cuda_total_idx, call_times_idx):
+            if op_str is None:
+                return None
+            op_time = str2time(op_str[cuda_total_idx])/int(op_str[call_times_idx])
+            op_time = torch.tensor([op_time]).to(device)
+            torch.distributed.all_reduce(op_time, op=torch.distributed.ReduceOp.SUM)
+            op_time = op_time.cpu().numpy()[0] / world_size
+            return op_time
 
-    def str2time(s):
-        if 'ms' in s:
-            return float(s[:-2])
-        elif 'us' in s:
-            return float(s[:-2])*1e-3
-        else:
-            return float(s[:-1])*1e3
-    
-    def average_op_time(op_str, cuda_total_idx, call_times_idx):
-        if op_str is None:
-            return None
-        op_time = str2time(op_str[cuda_total_idx])/int(op_str[call_times_idx])
-        op_time = torch.tensor([op_time]).to(device)
-        torch.distributed.all_reduce(op_time, op=torch.distributed.ReduceOp.SUM)
-        op_time = op_time.cpu().numpy()[0] / world_size
-        return op_time
-
-    def split_line(line):
-        line = line.split('  ')
-        ls = []
-        for s in line:
-            if len(s):
-                ls.append(s.strip())
-        return ls
-
+        def split_line(line):
+            line = line.split('  ')
+            ls = []
+            for s in line:
+                if len(s):
+                    ls.append(s.strip())
+            return ls
+    """
     def trace_handler(prof):
         if local_rank > -1:
-            table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
+            # Using direct attribute access from key_averages() instead of parsing the human-readable table
+            key_avgs = prof.key_averages()
             if local_rank == 0:
-                print(table)
-            table = table.split('\n')
-            comm_str, compute_str = None, None
-            for line in table:
-                if 'Name' in line:
-                    title = split_line(line)
-                if 'ncclKernel_AllReduce' in line:
-                    comm_str = split_line(line)
-                if 'gemm' in line:
-                    compute_str = split_line(line)
-            for i in range(len(title)):
-                if 'CUDA total' in title[i]:
-                    cuda_total_idx = i
-                if '# of Calls' in title[i]:
-                    call_times_idx = i
+                print(key_avgs.table(sort_by="self_cuda_time_total", row_limit=5))
+            
+            comm_avg, compute_avg = None, None
+            
+            # More robust operation detection using substring matching on lowercase operation names
+            for avg in key_avgs:
+                key = avg.key.lower()
+                # NOTE this condition may be too broad, consider refining it to avoid false positives
+                if "allreduce" in key and "nccl" in key:
+                    comm_avg = avg
+                if "gemm" in key:
+                    compute_avg = avg
+            
             comm_time, compute_time = None, None
-            comm_time = average_op_time(comm_str, cuda_total_idx, call_times_idx)
-            compute_time = average_op_time(compute_str, cuda_total_idx, call_times_idx)
-            if comm_time is not None:
+            
+            # Process communication time if found
+            if comm_avg is not None:
+                # comm op here is atomic so self_device_time_total is the total time. cmp to device_time_total
+                comm_time = comm_avg.self_device_time_total / 1e3 / comm_avg.count # Convert time to milliseconds for consistency
+                comm_time = torch.tensor([comm_time]).to(device)
+                torch.distributed.all_reduce(comm_time, op=torch.distributed.ReduceOp.SUM)
+                comm_time = comm_time.cpu().numpy()[0] / world_size
+                
                 if local_rank == 0:
                     print('Average communication time (ms):', comm_time)
-                comm_time_list.append(comm_time)
-                # print('rank %d, comm_time %.3f'%(rank, comm_time))
-            if compute_time is not None:
+                comm_time_list.append(float(comm_time))
+            
+            # Process computation time if found
+            if compute_avg is not None:
+                compute_time = compute_avg.self_device_time_total / 1e3 / compute_avg.count
+                compute_time = torch.tensor([compute_time]).to(device)
+                torch.distributed.all_reduce(compute_time, op=torch.distributed.ReduceOp.SUM)
+                compute_time = compute_time.cpu().numpy()[0] / world_size
+                
                 if local_rank == 0:
                     print('Average computation time (ms):', compute_time)
-                compute_time_list.append(compute_time)
-                # print('rank %d, compute_time %.3f'%(rank, compute_time))
+                compute_time_list.append(float(compute_time))
 
     def profile_op(sync_stream, warmup_func, profile_func):
         with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA],
@@ -161,6 +175,8 @@ def profile(args):
         print('Overlap coefficient:', config[key])
         write_json_config(config, env_config_path)
         print('Already written overlap_coefficient into env config file %s!'%(env_config_path))
+    # cleanup, ref: https://pytorch.org/docs/stable/distributed.html#shutdown
+    torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

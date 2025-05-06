@@ -75,8 +75,8 @@ class GalvatronModel(nn.Module):
     def fake_loss_func(self, labels, outputs):
         if torch.numel(outputs[0]) > 1:
             loss = outputs[0].mean()
-            return loss, loss
-        return outputs[0], outputs[0]
+            return loss, loss.clone().detach()
+        return outputs[0], outputs[0].clone().detach()
 
     def loss_to_cpu(self, loss):
         if isinstance(loss, (list, tuple)):  # Average loss of each microbatch

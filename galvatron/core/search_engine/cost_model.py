@@ -125,13 +125,13 @@ class MemoryCostModel:
                     other_memory_pp_off['model_states'][model_tp] * 
                     other_ms_zero2_ratio + 
                     other_memory_pp_off['activation'][tp] * 
-                    other_layers_bsz * 
-                    act_1f1b_ratio
+                    other_layers_bsz # * 
+                    # act_1f1b_ratio
                 )
             else:
                 if pipeline_type == 'pipedream_flush':
-                    other_layers_bsz_first = other_layers_bsz * act_1f1b_ratio_first
-                    other_layers_bsz_last = other_layers_bsz * act_1f1b_ratio_last
+                    other_layers_bsz_first = other_layers_bsz * self.pp_size
+                    other_layers_bsz_last = other_layers_bsz * 1
                 else:
                     other_layers_bsz_first = other_layers_bsz_last = other_layers_bsz
                 # TODO: check the correctness of other memory cost for first stage and last stage
@@ -147,6 +147,8 @@ class MemoryCostModel:
                     other_memory_pp_on['last_stage']['activation'][tp] * 
                     other_layers_bsz_last
                 )
+                # print("debug:", other_layers_bsz, other_layers_bsz_first, other_layers_bsz_last, other_memory_pp_on['first_stage']['activation'][tp], other_memory_pp_on['last_stage']['activation'][tp])
+                # print("middle:", tp_other_memcosts)
             # if checkpoint:
             #     for i in range(len(tp_other_memcosts)):
             #         tp_other_memcosts[i] += tp_activation_per_bsz_dict[self.tp_size] * mbsz

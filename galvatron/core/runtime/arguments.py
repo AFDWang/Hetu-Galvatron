@@ -55,6 +55,22 @@ def galvatron_training_args(parser, use_megatron=True):
         help="Pipeline parallel degree.",
         choices=[1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
     )
+    # 在 galvatron_training_args 函数内部，找到合适的位置添加：
+    group.add_argument(
+        "--global_cp_deg",
+        type=int,
+        default=1,  # 默认值为1，表示不启用Context Parallel
+        help="Context parallel degree.",
+        choices=[1, 2, 4, 8, 16, 32], # 通常并行度是2的幂次
+    )
+    # 在 galvatron_training_args 函数内部，--cp_deg 参数定义的附近添加：
+    group.add_argument(
+        "--cp_mode",
+        type=str,
+        default="zigzag", # 默认使用 zigzag 模式，因为它能更好地平衡负载
+        help="Context parallel communication mode.",
+        choices=["ring", "zigzag"], # 提供可选的模式
+    )
     group.add_argument(
         "--global_tp_deg",
         type=int,

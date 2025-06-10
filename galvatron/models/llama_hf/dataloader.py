@@ -11,6 +11,7 @@ from megatron.training.training import build_train_valid_test_data_iterators
 from megatron.training.utils import (
     average_losses_across_data_parallel_group,
     get_batch_on_this_tp_rank,
+    get_batch_on_this_cp_rank,
     get_ltor_masks_and_position_ids,
 )
 from torch import Tensor
@@ -147,7 +148,8 @@ def get_batch(data_iterator):
 
     args = get_args()
     batch = get_batch_on_this_tp_rank(data_iterator)
-
+    if args.cp_mode == "zigzag":
+        batch = get_batch_on_this_cp_rank(batch)#TODO
     micro_lossmask = chunk_batch([batch["loss_mask"]], get_chunks(args))
     # print(f"Rank {torch.cuda.current_device()} with input {tokens}")
     if batch["tokens"] == None:
@@ -162,7 +164,7 @@ def get_batch(data_iterator):
         partial(loss_func, micro_lossmask),
     )
 
-
+#TODO：摆脱对mpu的依赖，怎么靠galvatron实现
 def loss_func(micro_lossmask: Tensor, label: List, output_tensor: List):
     """Loss function.
 
@@ -178,8 +180,46 @@ def loss_func(micro_lossmask: Tensor, label: List, output_tensor: List):
     #     print(f"loss {losses}")
     loss_mask = loss_mask.view(-1).float()
     loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
-
+#average_losses_across_seq_data_parallel_group
     averaged_loss = average_losses_across_data_parallel_group([loss])
+    #averaged_loss = average_losses_across_context_parallel_group([averaged_loss])
 
     micro_lossmask.pop(0)
     return loss, averaged_loss[0]
+
+
+def average_losses_across_context_parallel_group(losses):
+    """Reduce a tensor of losses across all GPUs."""
+    averaged_losses = torch.cat(
+        [loss.clone().detach().view(1) for loss in losses])
+    torch.distributed.all_reduce(averaged_losses,
+                                 group=mpu.get_context_parallel_group())
+    averaged_losses = averaged_losses / \
+        torch.distributed.get_world_size(group=mpu.get_context_parallel_group())
+
+    return averaged_losses
+
+#TODO:似乎没有用了
+def get_zigzag_tokens_on_this_cp_rank(tokens: torch.Tensor, cp_rank: int, cp_size: int) -> torch.Tensor:
+    if cp_size == 1: 
+        return tokens
+
+    batch_size, original_seq_len = tokens.shape
+    num_total_chunks = 2 * cp_size
+
+    chunk_len = original_seq_len // num_total_chunks
+    processed_seq_len = chunk_len * num_total_chunks
+    tokens_to_process = tokens[:, :processed_seq_len].contiguous()
+
+   
+    reshaped_tokens = tokens_to_process.view(batch_size, num_total_chunks, chunk_len)
+    
+    idx1 = cp_rank
+    idx2 = num_total_chunks - 1 - cp_rank
+    index_tensor = torch.tensor([idx1, idx2], device=tokens.device, dtype=torch.long)
+
+    selected_chunks = torch.index_select(reshaped_tokens, 1, index_tensor)
+
+    output_tokens = selected_chunks.contiguous().view(batch_size, -1)
+
+    return output_tokens

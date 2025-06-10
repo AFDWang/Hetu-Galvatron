@@ -2,37 +2,37 @@
 
 """Transformer."""
 import math
-import os
-from contextlib import nullcontext
-from typing import Optional
+import os#路径操作，环境变量
+from contextlib import nullcontext #上下文管理器，在某些条件下不执行任何操作（常用于条件上下文切换）
+from typing import Optional #类型提示，表示某个参数可以是none
 
-import numpy as np
-import torch
-import torch.nn.functional as F
-from megatron import core
-from megatron.core import mpu, tensor_parallel
-from megatron.core.enums import ModelType
-from megatron.core.jit import jit_fuser
-from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding, apply_rotary_pos_emb
-from megatron.core.parallel_state import get_tensor_and_expert_parallel_group, get_tensor_model_parallel_group
+import numpy as np#科学计算，线性代数
+import torch#深度学习框架
+import torch.nn.functional as F#神经网络函数
+from megatron import core#megatron框架
+from megatron.core import mpu, tensor_parallel#model parallel units，用来管理模型并行逻辑，管理不同进程组
+from megatron.core.enums import ModelType#模型类型
+from megatron.core.jit import jit_fuser#即时编译，将python代码转换为机器码，提高执行效率
+from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding, apply_rotary_pos_emb#旋转位置编码，用于处理序列数据
+from megatron.core.parallel_state import get_tensor_and_expert_parallel_group, get_tensor_model_parallel_group#获取并行组
 from megatron.core.tensor_parallel import (
     gather_from_sequence_parallel_region_to_moe,
     get_cuda_rng_tracker,
     get_data_parallel_rng_tracker_name,
     reduce_scatter_to_sequence_parallel_region_from_moe,
-)
-from megatron.legacy.model.enums import AttnMaskType, AttnType, LayerType
-from megatron.legacy.model.fused_bias_gelu import bias_gelu_impl
-from megatron.legacy.model.fused_softmax import FusedScaleMaskSoftmax
-from megatron.legacy.model.module import MegatronModule
-from megatron.legacy.model.utils import attention_mask_func, erf_gelu, get_norm, openai_gelu
-from megatron.training import get_args, get_num_microbatches, get_timers
+)#megatron.core.tensor_parallel，用于管理张量并行逻辑，处理张量在不同进程之间的分布和通信
+from megatron.legacy.model.enums import AttnMaskType, AttnType, LayerType#megatron.legacy.model，用于管理模型结构，包括注意力机制、层类型等
+from megatron.legacy.model.fused_bias_gelu import bias_gelu_impl#megatron.legacy.model.fused_bias_gelu，用于管理偏置和gelu激活函数
+from megatron.legacy.model.fused_softmax import FusedScaleMaskSoftmax#megatron.legacy.model.fused_softmax，用于管理softmax操作
+from megatron.legacy.model.module import MegatronModule#megatron.legacy.model.module，用于管理模型组件，包括层、模块等
+from megatron.legacy.model.utils import attention_mask_func, erf_gelu, get_norm, openai_gelu#megatron.legacy.model.utils，用于管理注意力机制、gelu激活函数、归一化等
+from megatron.training import get_args, get_num_microbatches, get_timers#megatron.training，用于管理训练过程，包括参数、微批次、计时器等
 
 try:
-    from einops import rearrange
+    from einops import rearrange#einops，用于管理张量操作，包括重塑、排列等
 except ImportError:
     rearrange = None
-
+#TODO：还不知道cp用的是哪一种flash attn
 try:
     from flash_attn.flash_attn_interface import flash_attn_unpadded_func
 except ImportError:
@@ -86,8 +86,8 @@ class ParallelMLP(MegatronModule):
     hidden dimension, perform nonlinear transformation, and project the
     state back into h hidden dimension.
     """
-
-    def __init__(self, config, is_expert=False, tp_group=None):
+#注意这里的是megatron config
+    def __init__(self, config, is_expert=False, tp_group=None): #仅使用tp group
         super(ParallelMLP, self).__init__()
         args = get_args()
 
@@ -305,42 +305,42 @@ class ParallelMLP(MegatronModule):
 
 
 class CoreAttention(MegatronModule):
-
+#这里需要的是megatron config
     def __init__(self, layer_number, config, attn_mask_type=AttnMaskType.padding, tp_group=None, sp_group=None):
         super(CoreAttention, self).__init__()
         self.fp16 = config.fp16
         self.bf16 = config.bf16
 
-        self.apply_query_key_layer_scaling = config.apply_query_key_layer_scaling
-        self.attention_softmax_in_fp32 = config.attention_softmax_in_fp32
+        self.apply_query_key_layer_scaling = config.apply_query_key_layer_scaling#是否进行缩放
+        self.attention_softmax_in_fp32 = config.attention_softmax_in_fp32#是否在fp32下面进行计算，保持数值稳定性
         if self.apply_query_key_layer_scaling:
             self.attention_softmax_in_fp32 = True
         self.layer_number = max(1, layer_number)
-        self.attn_mask_type = attn_mask_type
+        self.attn_mask_type = attn_mask_type#causal or padding
         self.sequence_parallel = config.sequence_parallel
 
         projection_size = config.kv_channels * config.num_attention_heads
 
         # Per attention head and per partition values.
-        if tp_group is None:
-            world_size = mpu.get_tensor_model_parallel_world_size()
+        if tp_group is None:#当这个不存在
+            world_size = mpu.get_tensor_model_parallel_world_size()#为什么galvatron可以用mpu.get_tensor_model_parallel_world_size()
         else:
             world_size = tensor_parallel.get_tensor_model_parallel_world_size_group(tp_group)
         if sp_group is None:
-            sp_world_size = 1
+            sp_world_size = 1#这个是后加入的 所以就没有megatron相关组件
         else:
             sp_world_size = torch.distributed.get_world_size(sp_group)
-        world_size = max(world_size, sp_world_size)
+        world_size = max(world_size, sp_world_size)#tp和sp只能使用一个，不知道要使用哪一个
         self.hidden_size_per_partition = core.utils.divide(projection_size, world_size)
         self.hidden_size_per_attention_head = core.utils.divide(projection_size, config.num_attention_heads)
         self.num_attention_heads_per_partition = core.utils.divide(config.num_attention_heads, world_size)
-
+#每个gpu上面分得几个头
         coeff = None
         self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
         if self.apply_query_key_layer_scaling:
             coeff = self.layer_number
-            self.norm_factor *= coeff
-
+            self.norm_factor *= coeff#每层的缩放在逐步变大
+#FusedScaleMaskSoftmax，用于管理softmax操作
         self.scale_mask_softmax = FusedScaleMaskSoftmax(
             self.fp16,
             self.bf16,
@@ -355,14 +355,14 @@ class CoreAttention(MegatronModule):
         # different outputs on different number of parallel partitions but
         # on average it should not be partition dependent.
         self.attention_dropout = torch.nn.Dropout(config.attention_dropout)
-
+#query layer 和key layer 的shape sq，b，np，hn
     def forward(self, query_layer, key_layer, value_layer, attention_mask):
+        #query s b n h 等下需要看看query layer 和key layer 的shape sq，b，np，hn
+        # =====================================
+        # Raw attention scores. [b, np, sq, sk]
+        # =====================================
 
-        # ===================================
-        # Raw attention scores. [b, np, s, s]
-        # ===================================
-
-        # [b, np, sq, sk]
+        # [b, np, sq, sk] b numofheads sequence q sequence k
         output_size = (query_layer.size(1), query_layer.size(2), query_layer.size(0), key_layer.size(0))
 
         # [sq, b, np, hn] -> [sq, b * np, hn]
@@ -386,7 +386,7 @@ class CoreAttention(MegatronModule):
 
         # change view to [b, np, sq, sk]
         attention_scores = matmul_result.view(*output_size)
-
+#把得到的attention score进行转化
         # ===========================
         # Attention probs and dropout
         # ===========================
@@ -401,11 +401,14 @@ class CoreAttention(MegatronModule):
                 attention_probs = self.attention_dropout(attention_probs)
         else:
             attention_probs = self.attention_dropout(attention_probs)
-
+#如果启用了序列并行，则使用各自的随机数生成器；否则需要 fork RNG 来保证 dropout 在不同设备上的独立性
+#当启用序列并行时，我们假设每个设备上对输入张量做了切分
+# （如按 seq_len 切分），并且希望这些切分后的部分在进行 
+# dropout 时共享相同的随机种子，以确保训练过程的一致性和正确性
         # =========================
         # Context layer. [sq, b, hp]
         # =========================
-
+#计算上下文，调整形状到适合bmm的形式
         # value_layer -> context layer.
         # [sk, b, np, hn] --> [b, np, sq, hn]
 
@@ -430,7 +433,7 @@ class CoreAttention(MegatronModule):
         # [sq, b, np, hn] --> [sq, b, hp]
         new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)
         context_layer = context_layer.view(*new_context_layer_shape)
-
+#hiddensize sq b hp
         return context_layer
 
 
@@ -460,8 +463,9 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
         Arguments
         ---------
             q, k, v: The tensor containing the query, key, and value. (B, S, H, D)
+            （batch，sequence，num_heads, head_dim)
         """
-
+#必须是bf16或者f16 验证是否在cuda设备，因为flashattention只能在cuda设备
         assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q, k, v)))
         assert all((i.is_cuda for i in (q, k, v)))
 
@@ -469,6 +473,8 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
         seqlen_k = k.shape[1]
 
         q, k, v = [rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v]]
+        #rearrange 来适配flashattention的unpadded接口
+        #实际上相当于把padded后的数据适配成了padded的数据
         cu_seqlens_q = torch.arange(0, (batch_size + 1) * seqlen_q, step=seqlen_q, dtype=torch.int32, device=q.device)
 
         is_causal = self.causal
@@ -514,7 +520,7 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
         return output
 
 
-class ParallelAttention(MegatronModule):
+class ParallelAttention(MegatronModule):#MegatronConfig
     """Parallel self-attention layer abstract class.
 
     Self-attention layer takes input with size [s, b, h]
@@ -529,12 +535,14 @@ class ParallelAttention(MegatronModule):
         attn_mask_type=AttnMaskType.padding,
         tp_group=None,
         sp_group=None,
+        cp_group=None,
         use_ulysses=False,
+        use_zigzag_cp=False,
     ):
         super(ParallelAttention, self).__init__()
         args = get_args()
         self.use_ulysses = use_ulysses
-
+        self.use_zigzag_cp = use_zigzag_cp
         self.layer_number = max(1, layer_number)
         self.attention_type = attention_type
         self.attn_mask_type = attn_mask_type
@@ -574,7 +582,7 @@ class ParallelAttention(MegatronModule):
             sp_world_size = torch.distributed.get_world_size(sp_group)
         self.hidden_size_per_attention_head = core.utils.divide(query_projection_size, config.num_attention_heads)
         self.num_attention_heads_per_partition = core.utils.divide(config.num_attention_heads, world_size)
-
+#计算head要如何进行分割
         if self.group_query_attention:
             if args.num_query_groups % world_size != 0:
                 raise NotImplementedError(
@@ -585,7 +593,7 @@ class ParallelAttention(MegatronModule):
             self.num_query_groups_per_partition = self.num_attention_heads_per_partition
 
         # Strided linear layer.
-        if attention_type == AttnType.self_attn:
+        if attention_type == AttnType.self_attn: 
             self.query_key_value = tensor_parallel.ColumnParallelLinear(
                 config.hidden_size,
                 query_projection_size + 2 * kv_projection_size,
@@ -626,7 +634,7 @@ class ParallelAttention(MegatronModule):
             self.layer_number, config, self.attn_mask_type, tp_group=tp_group, sp_group=sp_group
         )
         self.checkpoint_core_attention = config.recompute_granularity == "selective"
-
+#用tensorparallel的重计算包裹的core attention
         if self.use_flash_attn:
             self.core_attention_flash = FlashSelfOrCrossAttention(
                 causal=(attn_mask_type == AttnMaskType.causal), attention_dropout=config.attention_dropout
@@ -640,6 +648,13 @@ class ParallelAttention(MegatronModule):
             )
             # flash attn [B,S,H,D] gather_idx = 1, normal attn [S,B,H,D] gather_idx = 0
         # Output.
+        if self.use_zigzag_cp:
+            self.zigzag_ring_flash_attn = ZigzagRingFlashAttention(
+                attention_dropout=config.attention_dropout,
+                cp_group=cp_group,
+                causal=(attn_mask_type == AttnMaskType.causal)
+            )
+
         self.dense = tensor_parallel.RowParallelLinear(
             query_projection_size,
             config.hidden_size,
@@ -711,7 +726,7 @@ class ParallelAttention(MegatronModule):
         # =====================
         if self.attention_type == AttnType.self_attn:
 
-            # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)]
+            # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)] [sq, b, np*hn + 2*ng*hn]
             mixed_x_layer, _ = self.query_key_value(hidden_states)
 
             # [sq, b, hp] --> [sq, b, ng, (np/ng + 2) * hn]
@@ -744,12 +759,12 @@ class ParallelAttention(MegatronModule):
             if self.group_query_attention:
                 query_layer = query_layer.reshape(
                     query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head
-                )
+                )#num of heads per partition
             else:
                 query_layer = query_layer.view(
                     query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head
                 )
-        else:
+        else:#TODO: adpat to cp
             # Attention heads [sk, b, h] --> [sk, b, (np * 2 * hn)]
             mixed_kv_layer, _ = self.key_value(encoder_output)
 
@@ -819,7 +834,7 @@ class ParallelAttention(MegatronModule):
         # ==================================
         # core attention computation
         # ==================================
-
+#实际上qkv都是s,b,np,hn (对于cp 来说也就是完整的head和部分的序列)
         # expand the key_layer and value_layer [sk, b, ng, hn] -> [sk, b, np, hn]
         if self.num_attention_heads_per_partition // self.num_query_groups_per_partition > 1:
             key_layer = key_layer.repeat_interleave(
@@ -838,7 +853,7 @@ class ParallelAttention(MegatronModule):
             # absolute positional embedding.
             # otherwise, only relative positional embedding takes effect
             # value_layer = apply_rotary_pos_emb(value_layer, k_pos_emb)
-
+#[sk, b, np, hn]
         if self.use_ulysses:
             if self.use_flash_attn:
                 batch_dim_idx = 0
@@ -864,11 +879,24 @@ class ParallelAttention(MegatronModule):
                 q, k, v = [
                     rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)
                 ]
-                if not self.sequence_parallel:
-                    with tensor_parallel.get_cuda_rng_tracker().fork():
-                        context_layer = self.core_attention_flash(q, k, v)
+                if self.use_zigzag_cp:
+                    with torch.profiler.record_function("Galvatron_ZigZag_Ring_Context_Parallel_Attention"):
+                        # 添加内存和时间标记
+                        torch.cuda.synchronize()
+                        with torch.profiler.record_function("Galvatron_ZigZag_Before_Communication"):
+                            pass  # 标记通信前状态
+                        
+                        context_layer = self.zigzag_ring_flash_attn(q, k, v)
+                        
+                        torch.cuda.synchronize()
+                        with torch.profiler.record_function("Galvatron_ZigZag_After_Communication"):
+                            pass  # 标记通信后状态
                 else:
-                    context_layer = self.core_attention_flash(q, k, v)
+                    if not self.sequence_parallel:
+                        with tensor_parallel.get_cuda_rng_tracker().fork():
+                            context_layer = self.core_attention_flash(q, k, v)
+                    else:
+                        context_layer = self.core_attention_flash(q, k, v)
                 context_layer = rearrange(context_layer, "b s h d -> s b (h d)").contiguous()
 
         # =================
@@ -888,7 +916,21 @@ def bias_dropout_add(x, bias, residual, prob, training):
     out = residual + out
     return out
 
+'''
+from megatron.model import bias_dropout_add_fused_train, bias_dropout_add_fused_inference
 
+# 假设你已经得到了 attention 输出 x，residual 是原始输入
+x = attention(...)
+bias = self.dense.bias
+residual = hidden_states
+prob = self.config.hidden_dropout
+
+use_fused = True
+if use_fused and self.training:
+    output = bias_dropout_add_fused_train(x, bias, residual, prob)
+else:
+    output = bias_dropout_add(x, bias, residual, prob, self.training)
+'''
 def get_bias_dropout_add(training):
     def _bias_dropout_add(x, bias, residual, prob):
         return bias_dropout_add(x, bias, residual, prob, training)
@@ -1882,7 +1924,7 @@ from torch.nn import Module
 
 # --------- ulysses --------------
 
-
+#后处理函数：对all to all之后的函数进行重写排列，恢复为正确的注意力输入
 def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_head, head_dim):
 
     def post_func(input):
@@ -1906,26 +1948,27 @@ def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_he
 
     return post_func
 
-
+#input b s np nd b s_l
 def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, async_op=False, handle=None, type=None):
     seq_world_size = dist.get_world_size(group)
-    if batch_dim_idx == 0:
-        # b, s, n, h
+    if batch_dim_idx == 0:#flash attention  开启ulysses的时候没有tp
+#每个上面都有一部分sequence：b，local_seq_len, nh, hd，scatter idx=2 gatheridx = 1
+#收集完sequence之后，每个上面持有b，global_seq_len, nh//p, hd scatter idx = 1 gatheridx = 2
         if scatter_idx < 2:
-            bs, global_seq_len, num_local_head, head_dim = input.shape
+            bs, global_seq_len, num_local_head, head_dim = input.shape#b，s, nh, hd
             input_t = input.reshape(
                 [bs, seq_world_size, global_seq_len // seq_world_size, num_local_head, head_dim]
-            ).contiguous()
-            input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
+            ).contiguous()#b, sp_deg, s//sp_deg, nh//sp_deg, hd
+            input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()#sp_deg, b, s//sp_deg, nh//sp_deg, hd
         else:
-            bs, local_seq_len, num_total_head, head_dim = input.shape
+            bs, local_seq_len, num_total_head, head_dim = input.shape#b, s, nh, hd
             assert (
                 num_total_head % seq_world_size == 0
             ), f"Number of heads ({num_total_head}) must be divisible by the sequence parallel size ({seq_world_size})!"
             input_t = input.reshape(
                 [bs, local_seq_len, seq_world_size, num_total_head // seq_world_size, head_dim]
             ).contiguous()
-            input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+            input_t = input_t.permute(2, 0, 1, 3, 4).contiguous() #sp_deg, b, s//sp_deg, nh//sp_deg, hd
     else:
         # s, b, n, h
         if scatter_idx < 2:
@@ -2157,3 +2200,458 @@ class DistributedAttention(torch.nn.Module):
             output = context_layer
         # out e.g., [s/p::h]
         return output
+
+# --------- Ring Attention --------------
+from typing import Optional, Tuple
+
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import inspect
+from functools import cache
+
+@cache
+def _get_default_args(func):
+    spec = inspect.getfullargspec(func)
+    defaults = spec.defaults if spec.defaults is not None else ()
+    padded_defaults = (None,) * (len(spec.args) - len(defaults)) + defaults
+    args = dict(zip(spec.args, padded_defaults))
+    if "softcap" in args:
+        args["softcap"] = 0.0
+    return args
+
+#在 ring-flash-attention 相关代码中，经常需要调用底层的
+#  CUDA/FlashAttention 函数，这些函数参数较多且有默认值。
+#通过这段代码，可以自动获取这些函数的所有参数及其默认值，
+# 便于在调用时灵活地只覆盖需要的参数，其余参数自动补齐
+def get_default_args(func):
+    if inspect.isfunction(func):
+        return _get_default_args(func)
+    else:
+        # Use the origin _init_fn in CustomOpDef
+        return _get_default_args(func._init_fn)
+
+
+@torch.jit.script
+def _update_out_and_lse(
+    out: torch.Tensor,
+    lse: torch.Tensor,
+    block_out: torch.Tensor,
+    block_lse: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    block_out = block_out.to(torch.float32)
+    block_lse = block_lse.transpose(-2, -1).unsqueeze(dim=-1)
+
+    # new_lse = lse + torch.log(1 + torch.exp(block_lse - lse))
+    # torch.exp(lse - new_lse) * out + torch.exp(block_lse - new_lse) * block_out
+    # For additional context and discussion, please refer to:
+    # https://github.com/zhuzilin/ring-flash-attention/pull/34#issuecomment-2076126795
+    out = out - F.sigmoid(block_lse - lse) * (out - block_out)
+    lse = lse - F.logsigmoid(lse - block_lse)
+
+    return out, lse
+
+
+def update_out_and_lse(
+    out: Optional[torch.Tensor],
+    lse: Optional[torch.Tensor],
+    block_out: torch.Tensor,
+    block_lse: torch.Tensor,
+    slice_=None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if out is None:
+        if slice_ is not None:
+            raise RuntimeError("first update_out_and_lse should not pass slice_ args")
+        out = block_out.to(torch.float32)
+        lse = block_lse.transpose(-2, -1).unsqueeze(dim=-1)
+    elif slice_ is not None:
+        slice_out, slice_lse = out[slice_], lse[slice_]
+        slice_out, slice_lse = _update_out_and_lse(
+            slice_out, slice_lse, block_out, block_lse
+        )
+        out[slice_], lse[slice_] = slice_out, slice_lse
+    else:
+        out, lse = _update_out_and_lse(out, lse, block_out, block_lse)
+    return out, lse
+
+
+class RingComm:
+    def __init__(self, process_group: dist.ProcessGroup):
+        self._process_group = process_group
+        self._ops = []
+        self.rank = dist.get_rank(self._process_group)
+        self.world_size = dist.get_world_size(self._process_group)
+        self._reqs = None
+
+        self.send_rank = (self.rank + 1) % self.world_size
+        self.recv_rank = (self.rank - 1) % self.world_size
+
+        if process_group is not None:
+            self.send_rank = dist.get_global_rank(self._process_group, self.send_rank)
+            self.recv_rank = dist.get_global_rank(self._process_group, self.recv_rank)
+
+    def send_recv(
+        self, to_send: torch.Tensor, recv_tensor: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        if recv_tensor is None:
+            res = torch.empty_like(to_send)
+        else:
+            res = recv_tensor
+
+        send_op = dist.P2POp(
+            dist.isend, to_send, self.send_rank, group=self._process_group
+        )
+        recv_op = dist.P2POp(dist.irecv, res, self.recv_rank, group=self._process_group)
+        self._ops.append(send_op)
+        self._ops.append(recv_op)
+        return res
+
+    def commit(self):
+        if self._reqs is not None:
+            raise RuntimeError("commit called twice")
+        self._reqs = dist.batch_isend_irecv(self._ops)
+
+    def wait(self):
+        if self._reqs is None:
+            raise RuntimeError("wait called before commit")
+        for req in self._reqs:
+            req.wait()
+        self._reqs = None
+        self._ops = []
+
+    def send_recv_kv(
+        self,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        k_buffer: Optional[torch.Tensor] = None,
+        v_buffer: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        next_k, next_v = self.send_recv(k, k_buffer), self.send_recv(v, v_buffer)
+        self.commit()
+        return next_k, next_v
+    
+
+import torch
+import torch.distributed as dist
+from flash_attn.flash_attn_interface import _flash_attn_forward, _flash_attn_backward
+
+
+def zigzag_ring_flash_attn_forward(
+    process_group,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    softmax_scale,
+    dropout_p=0,
+    causal=True,
+    window_size=(-1, -1),
+    alibi_slopes=None,
+    deterministic=False,
+):
+    with torch.profiler.record_function("ContextParallel_ZigzagRingFlashAttention_ForwardPass"):
+        assert causal == True, "zigzag ring is meaningless for causal=False"
+        comm = RingComm(process_group)
+
+        block_seq_len = q.shape[1] // 2
+        q1 = q[:, block_seq_len:]
+
+        out = None
+        lse = None
+        next_k, next_v = None, None
+
+        def forward(q, k, v, causal):
+            params = get_default_args(_flash_attn_forward).copy()
+            params.update(
+                {
+                    "q": q,
+                    "k": k,
+                    "v": v,
+                    "dropout_p": dropout_p,
+                    "softmax_scale": softmax_scale,
+                    "causal": causal,
+                    "alibi_slopes": alibi_slopes,
+                    "return_softmax": True and dropout_p > 0,
+                }
+            )
+            if "window_size" in params:
+                params.update({"window_size": window_size})
+            else:
+                params.update(
+                    {
+                        "window_size_left": window_size[0],
+                        "window_size_right": window_size[1],
+                    }
+                )
+            outputs = _flash_attn_forward(**params)
+            if len(outputs) == 8:
+                block_out, _, _, _, _, block_lse, _, _ = outputs
+            else:
+                assert len(outputs) == 4
+                block_out, block_lse, _, _ = outputs
+            return block_out, block_lse
+
+        for step in range(comm.world_size):
+            if step + 1 != comm.world_size:
+                next_k, next_v = comm.send_recv_kv(k, v)
+
+            if step == 0:
+                block_out, block_lse = forward(q, k, v, causal=True)
+                out, lse = update_out_and_lse(out, lse, block_out, block_lse)
+            elif step <= comm.rank:
+                k0 = k[:, :block_seq_len]
+                v0 = v[:, :block_seq_len]
+                block_out, block_lse = forward(q, k0, v0, causal=False)
+                out, lse = update_out_and_lse(out, lse, block_out, block_lse)
+            else:
+                block_out, block_lse = forward(q1, k, v, causal=False)
+                out, lse = update_out_and_lse(
+                    out,
+                    lse,
+                    block_out,
+                    block_lse,
+                    slice_=(slice(None), slice(block_seq_len, None)),
+                )
+
+            if step + 1 != comm.world_size:
+                comm.wait()
+                k, v = next_k, next_v
+
+        out = out.to(q.dtype)
+        lse = lse.squeeze(dim=-1).transpose(1, 2)
+        return out, lse
+
+
+def zigzag_ring_flash_attn_backward(
+    process_group,
+    dout,
+    q,
+    k,
+    v,
+    out,
+    softmax_lse,
+    softmax_scale,
+    dropout_p=0,
+    causal=True,
+    window_size=(-1, -1),
+    alibi_slopes=None,
+    deterministic=False,
+):
+    with torch.profiler.record_function("ContextParallel_ZigzagRingFlashAttention_BackwardPass"):
+        assert causal == True, "zigzag ring is meaningless for causal=False"
+        kv_comm = RingComm(process_group)
+        d_kv_comm = RingComm(process_group)
+        dq, dk, dv = None, None, None
+        next_dk, next_dv = None, None
+        next_k, next_v = None, None
+        dk_comm_buffer, dv_comm_buffer = None, None
+
+        dout1 = dout.chunk(2, dim=1)[1]
+        q1 = q.chunk(2, dim=1)[1]
+        out1 = out.chunk(2, dim=1)[1]
+        softmax_lse1 = softmax_lse.chunk(2, dim=2)[1].contiguous()
+        block_seq_len = q.shape[1] // 2
+
+        # repeatly allocating buffer may be slow...
+        dq_buffer = torch.empty(q.shape, dtype=q.dtype, device=q.device)
+        dk_buffer = torch.empty(k.shape, dtype=k.dtype, device=k.device)
+        dv_buffer = torch.empty(v.shape, dtype=v.dtype, device=v.device)
+
+        def backward(dout, q, k, v, out, softmax_lse, causal):
+            seqlen_q = q.shape[1]
+            seqlen_kv = k.shape[1]
+            params = get_default_args(_flash_attn_backward).copy()
+            params.update(
+                {
+                    "dout": dout,
+                    "q": q,
+                    "k": k,
+                    "v": v,
+                    "out": out,
+                    "softmax_lse": softmax_lse,
+                    "dq": dq_buffer[:, :seqlen_q],
+                    "dk": dk_buffer[:, :seqlen_kv],
+                    "dv": dv_buffer[:, :seqlen_kv],
+                    "dropout_p": dropout_p,
+                    "softmax_scale": softmax_scale,
+                    "causal": causal,
+                    "alibi_slopes": alibi_slopes,
+                    "deterministic": deterministic,
+                }
+            )
+            if "window_size" in params:
+                params.update({"window_size": window_size})
+            else:
+                params.update(
+                    {
+                        "window_size_left": window_size[0],
+                        "window_size_right": window_size[1],
+                    }
+                )
+            _flash_attn_backward(**params)
+
+        for step in range(kv_comm.world_size):
+            if step + 1 != kv_comm.world_size:
+                next_k, next_v = kv_comm.send_recv_kv(k, v)
+
+            if step == 0:
+                backward(dout, q, k, v, out, softmax_lse, causal=True)
+                dq = dq_buffer.to(torch.float32)
+                dk = dk_buffer.to(torch.float32)
+                dv = dv_buffer.to(torch.float32)
+            else:
+                if step <= kv_comm.rank:
+                    k0 = k[:, :block_seq_len]
+                    v0 = v[:, :block_seq_len]
+                    backward(dout, q, k0, v0, out, softmax_lse, causal=False)
+                    dq += dq_buffer
+                else:
+                    backward(dout1, q1, k, v, out1, softmax_lse1, causal=False)
+                    # always use the first half in dq_buffer.
+                    dq[:, block_seq_len:] += dq_buffer[:, :block_seq_len]
+
+                d_kv_comm.wait()
+                dk_comm_buffer, dv_comm_buffer = dk, dv
+                dk, dv = next_dk, next_dv
+
+                if step <= kv_comm.rank:
+                    dk[:, :block_seq_len] += dk_buffer[:, :block_seq_len]
+                    dv[:, :block_seq_len] += dv_buffer[:, :block_seq_len]
+                else:
+                    dk += dk_buffer
+                    dv += dv_buffer
+
+            if step + 1 != kv_comm.world_size:
+                kv_comm.wait()
+                k, v = next_k, next_v
+
+            next_dk, next_dv = d_kv_comm.send_recv_kv(
+                dk, dv, dk_comm_buffer, dv_comm_buffer
+            )
+
+        d_kv_comm.wait()
+
+        return dq.to(q.dtype), next_dk.to(q.dtype), next_dv.to(q.dtype)
+
+
+class ZigZagRingFlashAttnFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        q,
+        k,
+        v,
+        dropout_p,
+        softmax_scale,
+        causal,
+        window_size,
+        alibi_slopes,
+        deterministic,
+        return_softmax,
+        group,
+    ):
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** (-0.5)
+
+        assert alibi_slopes is None
+        k = k.contiguous()
+        v = v.contiguous()
+        out, softmax_lse = zigzag_ring_flash_attn_forward(
+            group,
+            q,
+            k,
+            v,
+            softmax_scale=softmax_scale,
+            dropout_p=dropout_p,
+            causal=causal,
+            window_size=window_size,
+            alibi_slopes=alibi_slopes,
+            deterministic=False,
+        )
+        # this should be out_padded
+        ctx.save_for_backward(q, k, v, out, softmax_lse)
+        ctx.dropout_p = dropout_p
+        ctx.softmax_scale = softmax_scale
+        ctx.causal = causal
+        ctx.window_size = window_size
+        ctx.alibi_slopes = alibi_slopes
+        ctx.deterministic = deterministic
+        ctx.group = group
+        return out if not return_softmax else (out, softmax_lse, None)
+
+    @staticmethod
+    def backward(ctx, dout, *args):
+        q, k, v, out, softmax_lse = ctx.saved_tensors
+        dq, dk, dv = zigzag_ring_flash_attn_backward(
+            ctx.group,
+            dout,
+            q,
+            k,
+            v,
+            out,
+            softmax_lse,
+            softmax_scale=ctx.softmax_scale,
+            dropout_p=ctx.dropout_p,
+            causal=ctx.causal,
+            window_size=ctx.window_size,
+            alibi_slopes=ctx.alibi_slopes,
+            deterministic=ctx.deterministic,
+        )
+        return dq, dk, dv, None, None, None, None, None, None, None, None
+
+
+
+
+def zigzag_ring_flash_attn_func(
+    q,
+    k,
+    v,
+    dropout_p=0.0,
+    softmax_scale=None,
+    causal=False,
+    window_size=(-1, -1),
+    alibi_slopes=None,
+    deterministic=False,
+    return_attn_probs=False,
+    group=None,
+):
+    return ZigZagRingFlashAttnFunc.apply(
+        q,
+        k,
+        v,
+        dropout_p,
+        softmax_scale,
+        causal,
+        window_size,
+        alibi_slopes,
+        deterministic,
+        return_attn_probs,
+        group,
+    )
+
+
+class ZigzagRingFlashAttention(torch.nn.Module):
+    def __init__(self, attention_dropout, cp_group, softmax_scale=None, causal=True):
+        super().__init__()
+        self.softmax_scale = softmax_scale
+        self.attention_dropout = attention_dropout
+        self.cp_process_group = cp_group  # CommGroup对象
+        self.causal = causal
+
+    def forward(self, q, k, v):
+        # shape 检查（可选）
+        assert q.dim() == 4, "q should be [B, S, H, D]"
+        softmax_scale = self.softmax_scale
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** -0.5
+        
+        with torch.profiler.record_function("ZigZag_Ring_Flash_Attention_Forward"):
+            context = zigzag_ring_flash_attn_func(
+                q, k, v,
+                dropout_p=self.attention_dropout,
+                softmax_scale=softmax_scale,
+                causal=self.causal,
+                group=self.cp_process_group
+            )
+        return context
+

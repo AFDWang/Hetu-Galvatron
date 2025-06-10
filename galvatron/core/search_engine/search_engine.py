@@ -211,9 +211,13 @@ class GalvatronSearchEngine():
                     self.act_sizes[i][tp] = self.act_sizes[i][tp] / maxseq * self.seqlen_list[i]
             self.other_memory_pp_off = self.memory_config['other_memory_pp_off_sp'][maxseq_list[0]]
             self.other_memory_pp_on = {'first_stage':self.memory_config['other_memory_pp_on_first_sp'][maxseq_list[0]], 'last_stage':self.memory_config['other_memory_pp_on_last_sp'][maxseq_list[-1]]}
+            # for tp in self.other_memory_pp_off['activation']:
+            #     self.other_memory_pp_off['activation'][tp] = 2/3 * self.other_memory_pp_off['activation'][tp] + 1/3 * self.other_memory_pp_off['activation'][tp] / maxseq_list[0] * self.seqlen_list[0] # TODO: reasonable scaling when len(seqlen_list) > 1
+            #     self.other_memory_pp_on['first_stage']['activation'][tp] = self.other_memory_pp_on['first_stage']['activation'][tp] # / maxseq_list[0] * self.seqlen_list[0] # first stage is not scaled
+            #     self.other_memory_pp_on['last_stage']['activation'][tp] = self.other_memory_pp_on['last_stage']['activation'][tp] / maxseq_list[-1] * self.seqlen_list[-1] # last stage is scaled
             for tp in self.other_memory_pp_off['activation']:
-                self.other_memory_pp_off['activation'][tp] = 2/3 * self.other_memory_pp_off['activation'][tp] + 1/3 * self.other_memory_pp_off['activation'][tp] / maxseq_list[0] * self.seqlen_list[0] # TODO: reasonable scaling when len(seqlen_list) > 1
-                self.other_memory_pp_on['first_stage']['activation'][tp] = self.other_memory_pp_on['first_stage']['activation'][tp] # / maxseq_list[0] * self.seqlen_list[0] # first stage is not scaled
+                self.other_memory_pp_off['activation'][tp] = self.other_memory_pp_off['activation'][tp] / maxseq_list[0] * self.seqlen_list[0] # TODO: reasonable scaling when len(seqlen_list) > 1
+                self.other_memory_pp_on['first_stage']['activation'][tp] = self.other_memory_pp_on['first_stage']['activation'][tp] / maxseq_list[0] * self.seqlen_list[0] # first stage is not scaled
                 self.other_memory_pp_on['last_stage']['activation'][tp] = self.other_memory_pp_on['last_stage']['activation'][tp] / maxseq_list[-1] * self.seqlen_list[-1] # last stage is scaled
         elif self.args.memory_profile_mode == "static":
             if self.args.sequence_parallel:
@@ -297,9 +301,7 @@ class GalvatronSearchEngine():
                     'optimal_chunk_func': self.optimal_chunk_func,
                     'sequence_length': self.seqlen_list[i],
                     'hidden_size': self.hiddensize_list[i],
-                    'vocab_size': self.args.padded_vocab_size if hasattr(self.args, 'padded_vocab_size') 
-                                  else (self.args.num_labels if hasattr(self.args, 'num_labels')  # For ViT
-                                  else self.args.num_classes),  # For Swin
+                    'vocab_size': self.args.padded_vocab_size if hasattr(self.args, 'padded_vocab_size') else self.args.num_classes, # For Swin model
                     'forward_computation_time': self.time_profiled_list[i],
                     'bct_fct_coe': 2,
                     'extra_overhead': 0,

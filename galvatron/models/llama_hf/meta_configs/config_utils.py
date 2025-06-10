@@ -14,6 +14,8 @@ path_dict = {
     "llama2-70b": "llama2-70b.json",
     "qwen2.5-7b": "qwen2.5-7b.json",
     "qwen2.5-72b": "qwen2.5-72b.json",
+    "qwen2.5-1.5b": "qwen2.5-1.5b.json",
+    "qwen2.5-3b": "qwen2.5-3b.json",
 }
 
 
@@ -28,10 +30,16 @@ def config_from_meta(model_type) -> LlamaConfig:
         params = model_type
     if "n_kv_heads" not in params:
         params["n_kv_heads"] = None
+    # 只有在ffn_dim不存在时才设置默认值
     if "ffn_dim" not in params:
-        params["ffn_dim"] = (
-            (params["dim"] * 8 // 3 + params["multiple_of"] - 1) // params["multiple_of"] * params["multiple_of"]
-        )
+        if model_type.startswith("qwen"):
+            # 对于Qwen模型，可能需要特殊的计算方式
+            params["ffn_dim"] = params["dim"] * 5.5  # Qwen模型的ffn_dim约为hidden_size的5.5倍左右
+        else:
+            # 对于其他模型，使用原来的计算方式
+            params["ffn_dim"] = (
+                (params["dim"] * 8 // 3 + params["multiple_of"] - 1) // params["multiple_of"] * params["multiple_of"]
+            )
     return LlamaConfig(
         hidden_size=params["dim"],
         intermediate_size=params["ffn_dim"],
@@ -53,7 +61,13 @@ def set_model_config(config, args, overwrite_args=True):
     if args.set_model_config_manually:
         config.vocab_size = args.vocab_size
         config.hidden_size = args.hidden_size
-        config.intermediate_size = args.hidden_size * 8 // 3
+        # 根据模型类型使用不同的ffn尺寸计算方式
+        if args.model_size.startswith("qwen"):
+            # 对于Qwen模型，使用固定的ffn_dim值
+            config.intermediate_size = args.ffn_hidden_size if args.ffn_hidden_size is not None else args.hidden_size * 8 // 3
+        else:
+            # 对于其他模型，使用原来的计算方式
+            config.intermediate_size = args.hidden_size * 8 // 3
         config.num_hidden_layers = args.num_hidden_layers
         config.num_attention_heads = args.num_attention_heads
         config.max_position_embeddings = args.seq_length

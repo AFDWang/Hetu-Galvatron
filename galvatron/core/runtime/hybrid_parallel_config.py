@@ -21,7 +21,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     local_rank = args.local_rank
     world_size = torch.distributed.get_world_size()
     config_type = "JSON" if args.galvatron_config_path not in [None, "None"] else "GLOBAL"
-    layernum_list = model_info(config, args).layernums()
+    layernum_list = model_info(config, args).layernums()#[config.num_hidden_layers]
     total_layer_num = sum(layernum_list)
     if local_rank == 0:
         print("======================== Galvatron Parallel Config =============================")
@@ -44,11 +44,12 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
             args.vocab_sp = 0
             use_sp = [0] * total_layer_num
     else:
+        #TODO:适配细粒度cp
         if isinstance(args.galvatron_config_path, str):
             galvatron_config = read_json_config(args.galvatron_config_path)
         else:
             galvatron_config = args.galvatron_config_path
-        pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp = config2strategy(galvatron_config)
+        pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp = config2strategy(galvatron_config)
         bsz, chunks = galvatron_config["global_bsz"], galvatron_config["chunks"]
         checkpoint_flags_enc = (
             str2array(galvatron_config["checkpoint"])
@@ -89,12 +90,14 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         avg_layer_num = total_layer_num // pp_deg
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg - 1)
         pp_divide = [avg_layer_num] * (pp_deg - 1) + [last_layer_num]
-    pp_ranks_enc = get_pp_ranks_enc(pp_divide)
+    pp_ranks_enc = get_pp_ranks_enc(pp_divide)#这是干什么的
 #TODO:world size可能需要除以min cp，由于现在还是全局的，所以还没有加入细粒度的cp
     min_tp = min(min(tp_sizes_enc), args.vocab_tp)
-    # assert (
-    #     args.global_train_batch_size % (world_size // pp_deg // min_tp) == 0
-    # ), "global_train_batch_size should be multiple of world_size//pp_deg!"
+    min_cp = min(cp_sizes_enc)
+    assert (
+        args.global_train_batch_size % (world_size // pp_deg // min_tp // min_cp) == 0
+    ), "global_train_batch_size should be multiple of world_size//pp_deg//min_tp//min_cp!"
+    #TODO:这里需要修改，如果tp_size_old == tp_size_new，那么我们需要生成新的redistribute group
     hybrid_parallel_configs = {
         "pp_deg": pp_deg,
         "tp_sizes_enc": tp_sizes_enc,

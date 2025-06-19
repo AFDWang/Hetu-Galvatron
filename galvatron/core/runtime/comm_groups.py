@@ -331,6 +331,14 @@ def gen_redistributed_group(tp_size_old, tp_size_new, tp_consec_old, tp_consec_n
     tp_group_new = None if tp_size_new == 1 else tp_group_new
     return (tp_group_old, tp_group_new)
 
+#TODO：
+def gen_redistributed_group_with_cp(tp_size_old, tp_size_new, cp_size_old, cp_size_new, tp_group_old, tp_group_new, cp_group_old, cp_group_new):
+    if tp_size_old * cp_size_old == tp_size_new * cp_size_new:
+        return (None, None)
+    split_group = None if tp_size_old * cp_size_old == 1 else merge_tp_cp_groups(tp_group_old, cp_group_old)
+    allgather_group = None if tp_size_new * cp_size_new == 1 else merge_tp_cp_groups(tp_group_new, cp_group_new)
+    return (split_group, allgather_group)
+
 
 def merge_redistributed_group(split_group, allgather_group, world_ranks=None):
     if split_group is None or allgather_group is None:
@@ -431,6 +439,12 @@ def merge_dp_cp_groups(dp_group, cp_group):
     merged_ranks = dp_group.ranks + cp_group.ranks
     merged_group = CommGroup(merged_ranks)
     return merged_group
+#split group = tp group + cp group
+#all gather group = tp group + cp group
+def merge_tp_cp_groups(tp_group, cp_group):
+    merged_ranks = tp_group.ranks + cp_group.ranks
+    merged_group = CommGroup(merged_ranks)
+    return merged_group
 
         
 def gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, tp_consecutive_flags, show_rank=-1, world_ranks=None):
@@ -473,12 +487,27 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, tp_consec
         else:
             old_tp_size = all_sp_sizes[i - 1]
             old_tp_groups = sp_groups[i - 1]
+
+        old_cp_size = all_cp_sizes[i - 1]
+        old_cp_groups = cp_groups[i - 1]
+
         if all_tp_sizes[i] != 1:
             new_tp_size = all_tp_sizes[i]
             new_tp_groups = tp_groups[i]
         else:
             new_tp_size = all_sp_sizes[i]
             new_tp_groups = sp_groups[i]
+        
+        new_cp_size = all_cp_sizes[i]
+        new_cp_groups = cp_groups[i]
+        #TODO:to be examined
+        # split_group, allgather_group = gen_redistributed_group_with_cp(
+        #     old_tp_size, new_tp_size, old_cp_size, new_cp_size, old_tp_groups, new_tp_groups, old_cp_groups, new_cp_groups
+        # )
+
+        fused_split_group, fused_allgather_group = merge_redistributed_group(
+            split_group, allgather_group, world_ranks=world_ranks
+        )
         split_group, allgather_group = gen_redistributed_group(
             old_tp_size, new_tp_size, tp_consecutive_flags[i - 1], tp_consecutive_flags[i], old_tp_groups, new_tp_groups
         )

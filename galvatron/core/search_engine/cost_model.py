@@ -198,6 +198,8 @@ class MemoryCostModel:
                     args.other_memory_pp_on['last_stage']['activation'][tp] * 
                     other_layers_bsz_last
                 )
+                # print("debug:", other_layers_bsz, other_layers_bsz_first, other_layers_bsz_last, other_memory_pp_on['first_stage']['activation'][tp], other_memory_pp_on['last_stage']['activation'][tp])
+                # print("middle:", tp_other_memcosts)
             # if checkpoint:
             #     for i in range(len(tp_other_memory_cost)):
             #         tp_other_memory_cost[i] += tp_activation_per_bsz_dict[self.tp_size] * mbsz

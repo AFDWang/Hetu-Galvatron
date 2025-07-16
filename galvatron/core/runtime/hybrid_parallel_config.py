@@ -6,9 +6,6 @@ import torch
 
 from galvatron.utils import config2strategy, read_json_config, str2array
 
-#pp_divide = [2,2,2,2],pp
-#deg = 4, ppranks enc = (00112233)
-#获得pp的rank分布
 def get_pp_ranks_enc(pp_divide):
     pp_ranks_enc = []
     pp_deg = len(pp_divide)
@@ -39,17 +36,16 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         pp_divide = None
         if args.use_ulysses:
             args.vocab_sp = 1
-            use_sp = [1] * total_layer_num #use sp就是在这里生成的之后在hp config whole model里面转变为的sp groups
+            use_sp = [1] * total_layer_num
         else:
             args.vocab_sp = 0
             use_sp = [0] * total_layer_num
     else:
-        #TODO:适配细粒度cp
         if isinstance(args.galvatron_config_path, str):
             galvatron_config = read_json_config(args.galvatron_config_path)
         else:
             galvatron_config = args.galvatron_config_path
-        pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp = config2strategy(galvatron_config)
+        pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp, vcp = config2strategy(galvatron_config)
         bsz, chunks = galvatron_config["global_bsz"], galvatron_config["chunks"]
         checkpoint_flags_enc = (
             str2array(galvatron_config["checkpoint"])
@@ -85,19 +81,17 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         args.pp_deg = pp_deg
         args.vocab_tp = vtp
         args.vocab_sp = vsp
-
+        args.vocab_cp = vcp
     if pp_divide is None:
         avg_layer_num = total_layer_num // pp_deg
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg - 1)
         pp_divide = [avg_layer_num] * (pp_deg - 1) + [last_layer_num]
-    pp_ranks_enc = get_pp_ranks_enc(pp_divide)#这是干什么的
-#TODO:world size可能需要除以min cp，由于现在还是全局的，所以还没有加入细粒度的cp
+    pp_ranks_enc = get_pp_ranks_enc(pp_divide)
     min_tp = min(min(tp_sizes_enc), args.vocab_tp)
-    min_cp = min(cp_sizes_enc)
+    min_cp = min(min(cp_sizes_enc), args.vocab_cp)
     assert (
         args.global_train_batch_size % (world_size // pp_deg // min_tp // min_cp) == 0
     ), "global_train_batch_size should be multiple of world_size//pp_deg//min_tp//min_cp!"
-    #TODO:这里需要修改，如果tp_size_old == tp_size_new，那么我们需要生成新的redistribute group
     hybrid_parallel_configs = {
         "pp_deg": pp_deg,
         "tp_sizes_enc": tp_sizes_enc,
@@ -110,6 +104,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         "use_sp": use_sp,
         "vocab_tp": args.vocab_tp,
         "vocab_sp": args.vocab_sp,
+        "vocab_cp": args.vocab_cp,
         "default_dp_type": args.default_dp_type,
         "global_train_batch_size": args.global_train_batch_size,
     }
@@ -234,9 +229,7 @@ def print_hp_configs(hp_configs):
         print_hp_config(key, val)
     print("================================================================================")
 
-#vocab_tp=args.vocab_tp,这里用的vocab tp
-#embed_sdp=args.embed_sdp
-def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0):
+def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0, vocab_cp=1):
     pp_deg, tp_sizes_enc, use_sp, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc, cp_sizes_enc  = (
         hp_configs["pp_deg"],
         hp_configs["tp_sizes_enc"],
@@ -277,15 +270,16 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
             hp_configs_whole["tp_consec_whole"].append(tp_consecutive_flags[idx_enc])
             hp_configs_whole["checkpoint_flags_whole"].append(checkpoint_flags_enc[idx_enc])
             idx_enc += 1
-        else:
+        else: #for embedding
             if vocab_sp == 1:
                 hp_configs_whole["sp_sizes_whole"].append(vocab_tp)
                 hp_configs_whole["tp_sizes_whole"].append(1)
             else:
                 hp_configs_whole["tp_sizes_whole"].append(vocab_tp)
                 hp_configs_whole["sp_sizes_whole"].append(1)
-            hp_configs_whole["cp_sizes_whole"].append(cp_sizes_enc[idx_enc] if idx_enc < len(cp_sizes_enc) else cp_sizes_enc[-1])#just used in layers       
-            hp_configs_whole["dp_types_whole"].append(embed_sdp)#embed_sdp=args.embed_sdp "Apply SDP (zero-3) for Embeddings and cls"
+            #hp_configs_whole["cp_sizes_whole"].append(cp_sizes_enc[idx_enc] if idx_enc < len(cp_sizes_enc) else cp_sizes_enc[-1]) 
+            hp_configs_whole["cp_sizes_whole"].append(vocab_cp)
+            hp_configs_whole["dp_types_whole"].append(embed_sdp)#embed_sdp: Apply SDP (zero-3) for Embeddings and cls
             hp_configs_whole["pp_ranks_whole"].append(
                 pp_ranks_enc[idx_enc] if idx_enc < len(pp_ranks_enc) else pp_ranks_enc[-1]
             )

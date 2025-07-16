@@ -36,15 +36,15 @@ class GalvatronModel(nn.Module):
         from galvatron.core import get_args
 
         self.args = get_args()
-        self.model = hp_model#把model给他
+        self.model = hp_model
         self.iter = 0
-#设立一个forward backward方法，需要看看loss func是怎么使用的，loss func计算的是一个chunk以及一个dp组里面的平均loss
+
     def forward_backward(self, batch, iter=None, profiler=None, loss_func=None, **kwargs):
         args, model = self.args, self.model
         self.iter = iter if iter is not None else self.iter
         if loss_func is not None:
             if len(batch) == 1 and isinstance(batch[0], Tensor):
-                batch = [batch, [self.fake_tensor(batch[0])]]#[[inputisd],[faketensor]]实际适用于设立假标签
+                batch = [batch, [self.fake_tensor(batch[0])]]
             assert (
                 isinstance(batch, (tuple, list))
                 and isinstance(batch[0], (tuple, list))
@@ -65,9 +65,9 @@ class GalvatronModel(nn.Module):
         else:
             loss = model.no_pipeline_forward_backward(
                 batch, loss_func, forward_only=args.profile_forward, profiler=profiler, iter=self.iter, **kwargs
-            )#我们要看看返回来的loss是什么样子
+            )
         self.iter += 1
-        return self.loss_to_cpu(loss)#对loss里面求平均
+        return self.loss_to_cpu(loss)
 
     def fake_tensor(self, x):
         return torch.zeros([x.shape[0], 1], dtype=x.dtype, device=x.device)
@@ -82,7 +82,7 @@ class GalvatronModel(nn.Module):
         if isinstance(loss, (list, tuple)):  # Average loss of each microbatch
             if len(loss) == 0:
                 return None
-            loss = np.mean([l.item() for l in loss]) #对loss里面进行求平均
+            loss = np.mean([l.item() for l in loss])
         else:
             loss = loss.item()
         return loss
@@ -178,7 +178,7 @@ def construct_hybrid_parallel_model_api(
     all_block_name=None,
     load_module_func=None,
     meta_init_buffer=True,
-):#名字为none就把wrap block name给他名字
+):
     if wrap_checkpoint_block_name == None:
         wrap_checkpoint_block_name = wrap_block_name
     config, args, hp_configs = model_config, training_args, hybrid_parallel_configs
@@ -195,7 +195,6 @@ def construct_hybrid_parallel_model_api(
     layer_dtypes_list = model_info.dtypes()
 
     # Check the validity of hp_configs (encoders only)
-    #TODO: adapt to cp
     check_hp_config(hp_configs, layernum_list)
 
     # Calculate shapes and dtypes for whole model (including embed/cls/... layers)
@@ -205,7 +204,7 @@ def construct_hybrid_parallel_model_api(
 
     # Get hp_configs_whole for the whole model (including embed/cls/... layers)
     hp_configs_whole = hp_config_whole_model(
-        module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp=args.vocab_tp, vocab_sp=args.vocab_sp
+        module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp=args.vocab_tp, vocab_sp=args.vocab_sp, vocab_cp=args.vocab_cp
     )
 
     # if args.use_ulysses:
@@ -222,8 +221,14 @@ def construct_hybrid_parallel_model_api(
         cp_groups_whole,
         dp_groups_whole,
         seq_data_groups_whole,
-        allgather_groups_whole,
-        split_groups_whole,
+        # allgather_groups_whole,
+        # split_groups_whole,
+        allgather_tp_sp_groups_whole,
+        split_tp_sp_groups_whole,
+        allgather_cp_groups_whole,
+        split_cp_groups_whole,
+        allgather_tp_sp_cp_groups_whole,
+        split_tp_sp_cp_groups_whole,
         fused_allgather_groups_whole,
         fused_split_groups_whole,
         embedding_group,
@@ -247,8 +252,8 @@ def construct_hybrid_parallel_model_api(
         #TODO: FA model does not support cp!
         assert not args.use_ulysses, "FA model does not support ulysses!"
         model = construct_tensor_parallel_model(model, config, tp_groups_whole)
+
     # [Step 2] Construct Sequantial model using model-specific sequential function
-    #已经变为pipe sequential对应的模型
     if args.initialize_on_meta and args.shape_order == "SBH":
         with init_empty_weights(meta_init_buffer):
             model = construct_sequential_model(model, config)
@@ -257,13 +262,15 @@ def construct_hybrid_parallel_model_api(
 
     # [Step 3] Wrap Relocation modules if necessary
     model = wrap_modules_relocation(
-        model, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole
+        model, allgather_tp_sp_groups_whole, allgather_cp_groups_whole, allgather_tp_sp_cp_groups_whole, 
+        split_tp_sp_groups_whole, split_cp_groups_whole, split_tp_sp_cp_groups_whole, 
+        fused_allgather_groups_whole, fused_split_groups_whole
     )
     ln_offset, ln_size = get_layernorm_offset(model, layernorm_name)
     assert len(ln_offset) == len(dp_groups_whole)
+
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
     from galvatron.core.runtime.pipeline import PipelineParallel
-#TODO: adapt to context parallel
     hp_model = PipelineParallel(
         model=model,
         model_ranks=hp_configs_whole["pp_ranks_whole"],

@@ -19,11 +19,11 @@ class CommGroup(object):
             return True
         return False
 
-    def allgather(self, input, is_input):
-        return gather_from_group(input, self.group, is_input)
+    # def allgather(self, input, is_input):
+    #     return gather_from_group(input, self.group, is_input)
 
-    def split(self, input, is_input):
-        return split_to_group(input, self.group, is_input)
+    # def split(self, input, is_input):
+    #     return split_to_group(input, self.group, is_input)
 
     def print(self):
         print(self.ranks, end=" ")
@@ -52,7 +52,6 @@ def get_world_size(world_ranks=None):
         assert isinstance(world_ranks, list)
         return len(world_ranks)
 
-#获得组内rank,看看自己在组内是哪一个rank [0,2,4,6]  1 -> 2
 def get_group_rank(world_ranks=None):
     if world_ranks is None:
         return torch.distributed.get_rank()
@@ -60,7 +59,6 @@ def get_group_rank(world_ranks=None):
         assert isinstance(world_ranks, list)
         return world_ranks.index(torch.distributed.get_rank())
 
-#映射为全局rank，把组内的rank映射为全局[0,1,2,3]->[0,2,4,6]
 def index_ranks(ranks, world_ranks=None):
     if world_ranks is None:
         return ranks
@@ -69,41 +67,9 @@ def index_ranks(ranks, world_ranks=None):
         return [world_ranks[i] for i in ranks]
 
 
-# def gen_tp_group_dist(tp_size, pp_size, to_print=True, consecutive=True, world_ranks=None):
-#     world_ranks = sort_ranks(world_ranks)#先获得全局rank
-#     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
-#     all_tp_groups, tp_group = [], None
-#     dp_size = world_size // tp_size // pp_size
-#     num_pp_groups = world_size // pp_size
-#     num_tp_groups = world_size // tp_size
-
-#     if consecutive:
-#         for i in range(num_tp_groups):
-#             ranks = range(i * tp_size, (i + 1) * tp_size)
-#             ranks = index_ranks(ranks, world_ranks)
-#             group = CommGroup(ranks)
-#             all_tp_groups.append(group)
-#             if group.has_rank(rank):
-#                 tp_group = group
-#     else:
-#         for i in range(pp_size):
-#             start_rank = i * num_pp_groups
-#             end_rank = (i + 1) * num_pp_groups
-#             for j in range(dp_size):
-#                 ranks = range(start_rank + j, end_rank, dp_size)
-#                 ranks = index_ranks(ranks, world_ranks)
-#                 group = CommGroup(ranks)
-#                 all_tp_groups.append(group)
-#                 if group.has_rank(rank):
-#                     tp_group = group
-
-#     if rank == 0 and to_print:
-#         print("TP groups:", end=" ")
-#         show_groups(all_tp_groups)
-#     return tp_group
-#consecutive must be True
+#consecutive must be True for tp
 def gen_tp_group_dist(tp_size, pp_size, to_print=True, consecutive=True, world_ranks=None):
-    world_ranks = sort_ranks(world_ranks)#先获得全局rank
+    world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
     all_tp_groups, tp_group = [], None
 
@@ -123,23 +89,24 @@ def gen_tp_group_dist(tp_size, pp_size, to_print=True, consecutive=True, world_r
         show_groups(all_tp_groups)
     return tp_group
 
-#Consecutive must be true
-def gen_cp_group_dist(tp_size, cp_size, pp_size, to_print=True, consecutive=False, world_ranks=None):
+#Consecutive must be false for cp
+#mul_size = tp_size * sp_size
+def gen_cp_group_dist(mul_size, cp_size, pp_size, to_print=True, consecutive=False, world_ranks=None):
     world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
     all_cp_groups, cp_group = [], None
-    dp_size = world_size // tp_size // pp_size // cp_size
+    dp_size = world_size // mul_size // pp_size // cp_size
     num_pp_groups = world_size // pp_size #Ranks per pipeline stage 
     
-    #Assumes TP->CP->DP->PP
+    #Assumes PP->TP/SP->CP->DP
     if not consecutive:
         for i in range(pp_size):
             pp_base_rank = i * num_pp_groups
             for j in range(dp_size):
-                dp_base_rank = pp_base_rank + j * (tp_size * cp_size) #DP stride: tp * cp
-                for k in range(tp_size):
-                    tp_base_rank = dp_base_rank + k
-                    ranks = list(range(tp_base_rank, tp_base_rank + tp_size * cp_size, tp_size))
+                dp_base_rank = pp_base_rank + j * (mul_size * cp_size) #DP stride: mul * cp
+                for k in range(mul_size): 
+                    base_rank = dp_base_rank + k
+                    ranks = list(range(base_rank, base_rank + mul_size * cp_size, mul_size))
                     ranks = index_ranks(ranks, world_ranks)
                     group = CommGroup(ranks)
                     all_cp_groups.append(group)
@@ -150,38 +117,38 @@ def gen_cp_group_dist(tp_size, cp_size, pp_size, to_print=True, consecutive=Fals
         show_groups(all_cp_groups)
     return cp_group
 
-def gen_dp_group_dist(tp_size, cp_size, pp_size, to_print=True, consecutive=False, world_ranks=None):
+#Consecutive must be false for dp
+def gen_dp_group_dist(mul_size, cp_size, pp_size, to_print=True, consecutive=False, world_ranks=None):
     world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
     all_dp_groups, dp_group = [], None
     num_pp_groups = world_size // pp_size
-    dp_stride = tp_size * cp_size
+    dp_stride = mul_size * cp_size
 
     if not consecutive:
-        # Logic assumes TP -> CP -> DP -> PP ordering
+        # Logic assumes PP -> TP -> CP -> DP ordering
         for i in range(pp_size): # Iterate PP stages
             pp_base_rank = i * num_pp_groups
-            for j in range(tp_size * cp_size): # Iterate combined (TP, CP) indices within a DP block
+            for j in range(mul_size * cp_size): # Iterate combined (TP*SP, CP) indices within a DP block
                 # This index 'j' represents a unique (tp, cp) combination within the DP group
                 start_rank_for_group = pp_base_rank + j
-                ranks = range(start_rank_for_group, pp_base_rank + num_pp_groups, dp_stride)
+                ranks = list(range(start_rank_for_group, pp_base_rank + num_pp_groups, dp_stride))
                 ranks = index_ranks(ranks, world_ranks)
                 group = CommGroup(ranks)
                 if group.has_rank(rank):
                     dp_group = group
-
     if rank == 0 and to_print:
         print("DP groups:", end=" ")
         show_groups(all_dp_groups)
     return dp_group
 
-
+#consecutive must be True for sp
 def gen_sp_group_dist(sp_size, pp_size, to_print=True, consecutive=True, world_ranks=None):
     world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
     all_sp_groups, sp_group = [], None
-    dp_size = world_size // sp_size // pp_size
-    num_pp_groups = world_size // pp_size
+    # dp_size = world_size // sp_size // pp_size
+    # num_pp_groups = world_size // pp_size
     num_sp_groups = world_size // sp_size
 
     if consecutive:
@@ -192,17 +159,17 @@ def gen_sp_group_dist(sp_size, pp_size, to_print=True, consecutive=True, world_r
             all_sp_groups.append(group)
             if group.has_rank(rank):
                 sp_group = group
-    else:
-        for i in range(pp_size):
-            start_rank = i * num_pp_groups
-            end_rank = (i + 1) * num_pp_groups
-            for j in range(dp_size):
-                ranks = range(start_rank + j, end_rank, dp_size)
-                ranks = index_ranks(ranks, world_ranks)
-                group = CommGroup(ranks)
-                all_sp_groups.append(group)
-                if group.has_rank(rank):
-                    sp_group = group
+    # else:
+    #     for i in range(pp_size):
+    #         start_rank = i * num_pp_groups
+    #         end_rank = (i + 1) * num_pp_groups
+    #         for j in range(dp_size):
+    #             ranks = range(start_rank + j, end_rank, dp_size)
+    #             ranks = index_ranks(ranks, world_ranks)
+    #             group = CommGroup(ranks)
+    #             all_sp_groups.append(group)
+    #             if group.has_rank(rank):
+    #                 sp_group = group
 
     if rank == 0 and to_print:
         print("SP groups:", end=" ")
@@ -247,17 +214,27 @@ def gen_embedding_group_dist(pp_size, all_pp_groups, to_print=True):
         show_groups(all_embedding_groups)
     return embedding_group
 
+#sequence group = megatron sp group(tp group) + cp group or ulysses sp group + cp group
+def gen_sep_group_dist(tp_size, cp_size, pp_size, to_print=True, consecutive=True, world_ranks=None):
+    world_ranks = sort_ranks(world_ranks)
+    rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
+    all_sep_groups, sep_group = [], None
+    num_sep_groups = world_size // (tp_size * cp_size)
+   
+    if consecutive:
+        for i in range(num_sep_groups):
+            ranks = range(i * tp_size * cp_size, (i + 1) * tp_size * cp_size)
+            ranks = index_ranks(ranks, world_ranks)
+            group = CommGroup(ranks)
+            all_sep_groups.append(group)
+            if group.has_rank(rank):
+                sep_group = group
 
-# def get_tp_group_dict_dist(all_tp_sizes, pp_size, consecutive=True, world_ranks=None):
-#     tp_sizes_set = list(set(all_tp_sizes))
-#     tp_group_dict = {}
-#     for tp_size in tp_sizes_set:
-#         tp_group_dict[tp_size] = gen_tp_group_dist(
-#             tp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks
-#         )
-#     return tp_group_dict
+    if rank == 0 and to_print:
+        print("SEP groups:", end=" ")
+        show_groups(all_sep_groups)
+    return sep_group
 
-#仅支持全局cp-size TODO:细粒度cpsize
 def get_tp_group_dict_dist(all_tp_sizes, pp_size, consecutive=True, world_ranks=None):
     tp_sizes_set = list(set(all_tp_sizes))
     tp_group_dict = {}
@@ -267,51 +244,37 @@ def get_tp_group_dict_dist(all_tp_sizes, pp_size, consecutive=True, world_ranks=
         )
     return tp_group_dict
 
-# def get_cp_group_dict_dist(all_cp_sizes, tp_size, pp_size, consecutive=False, world_ranks=None):
-#     world_ranks = sort_ranks(world_ranks)
-#     cp_group_dict = {}
-#     for i, cp_size in enumerate(all_cp_sizes):
-#         if cp_size > 1:
-#             cp_group = gen_cp_group_dist(tp_size, cp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks)
-#             cp_group_dict[i] = cp_group
-#         else:
-#             cp_group_dict[i] = None
-#     return cp_group_dict
-
-def get_cp_group_dict_dist(all_tp_sizes, all_cp_sizes, pp_size, consecutive=False, world_ranks=None):
-    tp_sizes_set = list(set(all_tp_sizes))
-    cp_sizes_set = list(set(all_cp_sizes))
+def get_cp_group_dict_dist(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, consecutive=False, world_ranks=None):
+    all_mul_sizes = []
+    world_size = torch.distributed.get_world_size() if world_ranks is None else torch.distributed.get_world_size(world_ranks)
+    for tp_size, sp_size in zip(all_tp_sizes, all_sp_sizes):
+        all_mul_sizes.append(tp_size * sp_size)
+    mul_sizes_set = list(set(all_mul_sizes))
     cp_group_dict = {}
-    for tp_size in tp_sizes_set:
-        cp_group_dict[tp_size] = {}
-        for cp_size in cp_sizes_set:
-            cp_group_dict[tp_size][cp_size]= gen_cp_group_dist(
-                tp_size, cp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks
-            )
+    for mul_size in mul_sizes_set:
+        cp_group_dict[mul_size] = {}
+        for cp_size in all_cp_sizes:
+            if mul_size * cp_size <= world_size:
+                cp_group_dict[mul_size][cp_size] = gen_cp_group_dist(
+                    mul_size, cp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks
+                )
     return cp_group_dict
-#TODO:目前cp和ulysses分离，
-# def get_dp_group_dict_dist(all_tp_sizes, all_sp_sizes, pp_size, consecutive=False, world_ranks=None):
-#     all_mul_sizes = []
-#     for tp_size, sp_size in zip(all_tp_sizes, all_sp_sizes):
-#         all_mul_sizes.append(tp_size * sp_size)
-#     mul_sizes_set = list(set(all_mul_sizes))
-#     dp_group_dict = {}
-#     for mul_size in mul_sizes_set:
-#         dp_group_dict[mul_size] = gen_dp_group_dist(
-#             mul_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks
-#         )
-#     return dp_group_dict
 
-def get_dp_group_dict_dist(all_tp_sizes, all_cp_sizes, pp_size, consecutive=False, world_ranks=None):
-    tp_sizes_set = list(set(all_tp_sizes))
-    cp_sizes_set = list(set(all_cp_sizes))
+def get_dp_group_dict_dist(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, consecutive=False, world_ranks=None):
+    all_mul_sizes = []
+    world_size = torch.distributed.get_world_size() if world_ranks is None else torch.distributed.get_world_size(world_ranks)
+    for tp_size, sp_size in zip(all_tp_sizes, all_sp_sizes):
+        all_mul_sizes.append(tp_size * sp_size)
+
+    mul_sizes_set = list(set(all_mul_sizes))
     dp_group_dict = {}
-    for tp_size in tp_sizes_set:
-        dp_group_dict[tp_size] = {}
-        for cp_size in cp_sizes_set:
-            dp_group_dict[tp_size][cp_size] = gen_dp_group_dist(
-                tp_size, cp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks
-            )
+    for mul_size in mul_sizes_set:
+        dp_group_dict[mul_size] = {}
+        for cp_size in all_cp_sizes:
+            if mul_size * cp_size <= world_size:
+                dp_group_dict[mul_size][cp_size] = gen_dp_group_dist(
+                    mul_size, cp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks
+                )
     return dp_group_dict
 
 def get_sp_group_dict_dist(all_sp_sizes, pp_size, consecutive=True, world_ranks=None):
@@ -323,67 +286,76 @@ def get_sp_group_dict_dist(all_sp_sizes, pp_size, consecutive=True, world_ranks=
         )
     return sp_group_dict
 
+# def gen_redistributed_group(tp_size_old, tp_size_new, tp_consec_old, tp_consec_new, tp_group_old, tp_group_new):
+#     if tp_size_old == tp_size_new and tp_consec_old == tp_consec_new:
+#         return (None, None)
+#     tp_group_old = None if tp_size_old == 1 else tp_group_old
+#     tp_group_new = None if tp_size_new == 1 else tp_group_new
+#     return (tp_group_old, tp_group_new)
 
-def gen_redistributed_group(tp_size_old, tp_size_new, tp_consec_old, tp_consec_new, tp_group_old, tp_group_new):
-    if tp_size_old == tp_size_new and tp_consec_old == tp_consec_new:
-        return (None, None)
+#when we use ulysses sp,the tp size will be changed into sp size
+def gen_redistributed_group_with_cp(tp_size_old, tp_size_new, tp_consec_old, tp_consec_new, tp_group_old, tp_group_new,
+                                    cp_size_old, cp_size_new, cp_consec_old, cp_consec_new, cp_group_old, cp_group_new, ):
+    if tp_size_old == tp_size_new and tp_consec_old == tp_consec_new and cp_size_old == cp_size_new and cp_consec_old == cp_consec_new:
+        return (None, None, None, None)
     tp_group_old = None if tp_size_old == 1 else tp_group_old
     tp_group_new = None if tp_size_new == 1 else tp_group_new
-    return (tp_group_old, tp_group_new)
+    cp_group_old = None if cp_size_old == 1 else cp_group_old
+    cp_group_new = None if cp_size_new == 1 else cp_group_new
+    return (tp_group_old, cp_group_old, tp_group_new, cp_group_new)
 
-#TODO：
-def gen_redistributed_group_with_cp(tp_size_old, tp_size_new, cp_size_old, cp_size_new, tp_group_old, tp_group_new, cp_group_old, cp_group_new):
-    if tp_size_old * cp_size_old == tp_size_new * cp_size_new:
-        return (None, None)
-    split_group = None if tp_size_old * cp_size_old == 1 else merge_tp_cp_groups(tp_group_old, cp_group_old)
-    allgather_group = None if tp_size_new * cp_size_new == 1 else merge_tp_cp_groups(tp_group_new, cp_group_new)
-    return (split_group, allgather_group)
+# def gen_redistributed_group_with_cp(tp_size_old, tp_size_new, cp_size_old, cp_size_new, tp_group_old, tp_group_new, cp_group_old, cp_group_new):
+#     if tp_size_old * cp_size_old == tp_size_new * cp_size_new:
+#         return (None, None)
+#     split_group = None if tp_size_old * cp_size_old == 1 else merge_tp_cp_groups(tp_group_old, cp_group_old)
+#     allgather_group = None if tp_size_new * cp_size_new == 1 else merge_tp_cp_groups(tp_group_new, cp_group_new)
+#     return (split_group, allgather_group)
 
-
-def merge_redistributed_group(split_group, allgather_group, world_ranks=None):
-    if split_group is None or allgather_group is None:
+def merge_redistributed_group(split_tp_sp_cp_group, allgather_tp_sp_cp_group, world_ranks=None):
+    if split_tp_sp_cp_group is None or allgather_tp_sp_cp_group is None:  
         return None, None
 
-    split_tp_size = split_group.size
-    allgather_tp_size = allgather_group.size
-    if split_group.ranks[1] - split_group.ranks[0] == 1:
-        split_consecutive = 1
-    else:
-        split_consecutive = 0
-    if allgather_group.ranks[1] - allgather_group.ranks[0] == 1:
-        allgather_consecutive = 1
-    else:
-        allgather_consecutive = 0
+    split_tp_sp_cp_size = split_tp_sp_cp_group.size
+    allgather_tp_sp_cp_size = allgather_tp_sp_cp_group.size
+    # if split_tp_sp_cp_group.ranks[1] - split_tp_sp_cp_group.ranks[0] == 1:
+    #     split_consecutive = 1
+    # else:
+    #     split_consecutive = 0
+    # if allgather_tp_sp_cp_group.ranks[1] - allgather_tp_sp_cp_group.ranks[0] == 1:
+    #     allgather_consecutive = 1
+    # else:
+    #     allgather_consecutive = 0
 
-    if split_consecutive == 0 or allgather_consecutive == 0:
-        return None, None
+    # if split_consecutive == 0 or allgather_consecutive == 0:
+    #     return None, None
 
     world_ranks = sort_ranks(world_ranks)
     rank, world_size = torch.distributed.get_rank(), get_world_size(world_ranks)
 
-    if split_tp_size > allgather_tp_size:
-        num_tp_groups = world_size // split_tp_size
-        # mul = split_tp_size // allgather_tp_size
-        for i in range(num_tp_groups):
-            for j in range(allgather_tp_size):
-                ranks = range(i * split_tp_size + j, (i + 1) * split_tp_size + j, allgather_tp_size)
+    if split_tp_sp_cp_size > allgather_tp_sp_cp_size:
+        num_tp_sp_cp_groups = world_size // split_tp_sp_cp_size
+        # mul = split_tp_sp_cp_size // allgather_tp_sp_cp_size
+        for i in range(num_tp_sp_cp_groups):
+            for j in range(allgather_tp_sp_cp_size):
+                ranks = range(i * split_tp_sp_cp_size + j, (i + 1) * split_tp_sp_cp_size + j, allgather_tp_sp_cp_size)
                 group = CommGroup(ranks)
                 if group.has_rank(rank):
                     fused_group = group
         return fused_group, None
 
-    if split_tp_size < allgather_tp_size:
-        num_tp_groups = world_size // allgather_tp_size
-        # mul = allgather_tp_size // split_tp_size
-        for i in range(num_tp_groups):
-            for j in range(split_tp_size):
-                ranks = range(i * allgather_tp_size + j, (i + 1) * allgather_tp_size + j, split_tp_size)
+    if split_tp_sp_cp_size < allgather_tp_sp_cp_size:
+        num_tp_sp_cp_groups = world_size // allgather_tp_sp_cp_size
+        # mul = allgather_tp_sp_cp_size // split_tp_sp_cp_size
+        for i in range(num_tp_sp_cp_groups):
+            for j in range(split_tp_sp_cp_size):
+                ranks = range(i * allgather_tp_sp_cp_size + j, (i + 1) * allgather_tp_sp_cp_size + j, split_tp_sp_cp_size)
                 group = CommGroup(ranks)
                 if group.has_rank(rank):
                     fused_group = group
 
         return None, fused_group
-
+    if split_tp_sp_cp_size == allgather_tp_sp_cp_size:
+        return None, None
     assert False, "merge_redistributed_group error!"
 
 
@@ -435,18 +407,11 @@ def gen_seq_data_group_dist(pp_size, tp_size, to_print, world_ranks=None):
     #     show_groups(all_seq_data_groups)
     return seq_data_group
 
-def merge_dp_cp_groups(dp_group, cp_group):
-    merged_ranks = dp_group.ranks + cp_group.ranks
-    merged_group = CommGroup(merged_ranks)
-    return merged_group
-#split group = tp group + cp group
-#all gather group = tp group + cp group
-def merge_tp_cp_groups(tp_group, cp_group):
-    merged_ranks = tp_group.ranks + cp_group.ranks
-    merged_group = CommGroup(merged_ranks)
-    return merged_group
+# def merge_groups(tp_sp_group, cp_group):
+#     merged_ranks = tp_sp_group.ranks + cp_group.ranks
+#     merged_group = CommGroup(merged_ranks)
+#     return merged_group
 
-        
 def gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, tp_consecutive_flags, show_rank=-1, world_ranks=None):
     world_ranks = sort_ranks(world_ranks)
     world_size = get_world_size(world_ranks)
@@ -461,25 +426,29 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, tp_consec
         if all_tp_sizes[i] in [1, world_size_per_stage]:
             tp_consecutive_flags[i] = 1
     tp_groups, sp_groups, cp_groups, dp_groups = [], [], [], []
-    
-    allgather_groups, split_groups = [None], [None]
+    #for input relocation
+    #allgather_groups, split_groups = [None], [None]
+    allgather_tp_sp_groups, split_tp_sp_groups = [None], [None]
+    allgather_cp_groups, split_cp_groups = [None], [None]
+    allgather_tp_sp_cp_groups, split_tp_sp_cp_groups = [None], [None]
     fused_split_groups, fused_allgather_groups = [None], [None]
+
     pp_group, all_pp_groups = gen_pp_group_dist(pp_size, to_print=False, world_ranks=world_ranks)
     embedding_group = gen_embedding_group_dist(pp_size, all_pp_groups, to_print=False)
+
     tp_group_dict, dp_group_dict, sp_group_dict, cp_group_dict = {}, {}, {}, {}
-    for consec in [0, 1]: #TODO:sp groups后续要和cp groups进行合并
+    for consec in [0, 1]: 
         tp_group_dict[consec] = get_tp_group_dict_dist(all_tp_sizes, pp_size, consec, world_ranks=world_ranks)
-        dp_group_dict[consec] = get_dp_group_dict_dist(all_tp_sizes, all_cp_sizes, pp_size, consec, world_ranks=world_ranks)
-        cp_group_dict[consec] = get_cp_group_dict_dist(all_tp_sizes, all_cp_sizes, pp_size, consec, world_ranks=world_ranks )
-        sp_group_dict[consec] = get_sp_group_dict_dist(all_sp_sizes, pp_size, consec, world_ranks=world_ranks)
+        dp_group_dict[consec] = get_dp_group_dict_dist(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, consec, world_ranks=world_ranks)
+        cp_group_dict[consec] = get_cp_group_dict_dist(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, consec, world_ranks=world_ranks )
+        sp_group_dict[consec] = get_sp_group_dict_dist(all_sp_sizes, pp_size, consec, world_ranks=world_ranks)  
     for i in range(len(all_tp_sizes)):
         tp_groups.append(tp_group_dict[tp_consecutive_flags[i]][all_tp_sizes[i]])
-        cp_groups.append(cp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i]][all_cp_sizes[i]])
-        dp_groups.append(dp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i]][all_cp_sizes[i]])
+        cp_groups.append(cp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i] * all_sp_sizes[i]][all_cp_sizes[i]])
+        dp_groups.append(dp_group_dict[1-tp_consecutive_flags[i]][all_tp_sizes[i] * all_sp_sizes[i]][all_cp_sizes[i]])
         sp_groups.append(sp_group_dict[tp_consecutive_flags[i]][all_sp_sizes[i]])
-    #for vtp data group = data group + cp group
-    #vtp_data_group = merge_dp_cp_groups(dp_groups[0], cp_groups[0])
-    vtp_data_group = dp_groups[0]#目前来看没有问题，就把他视作一个普通的dp组
+    vtp_data_group = dp_groups[0]#TODO:this code may be modified in future
+
     for i in range(1, len(all_tp_sizes)):
         if all_tp_sizes[i - 1] != 1:
             old_tp_size = all_tp_sizes[i - 1]
@@ -500,31 +469,49 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, tp_consec
         
         new_cp_size = all_cp_sizes[i]
         new_cp_groups = cp_groups[i]
-        #TODO:to be examined
-        # split_group, allgather_group = gen_redistributed_group_with_cp(
-        #     old_tp_size, new_tp_size, old_cp_size, new_cp_size, old_tp_groups, new_tp_groups, old_cp_groups, new_cp_groups
+
+
+        # split_group, allgather_group = gen_redistributed_group(
+        #     old_tp_size, new_tp_size, tp_consecutive_flags[i - 1], tp_consecutive_flags[i], old_tp_groups, new_tp_groups
         # )
 
+        # fused_split_group, fused_allgather_group = merge_redistributed_group(
+        #     split_group, allgather_group, world_ranks=world_ranks
+        # )
+
+        split_tp_sp_group, allgather_tp_sp_group, split_cp_group, allgather_cp_group = gen_redistributed_group_with_cp(
+            old_tp_size, new_tp_size, tp_consecutive_flags[i - 1], tp_consecutive_flags[i], old_tp_groups, new_tp_groups, 
+            old_cp_size, new_cp_size, False, False, old_cp_groups, new_cp_groups)
+        if old_tp_size == new_tp_size and old_cp_size == new_cp_size:
+            split_tp_sp_cp_group = None
+            allgather_tp_sp_cp_group = None
+        else:
+            split_tp_sp_cp_group = gen_sep_group_dist(old_tp_size, old_cp_size, pp_size, to_print=False, consecutive=True, world_ranks=world_ranks)
+            allgather_tp_sp_cp_group = gen_sep_group_dist(new_tp_size, new_cp_size, pp_size, to_print=False, consecutive=True, world_ranks=world_ranks)
+        
         fused_split_group, fused_allgather_group = merge_redistributed_group(
-            split_group, allgather_group, world_ranks=world_ranks
-        )
-        split_group, allgather_group = gen_redistributed_group(
-            old_tp_size, new_tp_size, tp_consecutive_flags[i - 1], tp_consecutive_flags[i], old_tp_groups, new_tp_groups
+            split_tp_sp_cp_group, allgather_tp_sp_cp_group, world_ranks=world_ranks
         )
 
-        fused_split_group, fused_allgather_group = merge_redistributed_group(
-            split_group, allgather_group, world_ranks=world_ranks
-        )
-        allgather_groups.append(allgather_group)
-        split_groups.append(split_group)
+        # allgather_groups.append(allgather_group)
+        # split_groups.append(split_group)
+
+        allgather_tp_sp_groups.append(allgather_tp_sp_group)
+        split_tp_sp_groups.append(split_tp_sp_group)
+
+        allgather_cp_groups.append(allgather_cp_group)
+        split_cp_groups.append(split_cp_group)
+
+        allgather_tp_sp_cp_groups.append(allgather_tp_sp_cp_group)
+        split_tp_sp_cp_groups.append(split_tp_sp_cp_group)
+
         fused_split_groups.append(fused_split_group)
         fused_allgather_groups.append(fused_allgather_group)
-    #TODO:仅适配pp tp dp cp场景，未适配ulysses sp场景
-    #目前来看，按照worldsize//pp之后，直接world size//tp，就是cp+dp的group了
-    #也就是说，还没有适配sp group，那就先不考虑
+    
     seq_data_groups = [gen_seq_data_group_dist(pp_size, all_tp_sizes[i], to_print=True, world_ranks=world_ranks) for i in range(len(all_tp_sizes))]
     #seq_data_group = gen_seq_data_group_dist(pp_size, to_print=True, world_ranks=world_ranks)
     #seq_data_groups = [seq_data_group if all_tp_sizes[i] == 1 else dp_groups[i] for i in range(len(all_tp_sizes))]
+
     show_rank = 0
     if show_rank >= 0 and torch.distributed.get_rank() == show_rank:
         print("====================== Galvatron Communication Group ===========================")
@@ -540,10 +527,20 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, tp_consec
         show_groups(dp_groups)
         print("SDP groups for rank %d (all layers):" % show_rank)
         show_groups(seq_data_groups)
-        print("Split groups for rank %d:" % show_rank)
-        show_groups(split_groups)
-        print("AllGather groups for rank %d:" % show_rank)
-        show_groups(allgather_groups)
+        # print("Split groups for rank %d:" % show_rank)
+        # show_groups(split_groups)
+        print("Split TP/SP groups for rank %d:" % show_rank)
+        show_groups(split_tp_sp_groups)
+        print("AllGather TP/SP groups for rank %d:" % show_rank)
+        show_groups(allgather_tp_sp_groups)
+        print("Split CP groups for rank %d:" % show_rank)
+        show_groups(split_cp_groups)
+        print("AllGather CP groups for rank %d:" % show_rank)
+        show_groups(allgather_cp_groups)
+        print("Split TP/SP/CP groups for rank %d:" % show_rank)
+        show_groups(split_tp_sp_cp_groups)
+        print("AllGather TP/SP/CP groups for rank %d:" % show_rank)
+        show_groups(allgather_tp_sp_cp_groups)
         print("Fused split groups for rank %d:" % show_rank)
         show_groups(fused_split_groups)
         print("Fused allgather groups for rank %d:" % show_rank)
@@ -556,8 +553,14 @@ def gen_comm_groups(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, tp_consec
         cp_groups,
         dp_groups,
         seq_data_groups,
-        allgather_groups,
-        split_groups,
+        # allgather_groups,
+        # split_groups,
+        allgather_tp_sp_groups,
+        split_tp_sp_groups,
+        allgather_cp_groups,
+        split_cp_groups,
+        allgather_tp_sp_cp_groups,
+        split_tp_sp_cp_groups,
         fused_allgather_groups,
         fused_split_groups,
         embedding_group,

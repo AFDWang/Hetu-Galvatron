@@ -33,7 +33,7 @@ def train(args):
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
     world_size = torch.distributed.get_world_size()
-#config部分的随机因素
+
     config = get_llama_config(args)
     model = llama_model_hp(config, args)
 
@@ -59,12 +59,12 @@ def train(args):
 
     for iter in range(args.iteration, args.train_iters):
         tokens, kwargs, loss_func = get_batch(train_data_iterator)
+    
         profiler.profile_time_start(iter)
         profiler.profile_memory(iter, "Before Forward")
 
         input_ids = tokens
-        batch = [input_ids]#为什么这里需要加？就是一种适配,看Galvatronmodel的forward和backward
-
+        batch = [input_ids]
         loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
 
         profiler.profile_memory(iter, "After Backward")

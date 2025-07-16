@@ -64,14 +64,13 @@ def rhasattr(obj, attr):
 #     return torch.distributed.get_world_size(group=vtp_data_group.group)
 
 
-def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_group, cp_group=None):
+def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_group, vtp_seq_group=None):
     if need_to_build_dataset():
         compile_helpers()
     torch.distributed.barrier()
 
     world_size = torch.distributed.get_world_size() 
-    cp_size = cp_group.size #TODO:
-    assert world_size // args.pp_deg // args.vocab_tp // cp_size == len(vtp_data_group.ranks)
+    assert world_size // args.pp_deg // args.vocab_tp // args.vocab_cp == len(vtp_data_group.ranks)
     args.micro_batch_size = args.global_train_batch_size // len(vtp_data_group.ranks)  # // args.chunks
     args.global_batch_size = args.global_train_batch_size
     if args.load_iteration != 0:
@@ -81,14 +80,14 @@ def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_gro
         args.iteration = 0
 
     args.pipeline_model_parallel_size = hp_model.model.group_size
-    args.context_parallel_size = cp_group.size
+    args.context_parallel_size = vtp_seq_group.size
     mpu.set_pipeline_model_parallel_rank(hp_model.model.group_rank)
     mpu.set_pipeline_model_parallel_world_size(hp_model.model.group_size)
     mpu.set_tensor_model_parallel_group(vtp_tensor_group.group)
     mpu.set_tensor_model_parallel_rank(torch.distributed.get_rank(group=vtp_tensor_group.group))
     mpu.set_data_parallel_group(vtp_data_group.group)
     mpu.set_tensor_model_parallel_src_rank(vtp_tensor_group.ranks[0])
-    mpu.set_context_parallel_group(cp_group.group)
+    mpu.set_context_parallel_group(vtp_seq_group.group)
     # mpu.is_pipeline_first_stage = hp_model.model.is_pipeline_first_stage
     # mpu.is_pipeline_last_stage = hp_model.model.is_pipeline_last_stage
     # mpu.get_tensor_model_parallel_rank = partial(get_vtp_tensor_model_parallel_rank, vtp_tensor_group)
@@ -98,8 +97,6 @@ def set_megatron_args_for_dataset(args, hp_model, vtp_tensor_group, vtp_data_gro
     # mpu.get_tensor_model_parallel_group = partial(get_vtp_tensor_model_parallel_group, vtp_tensor_group)
     rebuild_tokenizer(args)
 
-#for tp all reduce
-#TODO:也许和cp会有关系？
 def get_layernorm_offset(model, layernorm_name=[]):
     total_ln_offset = []
     total_ln_size = []

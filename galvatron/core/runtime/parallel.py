@@ -13,7 +13,7 @@ from torch.distributed.fsdp.api import BackwardPrefetch, CPUOffload, MixedPrecis
 from torch.distributed.fsdp.wrap import _recursive_wrap, lambda_auto_wrap_policy
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from .redistribute import fused_split_allgather
+from .redistribute import fused_split_allgather, split_to_group, gather_from_group
 
 
 def _get_modules_to_materialize(root_module: nn.Module) -> List[nn.Module]:
@@ -246,35 +246,53 @@ def wrap_model_checkpoint(model, wrap_block_names=[]):
     return model
 
 
-def relocate_activations(input, allgather_group, split_group, fused_allgather_group, fused_split_group, is_input):
+def relocate_activations(input, allgather_tp_sp_group, allgather_cp_group, allgather_tp_sp_cp_group, 
+    split_tp_sp_group, split_cp_group, split_tp_sp_cp_group,
+    fused_allgather_group, fused_split_group, is_input):
     if fused_allgather_group is not None or fused_split_group is not None:
         input = fused_split_allgather(
             input,
             is_input,
-            getattr(allgather_group, "group", None),
-            getattr(split_group, "group", None),
+            getattr(allgather_tp_sp_group, "group", None),
+            getattr(allgather_cp_group, "group", None),
+            getattr(allgather_tp_sp_cp_group, "group", None),
+            getattr(split_tp_sp_group, "group", None),
+            getattr(split_cp_group, "group", None),
+            getattr(split_tp_sp_cp_group, "group", None),
             getattr(fused_allgather_group, "group", None),
             getattr(fused_split_group, "group", None),
         )
-        return input
-
-    if split_group is not None:
-        input = split_group.split(input, is_input)
-    if allgather_group is not None:
-        input = allgather_group.allgather(input.contiguous(), is_input)
+    else:
+        input = split_to_group(input, 
+            getattr(split_tp_sp_group, "group", None), 
+            getattr(split_cp_group, "group", None), 
+            getattr(split_tp_sp_cp_group, "group", None), 
+            is_input)
+        input = gather_from_group(input, 
+            getattr(allgather_tp_sp_group, "group", None), 
+            getattr(allgather_cp_group, "group", None), 
+            getattr(allgather_tp_sp_cp_group, "group", None), is_input)
     return input
 
 
 class Module_with_relocation(nn.Module):
-    def __init__(self, module, allgather_group, split_group, fused_allgather_group, fused_split_group):
+    def __init__(self, module, allgather_tp_sp_group, allgather_cp_group, allgather_tp_sp_cp_group, 
+        split_tp_sp_group, split_cp_group, split_tp_sp_cp_group,
+        fused_allgather_group, fused_split_group):
         super().__init__()
         self.module = module
-        self.allgather_group = allgather_group
-        self.split_group = split_group
+        self.allgather_tp_sp_group = allgather_tp_sp_group
+        self.allgather_cp_group = allgather_cp_group
+        self.allgather_tp_sp_cp_group = allgather_tp_sp_cp_group
+        self.split_tp_sp_group = split_tp_sp_group
+        self.split_cp_group = split_cp_group
+        self.split_tp_sp_cp_group = split_tp_sp_cp_group
         self.fused_allgather_group = fused_allgather_group
         self.fused_split_group = fused_split_group
         self.relocate_activations = lambda x, y: relocate_activations(
-            x, self.allgather_group, self.split_group, self.fused_allgather_group, self.fused_split_group, y
+            x, self.allgather_tp_sp_group, self.allgather_cp_group, self.allgather_tp_sp_cp_group, 
+            self.split_tp_sp_group, self.split_cp_group, self.split_tp_sp_cp_group,
+            self.fused_allgather_group, self.fused_split_group, y
         )
         if hasattr(module, "get_extended_attention_mask"):
             self.get_extended_attention_mask = module.get_extended_attention_mask
@@ -413,13 +431,20 @@ def modules_to_devices(module_list, pp_devices):
         module_list[i].to("cuda:%d" % pp_devices[i])
 
 
-def wrap_modules_relocation(module_list, allgather_groups, split_groups, fused_allgather_groups, fused_split_groups):
-    assert len(module_list) == len(allgather_groups)
-    assert len(module_list) == len(split_groups)
+def wrap_modules_relocation(module_list, allgather_tp_sp_groups, allgather_cp_groups, allgather_tp_sp_cp_groups, 
+    split_tp_sp_groups, split_cp_groups, split_tp_sp_cp_groups, fused_allgather_groups, fused_split_groups):
+    assert len(module_list) == len(allgather_tp_sp_groups)
+    assert len(module_list) == len(allgather_cp_groups)
+    assert len(module_list) == len(allgather_tp_sp_cp_groups)
+    assert len(module_list) == len(split_tp_sp_groups)
+    assert len(module_list) == len(split_cp_groups)
+    assert len(module_list) == len(split_tp_sp_cp_groups)
     assert len(module_list) == len(fused_allgather_groups)
     assert len(module_list) == len(fused_split_groups)
     for i in range(len(module_list)):
         module_list[i] = Module_with_relocation(
-            module_list[i], allgather_groups[i], split_groups[i], fused_allgather_groups[i], fused_split_groups[i]
+            module_list[i], allgather_tp_sp_groups[i], allgather_cp_groups[i], allgather_tp_sp_cp_groups[i], 
+            split_tp_sp_groups[i], split_cp_groups[i], split_tp_sp_cp_groups[i], 
+            fused_allgather_groups[i], fused_split_groups[i]
         )
     return module_list

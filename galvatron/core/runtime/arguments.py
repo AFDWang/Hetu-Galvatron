@@ -55,21 +55,21 @@ def galvatron_training_args(parser, use_megatron=True):
         help="Pipeline parallel degree.",
         choices=[1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
     )
-    # 在 galvatron_training_args 函数内部，找到合适的位置添加：
+   
     group.add_argument(
         "--global_cp_deg",
         type=int,
-        default=1,  # 默认值为1，表示不启用Context Parallel
+        default=1, 
         help="Context parallel degree.",
-        choices=[1, 2, 4, 8, 16, 32], # 通常并行度是2的幂次
+        choices=[1, 2, 4, 8, 16, 32], 
     )
-    # 在 galvatron_training_args 函数内部，--cp_deg 参数定义的附近添加：
+    
     group.add_argument(
         "--cp_mode",
         type=str,
-        default="zigzag", # 默认使用 zigzag 模式，因为它能更好地平衡负载
+        default="zigzag", 
         help="Context parallel communication mode.",
-        choices=["ring", "zigzag"], # 提供可选的模式
+        choices=["ring", "zigzag"], 
     )
     group.add_argument(
         "--global_tp_deg",
@@ -162,6 +162,13 @@ def galvatron_training_args(parser, use_megatron=True):
         type=int,
         default=1,
         help="Tensor parallel degree of vocab.",
+        choices=[1, 2, 4, 8, 16],
+    )
+    group.add_argument(
+        "--vocab_cp",
+        type=int,
+        default=1,
+        help="Context parallel degree of vocab.",
         choices=[1, 2, 4, 8, 16],
     )
     group.add_argument(

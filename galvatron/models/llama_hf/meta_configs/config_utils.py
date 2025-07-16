@@ -30,13 +30,10 @@ def config_from_meta(model_type) -> LlamaConfig:
         params = model_type
     if "n_kv_heads" not in params:
         params["n_kv_heads"] = None
-    # 只有在ffn_dim不存在时才设置默认值
     if "ffn_dim" not in params:
         if model_type.startswith("qwen"):
-            # 对于Qwen模型，可能需要特殊的计算方式
-            params["ffn_dim"] = params["dim"] * 5.5  # Qwen模型的ffn_dim约为hidden_size的5.5倍左右
+            params["ffn_dim"] = params["dim"] * 5.5 
         else:
-            # 对于其他模型，使用原来的计算方式
             params["ffn_dim"] = (
                 (params["dim"] * 8 // 3 + params["multiple_of"] - 1) // params["multiple_of"] * params["multiple_of"]
             )
@@ -51,7 +48,6 @@ def config_from_meta(model_type) -> LlamaConfig:
         vocab_size=params["vocab_size"],
     )
 
-
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
     config.use_cache = False
@@ -61,12 +57,9 @@ def set_model_config(config, args, overwrite_args=True):
     if args.set_model_config_manually:
         config.vocab_size = args.vocab_size
         config.hidden_size = args.hidden_size
-        # 根据模型类型使用不同的ffn尺寸计算方式
         if args.model_size.startswith("qwen"):
-            # 对于Qwen模型，使用固定的ffn_dim值
             config.intermediate_size = args.ffn_hidden_size if args.ffn_hidden_size is not None else args.hidden_size * 8 // 3
         else:
-            # 对于其他模型，使用原来的计算方式
             config.intermediate_size = args.hidden_size * 8 // 3
         config.num_hidden_layers = args.num_hidden_layers
         config.num_attention_heads = args.num_attention_heads
@@ -92,7 +85,6 @@ def overwrite_model_args(config, args):
     args.num_attention_heads = config.num_attention_heads
     args.seq_length = config.max_position_embeddings
     args.vocab_size = config.vocab_size
-
 
 def overwrite_megatron_args(config, args):
     args.num_layers = config.num_hidden_layers

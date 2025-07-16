@@ -1096,6 +1096,10 @@ def set_data_parallel_group(group):
     global _DATA_PARALLEL_GROUP
     _DATA_PARALLEL_GROUP = group
 
+def set_context_parallel_group(group):
+    global _CONTEXT_PARALLEL_GROUP
+    _CONTEXT_PARALLEL_GROUP = group
+
 def set_tensor_model_parallel_src_rank(rank):
     global _TENSOR_MODEL_PARALLEL_SRC_RANK
     _TENSOR_MODEL_PARALLEL_SRC_RANK = rank

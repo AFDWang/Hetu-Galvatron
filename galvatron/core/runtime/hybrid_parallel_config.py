@@ -6,7 +6,6 @@ import torch
 
 from galvatron.utils import config2strategy, read_json_config, str2array
 
-
 def get_pp_ranks_enc(pp_divide):
     pp_ranks_enc = []
     pp_deg = len(pp_divide)
@@ -19,7 +18,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     local_rank = args.local_rank
     world_size = torch.distributed.get_world_size()
     config_type = "JSON" if args.galvatron_config_path not in [None, "None"] else "GLOBAL"
-    layernum_list = model_info(config, args).layernums()
+    layernum_list = model_info(config, args).layernums()#[config.num_hidden_layers]
     total_layer_num = sum(layernum_list)
     if local_rank == 0:
         print("======================== Galvatron Parallel Config =============================")
@@ -27,9 +26,11 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
     if config_type == "GLOBAL":
         pp_deg = args.pp_deg
         tp_sizes_enc = [args.global_tp_deg] * total_layer_num if args.global_tp_deg > 0 else [1] * total_layer_num
-        tp_consecutive_flags = (
-            [args.global_tp_consec] * total_layer_num if args.global_tp_consec in [0, 1] else [1] * total_layer_num
-        )
+        # tp_consecutive_flags = (
+        #     [args.global_tp_consec] * total_layer_num if args.global_tp_consec in [0, 1] else [1] * total_layer_num
+        # )
+        tp_consecutive_flags = [1] * total_layer_num
+        cp_sizes_enc = [args.global_cp_deg] * total_layer_num if args.global_cp_deg > 0 else [1] * total_layer_num
         dp_types_enc = total_layer_num * [args.sdp]
         checkpoint_flags_enc = [args.global_checkpoint] * total_layer_num
         pp_divide = None
@@ -44,7 +45,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
             galvatron_config = read_json_config(args.galvatron_config_path)
         else:
             galvatron_config = args.galvatron_config_path
-        pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp = config2strategy(galvatron_config)
+        pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp, vcp = config2strategy(galvatron_config)
         bsz, chunks = galvatron_config["global_bsz"], galvatron_config["chunks"]
         checkpoint_flags_enc = (
             str2array(galvatron_config["checkpoint"])
@@ -80,21 +81,22 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         args.pp_deg = pp_deg
         args.vocab_tp = vtp
         args.vocab_sp = vsp
-
+        args.vocab_cp = vcp
     if pp_divide is None:
         avg_layer_num = total_layer_num // pp_deg
         last_layer_num = total_layer_num - avg_layer_num * (pp_deg - 1)
         pp_divide = [avg_layer_num] * (pp_deg - 1) + [last_layer_num]
     pp_ranks_enc = get_pp_ranks_enc(pp_divide)
-
     min_tp = min(min(tp_sizes_enc), args.vocab_tp)
+    min_cp = min(min(cp_sizes_enc), args.vocab_cp)
     assert (
-        args.global_train_batch_size % (world_size // pp_deg // min_tp) == 0
-    ), "global_train_batch_size should be multiple of world_size//pp_deg!"
+        args.global_train_batch_size % (world_size // pp_deg // min_tp // min_cp) == 0
+    ), "global_train_batch_size should be multiple of world_size//pp_deg//min_tp//min_cp!"
     hybrid_parallel_configs = {
         "pp_deg": pp_deg,
         "tp_sizes_enc": tp_sizes_enc,
         "tp_consecutive_flags": tp_consecutive_flags,
+        "cp_sizes_enc": cp_sizes_enc,
         "dp_types_enc": dp_types_enc,
         "checkpoint_flags_enc": checkpoint_flags_enc,
         "pp_ranks_enc": pp_ranks_enc,
@@ -102,6 +104,7 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
         "use_sp": use_sp,
         "vocab_tp": args.vocab_tp,
         "vocab_sp": args.vocab_sp,
+        "vocab_cp": args.vocab_cp,
         "default_dp_type": args.default_dp_type,
         "global_train_batch_size": args.global_train_batch_size,
     }
@@ -125,11 +128,12 @@ def get_hybrid_parallel_configs_api(config, args, model_info):
             print("[GLOBAL config mode] Loaded global hybrid parallel strategy:")
             dp_type = "sdp" if args.sdp else "dp"
             tp_deg, tp_consec = tp_sizes_enc[0], tp_consecutive_flags[0]
-            dp_deg = world_size // args.global_tp_deg // args.pp_deg
+            cp_deg = cp_sizes_enc[0]
+            dp_deg = world_size // args.global_tp_deg // args.pp_deg // args.global_cp_deg
             print("   global_batch_size: %d, chunks: %d" % (args.global_train_batch_size, get_chunks(args)))
             print(
-                "   pp_deg: %d, tp_deg: %d, %s_deg: %d, tp_consecutive_flag: %d, checkpoint_flag: %d"
-                % (pp_deg, tp_deg, dp_type, dp_deg, tp_consec, args.global_checkpoint)
+                "   pp_deg: %d, tp_deg: %d, %s_deg: %d, cp_deg: %d, tp_consecutive_flag: %d, checkpoint_flag: %d"
+                % (pp_deg, tp_deg, dp_type, dp_deg, cp_deg, tp_consec, args.global_checkpoint)
             )
             embed_sdp = ", embed_sdp: 1" if args.embed_sdp else ""
             print(
@@ -225,9 +229,8 @@ def print_hp_configs(hp_configs):
         print_hp_config(key, val)
     print("================================================================================")
 
-
-def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0):
-    pp_deg, tp_sizes_enc, use_sp, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc = (
+def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, vocab_tp=1, vocab_sp=0, vocab_cp=1):
+    pp_deg, tp_sizes_enc, use_sp, tp_consecutive_flags, dp_types_enc, pp_ranks_enc, checkpoint_flags_enc, cp_sizes_enc  = (
         hp_configs["pp_deg"],
         hp_configs["tp_sizes_enc"],
         hp_configs["use_sp"],
@@ -235,6 +238,7 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
         hp_configs["dp_types_enc"],
         hp_configs["pp_ranks_enc"],
         hp_configs["checkpoint_flags_enc"],
+        hp_configs["cp_sizes_enc"],
     )
 
     hp_configs_whole = dict()
@@ -242,6 +246,7 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
     keys = [
         "tp_sizes_whole",
         "sp_sizes_whole",
+        "cp_sizes_whole",
         "tp_consec_whole",
         "dp_types_whole",
         "pp_ranks_whole",
@@ -259,19 +264,22 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
             else:
                 hp_configs_whole["tp_sizes_whole"].append(tp_sizes_enc[idx_enc])
                 hp_configs_whole["sp_sizes_whole"].append(1)
+            hp_configs_whole["cp_sizes_whole"].append(cp_sizes_enc[idx_enc])
             hp_configs_whole["dp_types_whole"].append(dp_types_enc[idx_enc])
             hp_configs_whole["pp_ranks_whole"].append(pp_ranks_enc[idx_enc])
             hp_configs_whole["tp_consec_whole"].append(tp_consecutive_flags[idx_enc])
             hp_configs_whole["checkpoint_flags_whole"].append(checkpoint_flags_enc[idx_enc])
             idx_enc += 1
-        else:
+        else: #for embedding
             if vocab_sp == 1:
                 hp_configs_whole["sp_sizes_whole"].append(vocab_tp)
                 hp_configs_whole["tp_sizes_whole"].append(1)
             else:
                 hp_configs_whole["tp_sizes_whole"].append(vocab_tp)
                 hp_configs_whole["sp_sizes_whole"].append(1)
-            hp_configs_whole["dp_types_whole"].append(embed_sdp)
+            #hp_configs_whole["cp_sizes_whole"].append(cp_sizes_enc[idx_enc] if idx_enc < len(cp_sizes_enc) else cp_sizes_enc[-1]) 
+            hp_configs_whole["cp_sizes_whole"].append(vocab_cp)
+            hp_configs_whole["dp_types_whole"].append(embed_sdp)#embed_sdp: Apply SDP (zero-3) for Embeddings and cls
             hp_configs_whole["pp_ranks_whole"].append(
                 pp_ranks_enc[idx_enc] if idx_enc < len(pp_ranks_enc) else pp_ranks_enc[-1]
             )
@@ -280,8 +288,8 @@ def hp_config_whole_model(module_types, hp_configs, embed_sdp=0, embed_ckpt=0, v
 
     world_size = torch.distributed.get_world_size()
     hp_configs_whole["dp_sizes_whole"] = [
-        world_size // pp_deg // tp_size // sp_size
-        for tp_size, sp_size in zip(hp_configs_whole["tp_sizes_whole"], hp_configs_whole["sp_sizes_whole"])
+        world_size // pp_deg // tp_size // sp_size // cp_size
+        for tp_size, sp_size, cp_size in zip(hp_configs_whole["tp_sizes_whole"], hp_configs_whole["sp_sizes_whole"], hp_configs_whole["cp_sizes_whole"])
     ]
     from galvatron.core import get_args
 

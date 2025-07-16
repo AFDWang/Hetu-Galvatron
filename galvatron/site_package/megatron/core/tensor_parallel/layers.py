@@ -186,10 +186,12 @@ class VocabParallelEmbedding(torch.nn.Module):
         config: ModelParallelConfig,
         tp_group = None,
         sp_group = None,
+        cp_group = None,
     ):
         super(VocabParallelEmbedding, self).__init__()
         self.tp_group = tp_group
         self.sp_group = sp_group
+        self.cp_group = cp_group
         # Keep the input dimensions.
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
@@ -688,11 +690,13 @@ class ColumnParallelLinear(torch.nn.Module):
         tp_comm_buffer_name: str = None,  # Not used
         tp_group: Optional[torch.distributed.ProcessGroup] = None,
         sp_group: Optional[torch.distributed.ProcessGroup] = None,
+        cp_group: Optional[torch.distributed.ProcessGroup] = None,
     ):
         super(ColumnParallelLinear, self).__init__()
         
         self.tp_group = tp_group
         self.sp_group = sp_group
+        self.cp_group = cp_group
         # Keep input parameters
         self.input_size = input_size
         self.output_size = output_size

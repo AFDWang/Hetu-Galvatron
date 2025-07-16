@@ -45,19 +45,20 @@ def forward_step_function(loss_func, **kwargs):
 
     return forward_step
 
-
+#TODO：看看这里要不要穿process group的rank
 class PipelineParallel(nn.Module):
     def __init__(
         self,
-        model,
-        model_ranks,
+        model,#经过relocate module包裹之后
+        model_ranks,#=hp_configs_whole["pp_ranks_whole"],应该是对应每一层的
         layer_output_tensor_shapes,
         layer_output_tensor_dtypes=None,
-        layer_dp_sizes=None,
+        layer_dp_sizes=None,#hp_configs_whole["dp_sizes_whole"],
         layer_tp_sizes=None,
         layer_sp_sizes=None,
+        layer_cp_sizes=None,
         chunks=1,
-        process_group=None,
+        process_group=None,#pp_group.ranks,
         embedding_group=None,
         nproc_per_node=None,
         require_loss=True,
@@ -82,6 +83,8 @@ class PipelineParallel(nn.Module):
             layer_tp_sizes = [1] * len(model)
         if layer_sp_sizes is None:
             layer_sp_sizes = [1] * len(model)
+        if layer_cp_sizes is None:
+            layer_cp_sizes = [1] * len(model)
         assert len(model) == len(layer_dp_sizes)
         self.world_size = torch.distributed.get_world_size()
         self.global_rank = torch.distributed.get_rank()
@@ -91,11 +94,12 @@ class PipelineParallel(nn.Module):
             else torch.cuda.device_count()
         )
         self.local_rank = self.global_rank % self.device_count
-
+#pp_group.ranks
         self.pp_global_ranks = (
             [i for i in range(self.world_size)] if process_group is None else sorted(list(set(list(process_group))))
         )
         assert self.global_rank in self.pp_global_ranks
+        #为什么要在这里重新设置，process_group=pp_group.ranks,
         self.group = torch.distributed.new_group(process_group)
         self.group_size = torch.distributed.get_world_size(self.group)
         self.group_rank = torch.distributed.get_rank(self.group)
@@ -104,11 +108,11 @@ class PipelineParallel(nn.Module):
             and np.max(model_ranks) == self.group_size - 1
             and np.min(model_ranks) == 0
         )
-
+#找到第一个对应的，
         self.stage_start_idx, cnt = model_ranks.index(self.group_rank), model_ranks.count(self.group_rank)
         self.stage_end_idx = self.stage_start_idx + cnt
         self.model_cur_stage = model[self.stage_start_idx : self.stage_end_idx]  # .cuda(self.local_rank)
-        self.chunks = int(chunks)
+        self.chunks = int(chunks)#这里的chunk要怎么计算 get_chunks(args)
         assert self.chunks >= 1
         self.template_stage_input_tensor_shape = (
             [None] if self.is_pipeline_first_stage() else layer_output_tensor_shapes[self.stage_start_idx - 1]
@@ -131,7 +135,10 @@ class PipelineParallel(nn.Module):
         self.sp_size_prev_stage = None if self.is_pipeline_first_stage() else layer_sp_sizes[self.stage_start_idx - 1]
         self.sp_size_cur_stage = None if self.is_pipeline_last_stage() else layer_sp_sizes[self.stage_end_idx - 1]
 
-        self.dp_size_input = layer_dp_sizes[0]
+        self.cp_size_prev_stage = None if self.is_pipeline_first_stage() else layer_cp_sizes[self.stage_start_idx - 1]
+        self.cp_size_cur_stage = None if self.is_pipeline_last_stage() else layer_cp_sizes[self.stage_end_idx - 1]
+
+        self.dp_size_input = layer_dp_sizes[0] #输入时候的dp size？是用来干嘛的
         self.info = info
         self.chunk_warning = True
 
@@ -143,7 +150,7 @@ class PipelineParallel(nn.Module):
         args = get_args()
         self.sequence_parallel = args.sequence_parallel
         self.shape_order = args.shape_order
-        self.async_grad_reduce = args.async_grad_reduce
+        self.async_grad_reduce = args.async_grad_reduce#异步梯度规约
         # if not self.async_grad_reduce and self.group_size > 1:
         #     assert Fasle, "No async grad reduce only support pp = 1"
         # assert async_grad_reduce # Remove support for async_grad_reduce=False, which is the old version for gradient synchronization
@@ -171,8 +178,8 @@ class PipelineParallel(nn.Module):
 
     def wrap_pipeline_modules_data_parallel(
         self,
-        dp_types,
-        dp_groups,
+        dp_types,#dp types whole
+        dp_groups,#用的是fsdp group
         module_types,
         mixed_precision=torch.bfloat16,
         wrap_block_name=None,
@@ -189,7 +196,7 @@ class PipelineParallel(nn.Module):
         dp_groups_cur_stage = dp_groups[self.stage_start_idx : self.stage_end_idx]
         pp_devices_cur_stage = [self.local_rank] * (self.stage_end_idx - self.stage_start_idx)
         tp_groups_cur_stage = tp_groups[self.stage_start_idx : self.stage_end_idx]
-        default_process_group = dp_groups[0]
+        default_process_group = dp_groups[0]#怀疑是vtp data group
         self.model_cur_stage = wrap_modules_data_parallel(
             module_list=self.model_cur_stage,
             dp_types=dp_types_cur_stage,
@@ -286,11 +293,11 @@ class PipelineParallel(nn.Module):
                         tensor_shape_last[i][2],
                     ]
         return tensor_shape, tensor_shape_last
-
+#没有流水线的foward 和 backward是怎么做到的
     def no_pipeline_forward_backward(
         self,
-        batch,
-        loss_func,
+        batch,#[[inputsids],[labels(fake)]]
+        loss_func,#计算一个micro batch，以及对一个dp组内的loss进行平均操作
         forward_only=False,
         profiler=None,
         iter=0,
@@ -307,9 +314,9 @@ class PipelineParallel(nn.Module):
         if batch[0][0].shape[0] % self.chunks != 0:
             if self.global_rank == 0:
                 print("[Warning]The global batch size is not divisible by chunks, the results may be skewed.")
-        micro_kwargs = chunk_dict(kwargs, self.chunks)
-        microbatches = [chunk_batch(batch[0], self.chunks), chunk_batch(batch[1], self.chunks)]
-        self.real_chunks = len(microbatches[0])
+        micro_kwargs = chunk_dict(kwargs, self.chunks)#形成chunk，但是chunk就是1
+        microbatches = [chunk_batch(batch[0], self.chunks), chunk_batch(batch[1], self.chunks)]#batch[0] [inputids]
+        self.real_chunks = len(microbatches[0])# #batches:[[][][]]
         if self.chunks != self.real_chunks and self.chunk_warning:
             if self.global_rank == 0:
                 print(
@@ -324,23 +331,23 @@ class PipelineParallel(nn.Module):
         if num_microbatches > 1 and self.async_grad_reduce:
             enter_no_sync_context(model)
 
-        losses_reduced = []
+        losses_reduced = []#作用是收集每个micro batch的经过dp组内reduced的loss
 
         self.set_last_batch(False)
 
         for i in range(num_microbatches):
             if i == num_microbatches - 1:
-                self.set_last_batch(True)
-            cur_microbatch = [microbatches[0][i], microbatches[1][i]]
+                self.set_last_batch(True)#最后一个batch
+            cur_microbatch = [microbatches[0][i], microbatches[1][i]] #[[inputids],[labels]]
             output_tensor = self.forward_step(
                 forward_step_function(loss_func, **micro_kwargs[i]),
                 # forward_step_func,
                 cur_microbatch,
                 model,
                 None,
-                losses_reduced,
-            )
-
+                losses_reduced,#[] list
+            )#frward backward的作用是，进行chunk的分割，让每一个chunk进行计算，然后进行frward step计算得到output tensor
+#这里的output tensor shape为（b,s),
             if profiler is not None and i == num_microbatches - 1:
                 profiler.profile_memory(iter, "After Forward")
 
@@ -366,7 +373,7 @@ class PipelineParallel(nn.Module):
             torch.distributed.barrier()
             self.finalize_wte_grads_func()
 
-        return losses_reduced
+        return losses_reduced#losses reduced 拿去给loss to cpu，因为losses reduced 就是每个micro batch对应dp组里面的loss
 
     def pipedream_flush_forward_backward(
         self,

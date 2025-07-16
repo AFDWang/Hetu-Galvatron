@@ -145,7 +145,23 @@ class GalvatronModelWrapper:
 
         return wrap_model_checkpoint(model, self.wrap_block_names)
 
-
+'''
+ hybrid_parallel_configs = {
+        "pp_deg": pp_deg,
+        "tp_sizes_enc": tp_sizes_enc,
+        "tp_consecutive_flags": tp_consecutive_flags,
+        "cp_sizes_enc": cp_sizes_enc,
+        "dp_types_enc": dp_types_enc,
+        "checkpoint_flags_enc": checkpoint_flags_enc,
+        "pp_ranks_enc": pp_ranks_enc,
+        "pp_division": pp_divide,
+        "use_sp": use_sp,
+        "vocab_tp": args.vocab_tp,
+        "vocab_sp": args.vocab_sp,
+        "default_dp_type": args.default_dp_type,
+        "global_train_batch_size": args.global_train_batch_size,
+    }
+'''
 def construct_hybrid_parallel_model_api(
     model,
     model_config,
@@ -188,7 +204,7 @@ def construct_hybrid_parallel_model_api(
 
     # Get hp_configs_whole for the whole model (including embed/cls/... layers)
     hp_configs_whole = hp_config_whole_model(
-        module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp=args.vocab_tp, vocab_sp=args.vocab_sp
+        module_types, hp_configs, embed_sdp=args.embed_sdp, embed_ckpt=0, vocab_tp=args.vocab_tp, vocab_sp=args.vocab_sp, vocab_cp=args.vocab_cp
     )
 
     # if args.use_ulysses:
@@ -202,16 +218,25 @@ def construct_hybrid_parallel_model_api(
         pp_group,
         tp_groups_whole,
         sp_groups_whole,
+        cp_groups_whole,
         dp_groups_whole,
         seq_data_groups_whole,
-        allgather_groups_whole,
-        split_groups_whole,
+        # allgather_groups_whole,
+        # split_groups_whole,
+        allgather_tp_sp_groups_whole,
+        split_tp_sp_groups_whole,
+        allgather_cp_groups_whole,
+        split_cp_groups_whole,
+        allgather_tp_sp_cp_groups_whole,
+        split_tp_sp_cp_groups_whole,
         fused_allgather_groups_whole,
         fused_split_groups_whole,
         embedding_group,
+        vtp_data_group
     ) = gen_comm_groups(
         hp_configs_whole["tp_sizes_whole"],
         hp_configs_whole["sp_sizes_whole"],
+        hp_configs_whole["cp_sizes_whole"],
         hp_configs_whole["pp_deg"],
         hp_configs_whole["tp_consec_whole"],
         show_rank=0,
@@ -220,12 +245,14 @@ def construct_hybrid_parallel_model_api(
     # [Step 1] Construct Tensor Parallel Model based on tp_groups using model-specific TP function
     if args.initialize_on_meta and args.shape_order == "SBH":
         with init_empty_weights(meta_init_buffer):
-            model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole)
+                model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole, cp_groups_whole)
     elif args.shape_order == "SBH":
-        model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole)
+            model = construct_tensor_parallel_model(model, config, tp_groups_whole, sp_groups_whole, cp_groups_whole)
     else:
+        #TODO: FA model does not support cp!
         assert not args.use_ulysses, "FA model does not support ulysses!"
         model = construct_tensor_parallel_model(model, config, tp_groups_whole)
+
     # [Step 2] Construct Sequantial model using model-specific sequential function
     if args.initialize_on_meta and args.shape_order == "SBH":
         with init_empty_weights(meta_init_buffer):
@@ -235,13 +262,15 @@ def construct_hybrid_parallel_model_api(
 
     # [Step 3] Wrap Relocation modules if necessary
     model = wrap_modules_relocation(
-        model, allgather_groups_whole, split_groups_whole, fused_allgather_groups_whole, fused_split_groups_whole
+        model, allgather_tp_sp_groups_whole, allgather_cp_groups_whole, allgather_tp_sp_cp_groups_whole, 
+        split_tp_sp_groups_whole, split_cp_groups_whole, split_tp_sp_cp_groups_whole, 
+        fused_allgather_groups_whole, fused_split_groups_whole
     )
     ln_offset, ln_size = get_layernorm_offset(model, layernorm_name)
     assert len(ln_offset) == len(dp_groups_whole)
+
     # [Step 4] Construct Pipeline Module and place the layers on corresponding devices
     from galvatron.core.runtime.pipeline import PipelineParallel
-
     hp_model = PipelineParallel(
         model=model,
         model_ranks=hp_configs_whole["pp_ranks_whole"],
@@ -250,6 +279,7 @@ def construct_hybrid_parallel_model_api(
         layer_dp_sizes=hp_configs_whole["dp_sizes_whole"],
         layer_tp_sizes=hp_configs_whole["tp_sizes_whole"],
         layer_sp_sizes=hp_configs_whole["sp_sizes_whole"],
+        layer_cp_sizes=hp_configs_whole["cp_sizes_whole"],
         chunks=get_chunks(args),
         process_group=pp_group.ranks,
         embedding_group=embedding_group,
@@ -289,7 +319,8 @@ def construct_hybrid_parallel_model_api(
     model.dp_groups_whole = dp_groups_whole
     model.tp_groups_whole = tp_groups_whole
     model.sp_groups_whole = sp_groups_whole
+    model.cp_groups_whole = cp_groups_whole
     model.sdp_groups_whole = seq_data_groups_whole
     model.hybrid_parallel_configs = hybrid_parallel_configs
-
+    model.vtp_data_group = vtp_data_group
     return model

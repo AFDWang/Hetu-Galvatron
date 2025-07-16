@@ -23,20 +23,28 @@ def config2strategy(config):
     pp_deg = config['pp_deg']
     if 'vtp' in config:
         vtp = config['vtp']
+        print("vtp",vtp)
     else:
         vtp = 1
     if 'vsp' in config:
         vsp = config['vsp']
+        print("vsp",vsp)
     else:
         vsp = 0
+    if 'vcp' in config:
+        vcp = config['vcp']
+        print("vcp",vcp)
+    else:
+        vcp = 1
     tp_sizes_enc = str2array(config['tp_sizes_enc'])
+    cp_sizes_enc = str2array(config['cp_sizes_enc'])
     tp_consecutive_flags = str2array(config['tp_consecutive_flags'])
     dp_types_enc = str2array(config['dp_types_enc'])
     if "use_sp" in config:
         use_sp = str2array(config['use_sp'])
     else:
         use_sp = [0 for _ in range(len(tp_sizes_enc))]
-    return pp_deg, tp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp
+    return pp_deg, tp_sizes_enc, cp_sizes_enc, tp_consecutive_flags, dp_types_enc, use_sp, vtp, vsp, vcp
 
 def strategy2config(strategy_list):
     layer_num = len(strategy_list)

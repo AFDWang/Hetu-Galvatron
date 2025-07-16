@@ -29,6 +29,13 @@ def get_ltor_masks_and_position_ids(data):
 
     return attention_mask  # , position_ids
 
+def get_zigzag_batch_on_this_cp_rank(cp_group, batch):
+    if cp_group is None:
+        return batch
+    cp_size = torch.distributed.get_world_size(cp_group)
+    cp_rank = torch.distributed.get_rank(cp_group)
+    if cp_size == 1:
+        return batch
 
 class LlamaEmbeddings_(nn.Module):
     def __init__(self, model):
@@ -40,10 +47,19 @@ class LlamaEmbeddings_(nn.Module):
         self.clone_scatter_output_in_embedding = args.clone_scatter_output_in_embedding
         self.tp_group = self.embed_tokens.tp_group
         self.sp_group = self.embed_tokens.sp_group
+        self.cp_group = self.embed_tokens.cp_group
+        self.cp_size = torch.distributed.get_world_size(self.cp_group) if self.cp_group is not None else 1
+        self.use_zigzag = args.cp_mode == "zigzag"
         self.vocab_sp = args.vocab_sp
+        # if self.use_zigzag:
+        #     from .dataloader import get_zigzag_tokens_on_this_cp_rank
+        #     self.get_zigzag_tokens_on_this_cp_rank = get_zigzag_tokens_on_this_cp_rank
+        #     self.cp_rank = torch.distributed.get_rank(self.cp_group)
+        #     self.cp_size = torch.distributed.get_world_size(self.cp_group)
         if self.vocab_sp:
+            seq_ulysses = int(args.seq_length / self.cp_size)
             self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
-                args.seq_length,
+                seq_ulysses,
                 torch.distributed.get_rank(self.sp_group),
                 torch.distributed.get_world_size(self.sp_group),
             )
@@ -56,7 +72,6 @@ class LlamaEmbeddings_(nn.Module):
         hidden_states = self.embed_tokens(tokens)
         # [b, s, h] -> [s, b, h]
         hidden_states = hidden_states.transpose(0, 1).contiguous()
-
         if self.sequence_parallel:
             hidden_states = tensor_parallel.scatter_to_sequence_parallel_region_group(hidden_states, self.tp_group)
             # `scatter_to_sequence_parallel_region` returns a view, which prevents
@@ -64,7 +79,6 @@ class LlamaEmbeddings_(nn.Module):
             # Has a small runtime cost (~0.5%).
             if self.clone_scatter_output_in_embedding:
                 hidden_states = hidden_states.clone()
-
         return hidden_states
 
 
@@ -73,6 +87,7 @@ class LlamaLayers_(nn.Module):
         super().__init__()
         model = model.model
         self.layer = model.layers[layer_idx]
+        self.layer_idx = layer_idx
 
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
         # attention_mask = get_ltor_masks_and_position_ids(input_ids)
@@ -120,6 +135,8 @@ class LlamaCls_(nn.Module):
         self.sequence_parallel = get_args().sequence_parallel
         self.tp_group = model.lm_head.tp_group
         self.sp_group = model.lm_head.sp_group
+        self.cp_group = model.lm_head.cp_group
+        self.cp_size = torch.distributed.get_world_size(self.cp_group) if self.cp_group is not None else 1
         self.lm_head = LlamaLoss_(model.lm_head.weight, self.sequence_parallel, self.tp_group)
         self.clone_scatter_output_in_embedding = get_args().clone_scatter_output_in_embedding
         self.parallel_loss = parallel_loss
@@ -131,7 +148,7 @@ class LlamaCls_(nn.Module):
         self.vocab_sp = args.vocab_sp
         if self.vocab_sp:
             self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(
-                self.seq_length,
+                int(self.seq_length / self.cp_size),
                 torch.distributed.get_rank(self.sp_group),
                 torch.distributed.get_world_size(self.sp_group),
             )
@@ -139,7 +156,6 @@ class LlamaCls_(nn.Module):
     def forward(self, hidden_states, position_ids=None, attention_mask=None, labels=None):
         if self.vocab_sp:
             labels = labels[:, self.seq_start_index : self.seq_end_index].contiguous()
-
         if not self.sequence_parallel:
             hidden_states = tensor_parallel.copy_to_tensor_model_parallel_region_group(hidden_states, self.tp_group)
 
@@ -149,7 +165,7 @@ class LlamaCls_(nn.Module):
         labels = labels.transpose(0, 1).contiguous()
 
         # loss = tensor_parallel.vocab_parallel_cross_entropy(output.float(), input_ids)
-        if not self.parallel_loss:
+        if not self.parallel_loss:#for random
             output = tensor_parallel.gather_from_tensor_model_parallel_region_group(logits_parallel, self.tp_group)
             if not self.half_entropy:
                 logits = output.float()
@@ -176,7 +192,9 @@ class LlamaCls_(nn.Module):
             else:
                 loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, labels, tp_group=self.tp_group)
             if self.vocab_sp:
-                loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.sp_group)
+                loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.sp_group) * torch.distributed.get_world_size(self.sp_group)
+            # if self.cp_size > 1:
+            #     loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.cp_group)
             # loss = loss.mean()
         loss = loss.transpose(0, 1).contiguous()
         return loss

@@ -11,7 +11,6 @@ LAUNCHER="${LAUNCHER} --nproc_per_node ${NUM_GPUS_PER_NODE}"
 LAUNCHER="${LAUNCHER} --master_addr ${MASTER_ADDR}"
 LAUNCHER="${LAUNCHER} --master_port ${MASTER_PORT}"
 LAUNCHER="${LAUNCHER} --node_rank ${NODE_RANK}"
-
 TRAINER="train_dist_random.py"
 
 # MODEL_ARGS="

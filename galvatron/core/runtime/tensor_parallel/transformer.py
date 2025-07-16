@@ -641,7 +641,7 @@ class ParallelAttention(MegatronModule):
             )
         if self.use_ulysses:
             assert args.num_attention_heads % sp_world_size == 0
-            if self.use_zigzag_cp:  
+            if self.use_zigzag_cp:  #zigzag ring attention must be used with flash attention
                 self.dist_attn = DistributedAttention(
                     self.zigzag_ring_flash_attn,
                     sp_group,
@@ -864,7 +864,6 @@ class ParallelAttention(MegatronModule):
                 query_layer, key_layer, value_layer = [
                     rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)
                 ]
-
                 context_layer = self.dist_attn(query_layer, key_layer, value_layer, batch_dim_idx)
                 context_layer = rearrange(context_layer, "b s h d -> s b (h d)").contiguous()
             else:
@@ -2349,80 +2348,79 @@ def zigzag_ring_flash_attn_forward(
     alibi_slopes=None,
     deterministic=False,
 ):
-    with torch.profiler.record_function("ContextParallel_ZigzagRingFlashAttention_ForwardPass"):
-        assert causal == True, "zigzag ring is meaningless for causal=False"
-        comm = RingComm(process_group)
+    assert causal == True, "zigzag ring is meaningless for causal=False"
+    comm = RingComm(process_group)
 
-        block_seq_len = q.shape[1] // 2
-        q1 = q[:, block_seq_len:]
+    block_seq_len = q.shape[1] // 2
+    q1 = q[:, block_seq_len:]
 
-        out = None
-        lse = None
-        next_k, next_v = None, None
+    out = None
+    lse = None
+    next_k, next_v = None, None
 
-        def forward(q, k, v, causal):
-            params = get_default_args(_flash_attn_forward).copy()
+    def forward(q, k, v, causal):
+        params = get_default_args(_flash_attn_forward).copy()
+        params.update(
+            {
+                "q": q,
+                "k": k,
+                "v": v,
+                "dropout_p": dropout_p,
+                "softmax_scale": softmax_scale,
+                "causal": causal,
+                "alibi_slopes": alibi_slopes,
+                "return_softmax": True and dropout_p > 0,
+            }
+        )
+        if "window_size" in params:
+            params.update({"window_size": window_size})
+        else:
             params.update(
                 {
-                    "q": q,
-                    "k": k,
-                    "v": v,
-                    "dropout_p": dropout_p,
-                    "softmax_scale": softmax_scale,
-                    "causal": causal,
-                    "alibi_slopes": alibi_slopes,
-                    "return_softmax": True and dropout_p > 0,
+                    "window_size_left": window_size[0],
+                    "window_size_right": window_size[1],
                 }
             )
-            if "window_size" in params:
-                params.update({"window_size": window_size})
-            else:
-                params.update(
-                    {
-                        "window_size_left": window_size[0],
-                        "window_size_right": window_size[1],
-                    }
-                )
-            outputs = _flash_attn_forward(**params)
-            if len(outputs) == 8:
-                block_out, _, _, _, _, block_lse, _, _ = outputs
-            else:
-                assert len(outputs) == 4
-                block_out, block_lse, _, _ = outputs
-            return block_out, block_lse
+        outputs = _flash_attn_forward(**params)
+        if len(outputs) == 8:
+            block_out, _, _, _, _, block_lse, _, _ = outputs
+        else:
+            assert len(outputs) == 4
+            block_out, block_lse, _, _ = outputs
+        return block_out, block_lse
 
-        for step in range(comm.world_size):
-            if step + 1 != comm.world_size:
-                next_k, next_v = comm.send_recv_kv(k, v)
+    for step in range(comm.world_size):
+        if step + 1 != comm.world_size:
+            next_k, next_v = comm.send_recv_kv(k, v)
 
-            if step == 0:
-                _ = torch.zeros((1,),device=torch.cuda.current_device())
-                block_out, block_lse = forward(q, k, v, causal=True)
-                out, lse = update_out_and_lse(out, lse, block_out, block_lse)
-            elif step <= comm.rank:
-                k0 = k[:, :block_seq_len]
-                v0 = v[:, :block_seq_len]
-                _ = torch.zeros((1,),device=torch.cuda.current_device())
-                block_out, block_lse = forward(q, k0, v0, causal=False)
-                out, lse = update_out_and_lse(out, lse, block_out, block_lse)
-            else:
-                _ = torch.zeros((1,),device=torch.cuda.current_device())
-                block_out, block_lse = forward(q1, k, v, causal=False)
-                out, lse = update_out_and_lse(
-                    out,
-                    lse,
-                    block_out,
-                    block_lse,
-                    slice_=(slice(None), slice(block_seq_len, None)),
-                )
+        if step == 0:
+            _ = torch.zeros((1,),device=torch.cuda.current_device())#we use this to guarantee commiunication is launched before computation
+            block_out, block_lse = forward(q, k, v, causal=True)
+            out, lse = update_out_and_lse(out, lse, block_out, block_lse)
+        elif step <= comm.rank:
+            k0 = k[:, :block_seq_len]
+            v0 = v[:, :block_seq_len]
+            _ = torch.zeros((1,),device=torch.cuda.current_device())#we use this to guarantee commiunication is launched before computation
+            block_out, block_lse = forward(q, k0, v0, causal=False)
+            out, lse = update_out_and_lse(out, lse, block_out, block_lse)
+        else:
+            _ = torch.zeros((1,),device=torch.cuda.current_device())#we use this to guarantee commiunication is launched before computation
+            block_out, block_lse = forward(q1, k, v, causal=False)
+            out, lse = update_out_and_lse(
+                out,
+                lse,
+                block_out,
+                block_lse,
+                slice_=(slice(None), slice(block_seq_len, None)),
+            )
 
-            if step + 1 != comm.world_size:
-                comm.wait()
-                k, v = next_k, next_v
+        if step + 1 != comm.world_size:
+            comm.wait()
+            k, v = next_k, next_v
 
-        out = out.to(q.dtype)
-        lse = lse.squeeze(dim=-1).transpose(1, 2)
-        return out, lse
+    out = out.to(q.dtype)
+    lse = lse.squeeze(dim=-1).transpose(1, 2)
+    return out, lse
 
 
 def zigzag_ring_flash_attn_backward(
@@ -2441,120 +2439,119 @@ def zigzag_ring_flash_attn_backward(
     alibi_slopes=None,
     deterministic=False,
 ):
-    with torch.profiler.record_function("ContextParallel_ZigzagRingFlashAttention_BackwardPass"):
-        assert causal == True, "zigzag ring is meaningless for causal=False"
-        kv_comm = RingComm(process_group)
-        #d_kv_comm = RingComm(process_group)
+    assert causal == True, "zigzag ring is meaningless for causal=False"
+    kv_comm = RingComm(process_group)
+    #d_kv_comm = RingComm(process_group)
 
-        # dkv_comm_ranks = ranks
-        # d_kv_comm_group = dist.new_group(dkv_comm_ranks)
-        # d_kv_comm = RingComm(d_kv_comm_group)
+    # dkv_comm_ranks = ranks
+    # d_kv_comm_group = dist.new_group(dkv_comm_ranks)
+    # d_kv_comm = RingComm(d_kv_comm_group)
 
-        dq, dk, dv = None, None, None
-        next_dk, next_dv = None, None
-        next_k, next_v = None, None
-        dk_comm_buffer, dv_comm_buffer = None, None
-        #TODO:for other nccl version,we may can use different nccl stream to overlap communication and computation
-        # kv_comm_stream = torch.cuda.Stream(device=q.device)
-        # d_kv_comm_stream = torch.cuda.Stream(device=q.device)
+    dq, dk, dv = None, None, None
+    next_dk, next_dv = None, None
+    next_k, next_v = None, None
+    dk_comm_buffer, dv_comm_buffer = None, None
+    #TODO:for other nccl version,we may can use different nccl stream to overlap communication and computation
+    # kv_comm_stream = torch.cuda.Stream(device=q.device)
+    # d_kv_comm_stream = torch.cuda.Stream(device=q.device)
 
-        dout1 = dout.chunk(2, dim=1)[1]
-        q1 = q.chunk(2, dim=1)[1]
-        out1 = out.chunk(2, dim=1)[1]
-        softmax_lse1 = softmax_lse.chunk(2, dim=2)[1].contiguous()
-        block_seq_len = q.shape[1] // 2
+    dout1 = dout.chunk(2, dim=1)[1]
+    q1 = q.chunk(2, dim=1)[1]
+    out1 = out.chunk(2, dim=1)[1]
+    softmax_lse1 = softmax_lse.chunk(2, dim=2)[1].contiguous()
+    block_seq_len = q.shape[1] // 2
 
-        # repeatly allocating buffer may be slow...
-        dq_buffer = torch.empty(q.shape, dtype=q.dtype, device=q.device)
-        dk_buffer = torch.empty(k.shape, dtype=k.dtype, device=k.device)
-        dv_buffer = torch.empty(v.shape, dtype=v.dtype, device=v.device)
-        original_dtype = q.dtype
+    # repeatly allocating buffer may be slow...
+    dq_buffer = torch.empty(q.shape, dtype=q.dtype, device=q.device)
+    dk_buffer = torch.empty(k.shape, dtype=k.dtype, device=k.device)
+    dv_buffer = torch.empty(v.shape, dtype=v.dtype, device=v.device)
+    original_dtype = q.dtype
 
-        def backward(dout, q, k, v, out, softmax_lse, causal):
-            seqlen_q = q.shape[1]
-            seqlen_kv = k.shape[1]
-            params = get_default_args(_flash_attn_backward).copy()
+    def backward(dout, q, k, v, out, softmax_lse, causal):
+        seqlen_q = q.shape[1]
+        seqlen_kv = k.shape[1]
+        params = get_default_args(_flash_attn_backward).copy()
+        params.update(
+            {
+                "dout": dout,
+                "q": q,
+                "k": k,
+                "v": v,
+                "out": out,
+                "softmax_lse": softmax_lse,
+                "dq": dq_buffer[:, :seqlen_q],
+                "dk": dk_buffer[:, :seqlen_kv],
+                "dv": dv_buffer[:, :seqlen_kv],
+                "dropout_p": dropout_p,
+                "softmax_scale": softmax_scale,
+                "causal": causal,
+                "alibi_slopes": alibi_slopes,
+                "deterministic": deterministic,
+            }
+        )
+        if "window_size" in params:
+            params.update({"window_size": window_size})
+        else:
             params.update(
                 {
-                    "dout": dout,
-                    "q": q,
-                    "k": k,
-                    "v": v,
-                    "out": out,
-                    "softmax_lse": softmax_lse,
-                    "dq": dq_buffer[:, :seqlen_q],
-                    "dk": dk_buffer[:, :seqlen_kv],
-                    "dv": dv_buffer[:, :seqlen_kv],
-                    "dropout_p": dropout_p,
-                    "softmax_scale": softmax_scale,
-                    "causal": causal,
-                    "alibi_slopes": alibi_slopes,
-                    "deterministic": deterministic,
+                    "window_size_left": window_size[0],
+                    "window_size_right": window_size[1],
                 }
             )
-            if "window_size" in params:
-                params.update({"window_size": window_size})
-            else:
-                params.update(
-                    {
-                        "window_size_left": window_size[0],
-                        "window_size_right": window_size[1],
-                    }
-                )
-            _flash_attn_backward(**params)
+        _flash_attn_backward(**params)
 
-        for step in range(kv_comm.world_size):
-            if step == 0:
-                next_k, next_v = kv_comm.send_recv_kv(k, v)
+    for step in range(kv_comm.world_size):
+        if step == 0:
+            next_k, next_v = kv_comm.send_recv_kv(k, v)
+        else:
+            if step + 1 != kv_comm.world_size:
+                k_dk = torch.stack([k, dk], dim=0)
+                v_dv = torch.stack([v, dv], dim=0)
+                next_k_dk, next_v_dv = kv_comm.send_recv_kv(k_dk, v_dv)
             else:
-                if step + 1 != kv_comm.world_size:
-                    k_dk = torch.stack([k, dk], dim=0)
-                    v_dv = torch.stack([v, dv], dim=0)
-                    next_k_dk, next_v_dv = kv_comm.send_recv_kv(k_dk, v_dv)
-                else:
-                    next_dk, next_dv = kv_comm.send_recv_kv(dk, dv)
-            
-            if step == 0:
-                backward(dout, q, k, v, out, softmax_lse, causal=True)
-                dq = dq_buffer.to(torch.float32)
-                dk = dk_buffer.to(torch.float32)
-                dv = dv_buffer.to(torch.float32)
+                next_dk, next_dv = kv_comm.send_recv_kv(dk, dv)
+        
+        if step == 0:
+            backward(dout, q, k, v, out, softmax_lse, causal=True)
+            dq = dq_buffer.to(torch.float32)
+            dk = dk_buffer.to(torch.float32)
+            dv = dv_buffer.to(torch.float32)
+        else:
+            if step <= kv_comm.rank:
+                k0 = k[:, :block_seq_len]
+                v0 = v[:, :block_seq_len]
+                backward(dout, q, k0, v0, out, softmax_lse, causal=False)
+                dq += dq_buffer
             else:
-                if step <= kv_comm.rank:
-                    k0 = k[:, :block_seq_len]
-                    v0 = v[:, :block_seq_len]
-                    backward(dout, q, k0, v0, out, softmax_lse, causal=False)
-                    dq += dq_buffer
-                else:
-                    backward(dout1, q1, k, v, out1, softmax_lse1, causal=False)
-                    # always use the first half in dq_buffer.
-                    dq[:, block_seq_len:] += dq_buffer[:, :block_seq_len]
+                backward(dout1, q1, k, v, out1, softmax_lse1, causal=False)
+                # always use the first half in dq_buffer.
+                dq[:, block_seq_len:] += dq_buffer[:, :block_seq_len]
 
-                #d_kv_comm.wait()
-                kv_comm.wait()
-                if step + 1 != kv_comm.world_size:
-                    next_k, next_v = next_k_dk[0].to(original_dtype), next_v_dv[0].to(original_dtype)
-                    next_dk, next_dv = next_k_dk[1], next_v_dv[1]
-                    k, v = next_k, next_v
-                    dk_comm_buffer, dv_comm_buffer = dk, dv
-                    dk, dv = next_dk, next_dv
-                else:
-                    dk, dv = next_dk, next_dv
-                if step <= kv_comm.rank:
-                    dk[:, :block_seq_len] += dk_buffer[:, :block_seq_len]
-                    dv[:, :block_seq_len] += dv_buffer[:, :block_seq_len]
-                else:
-                    dk += dk_buffer
-                    dv += dv_buffer
-
-            if step == 0:
-                kv_comm.wait()
+            #d_kv_comm.wait()
+            kv_comm.wait()
+            if step + 1 != kv_comm.world_size:
+                next_k, next_v = next_k_dk[0].to(original_dtype), next_v_dv[0].to(original_dtype)
+                next_dk, next_dv = next_k_dk[1], next_v_dv[1]
                 k, v = next_k, next_v
-        next_dk, next_dv = kv_comm.send_recv_kv(dk, dv, dk_comm_buffer, dv_comm_buffer)
-        kv_comm.wait()
-        dk, dv = next_dk, next_dv
+                dk_comm_buffer, dv_comm_buffer = dk, dv
+                dk, dv = next_dk, next_dv
+            else:
+                dk, dv = next_dk, next_dv
+            if step <= kv_comm.rank:
+                dk[:, :block_seq_len] += dk_buffer[:, :block_seq_len]
+                dv[:, :block_seq_len] += dv_buffer[:, :block_seq_len]
+            else:
+                dk += dk_buffer
+                dv += dv_buffer
 
-        return dq.to(q.dtype), next_dk.to(q.dtype), next_dv.to(q.dtype)
+        if step == 0:
+            kv_comm.wait()
+            k, v = next_k, next_v
+    next_dk, next_dv = kv_comm.send_recv_kv(dk, dv, dk_comm_buffer, dv_comm_buffer)
+    kv_comm.wait()
+    dk, dv = next_dk, next_dv
+
+    return dq.to(q.dtype), next_dk.to(q.dtype), next_dv.to(q.dtype)
 
 
 class ZigZagRingFlashAttnFunc(torch.autograd.Function):
@@ -2685,7 +2682,7 @@ class ZigzagRingFlashAttention(torch.nn.Module):
             )
         return context
 
-#Galvatron can use zigzagringattention and ulysses sp to replace longcontextattention
+#Galvatron can use zigzag ring attention and ulysses-sp to replace long context attention
 
 #Reference:https://github.com/feifeibear/long-context-attention
 # #--------------LongContextAttention------------------

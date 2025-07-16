@@ -57,20 +57,15 @@ class LlamaAttention_tp(nn.Module):
         if self.sequence_parallel:
             if self.use_ulysses:
                 if self.use_zigzag_cp:
+                    #max_seq_len = hidden_states.shape[0] * self.cp_size * self.sp_size
+                    #no offset for zigzag cp, because the offset is already included in the Megatron RotaryEmbedding
                     rotary_pos_emb = self.rotary_pos_emb(
                         hidden_states.shape[0] * self.cp_size * self.sp_size)
-                    # rotary_pos_emb = self.rotary_pos_emb(
-                    #     hidden_states.shape[0] * self.cp_size * self.sp_size, 
-                    #     offset=hidden_states.shape[0] * (torch.distributed.get_rank(self.cp_group) * torch.distributed.get_world_size(self.sp_group) + \
-                    #     torch.distributed.get_rank(self.sp_group)))
                 else:
                     rotary_pos_emb = self.rotary_pos_emb(
                         hidden_states.shape[0] , offset=hidden_states.shape[0] * torch.distributed.get_rank(self.sp_group))
             else:
                 if self.use_zigzag_cp:
-                    # rotary_pos_emb = self.rotary_pos_emb(
-                    #     hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group) * self.cp_size, 
-                    #     offset=hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group) * torch.distributed.get_rank(self.cp_group))
                     rotary_pos_emb = self.rotary_pos_emb(
                         hidden_states.shape[0] * torch.distributed.get_world_size(self.tp_group) * self.cp_size)
                 else:
@@ -79,8 +74,6 @@ class LlamaAttention_tp(nn.Module):
                     )
         else:
             if self.use_zigzag_cp:
-                # rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0] * self.cp_size,
-                #  offset=hidden_states.shape[0] * torch.distributed.get_rank(self.cp_group))
                 rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0] * self.cp_size)
             else:
                 rotary_pos_emb = self.rotary_pos_emb(hidden_states.shape[0])

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from turtle import pos
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -47,9 +46,7 @@ def get_pos_emb_on_this_cp_sp_rank_galvatron(cp_group, sp_group, pos_emb, seq_di
         *pos_emb.shape[:seq_dim], 2 * cp_size, -1, *pos_emb.shape[(seq_dim + 1) :]
     )
     pos_emb = pos_emb.index_select(seq_dim, cp_idx)
-    # print("pos emb after index select",pos_emb.shape)
     pos_emb = pos_emb.view(*pos_emb.shape[:seq_dim], -1, *pos_emb.shape[(seq_dim + 2) :])
-    # print("pos emb after view",pos_emb.shape)
     if sp_group is not None and sp_size > 1:
         current_seq_len = pos_emb.shape[seq_dim]
         sp_seq_len = current_seq_len // sp_size
@@ -139,10 +136,8 @@ class RotaryEmbedding(nn.Module):
             )
         # emb [seq_length, .., dim]
         emb = emb[:, None, None, :]
-        # print("embshapebefore cp",emb.shape)
         if self.cp_group is not None:
             emb = get_pos_emb_on_this_cp_sp_rank_galvatron(self.cp_group, self.sp_group, emb, 0)
-            # print("embshapeafter cp",emb.shape)
         else:
             if parallel_state.get_context_parallel_world_size() > 1:
                 # slice rotary_pos_emb along sequence dimension and select the parition of the current CP rank

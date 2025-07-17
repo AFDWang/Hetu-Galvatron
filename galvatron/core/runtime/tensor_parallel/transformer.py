@@ -1901,7 +1901,6 @@ from torch.nn import Module
 
 # --------- ulysses --------------
 
-#后处理函数：对all to all之后的函数进行重写排列，恢复为正确的注意力输入
 def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_head, head_dim):
 
     def post_func(input):
@@ -1928,9 +1927,8 @@ def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_he
 #input b s np nd b s_l
 def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, async_op=False, handle=None, type=None):
     seq_world_size = dist.get_world_size(group)
-    if batch_dim_idx == 0:#flash attention  开启ulysses的时候没有tp
-#每个上面都有一部分sequence：b，local_seq_len, nh, hd，scatter idx=2 gatheridx = 1
-#收集完sequence之后，每个上面持有b，global_seq_len, nh//p, hd scatter idx = 1 gatheridx = 2
+    if batch_dim_idx == 0:
+        # b, s, n, h
         if scatter_idx < 2:
             bs, global_seq_len, num_local_head, head_dim = input.shape#b，s, nh, hd
             input_t = input.reshape(
@@ -2391,7 +2389,7 @@ def zigzag_ring_flash_attn_forward(
     for step in range(comm.world_size):
         if step + 1 != comm.world_size:
             next_k, next_v = comm.send_recv_kv(k, v)
-
+        # TODO: Maybe find a better way to make sure launch order
         if step == 0:
             _ = torch.zeros((1,),device=torch.cuda.current_device())#we use this to guarantee commiunication is launched before computation
             block_out, block_lse = forward(q, k, v, causal=True)

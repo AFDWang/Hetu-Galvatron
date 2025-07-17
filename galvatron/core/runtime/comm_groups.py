@@ -263,6 +263,7 @@ def get_cp_group_dict_dist(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, co
 def get_dp_group_dict_dist(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, consecutive=False, world_ranks=None):
     all_mul_sizes = []
     world_size = torch.distributed.get_world_size() if world_ranks is None else torch.distributed.get_world_size(world_ranks)
+    world_size_per_stage = world_size // pp_size
     for tp_size, sp_size in zip(all_tp_sizes, all_sp_sizes):
         all_mul_sizes.append(tp_size * sp_size)
 
@@ -271,7 +272,7 @@ def get_dp_group_dict_dist(all_tp_sizes, all_sp_sizes, all_cp_sizes, pp_size, co
     for mul_size in mul_sizes_set:
         dp_group_dict[mul_size] = {}
         for cp_size in all_cp_sizes:
-            if mul_size * cp_size <= world_size:
+            if mul_size * cp_size <= world_size_per_stage:
                 dp_group_dict[mul_size][cp_size] = gen_dp_group_dist(
                     mul_size, cp_size, pp_size, to_print=False, consecutive=consecutive, world_ranks=world_ranks
                 )

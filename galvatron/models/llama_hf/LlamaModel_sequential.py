@@ -178,7 +178,7 @@ class LlamaCls_(nn.Module):
             else:
                 loss = tensor_parallel.vocab_parallel_cross_entropy(logits_parallel, labels, tp_group=self.tp_group)
             if self.vocab_sp:
-                loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.sp_group) * torch.distributed.get_world_size(self.sp_group)
+                loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.sp_group) #* torch.distributed.get_world_size(self.sp_group)
             # if self.cp_size > 1:
             #     loss = tensor_parallel.gather_from_tensor_model_parallel_region_group(loss, self.cp_group)
             # loss = loss.mean()

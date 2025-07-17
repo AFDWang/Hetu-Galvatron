@@ -261,15 +261,15 @@ class PipelineParallel(nn.Module):
                 if isinstance(m, FSDP):
                     m.last_batch = state
 
-    def update_tensor_shape(self, microbatches, dp_size_input, dp_size, tp_size, sp_size, template_tensor_shape):
+    def update_tensor_shape(self, microbatches, dp_size_input, dp_size, tp_size, sp_size, template_tensor_shape, cp_size=None):
         # Update tensor_shape with correct microbatch_size
         tensor_shape, tensor_shape_last = copy.deepcopy(template_tensor_shape), copy.deepcopy(template_tensor_shape)
         microbatch_size = microbatches[0][0][0].shape[0] * dp_size_input // dp_size
         microbatch_size_last = microbatches[0][-1][0].shape[0] * dp_size_input // dp_size
         if tp_size == 1:
-            size = sp_size
+            size = sp_size * cp_size
         else:
-            size = tp_size
+            size = tp_size * cp_size
         for i in range(len(tensor_shape)):
             for j in range(len(tensor_shape[i])):
                 if tensor_shape[i][j] == -1:
@@ -423,6 +423,7 @@ class PipelineParallel(nn.Module):
                 self.tp_size_prev_stage,
                 self.sp_size_prev_stage,
                 self.template_stage_input_tensor_shape,
+                self.cp_size_prev_stage,
             )
 
         # Update stage_output_tensor_shape with correct microbatch_size
@@ -436,6 +437,7 @@ class PipelineParallel(nn.Module):
                 self.tp_size_cur_stage,
                 self.sp_size_cur_stage,
                 self.template_stage_output_tensor_shape,
+                self.cp_size_cur_stage,
             )
 
         # print('rank %d'%self.global_rank, self.stage_input_tensor_shape, self.stage_input_tensor_shape_last, self.stage_output_tensor_shape, self.stage_output_tensor_shape_last, self.stage_input_tensor_dtype, self.stage_output_tensor_dtype)
@@ -756,6 +758,7 @@ class PipelineParallel(nn.Module):
                 self.tp_size_prev_stage,
                 self.sp_size_prev_stage,
                 self.template_stage_input_tensor_shape,
+                self.cp_size_prev_stage,
             )
 
         # Update stage_output_tensor_shape with correct microbatch_size
@@ -769,6 +772,7 @@ class PipelineParallel(nn.Module):
                 self.tp_size_cur_stage,
                 self.sp_size_cur_stage,
                 self.template_stage_output_tensor_shape,
+                self.cp_size_cur_stage,
             )
 
         self.input_tensors = []

@@ -11,6 +11,7 @@ from megatron.training.training import build_train_valid_test_data_iterators
 from megatron.training.utils import (
     average_losses_across_data_parallel_group,
     get_batch_on_this_tp_rank,
+    get_batch_on_this_cp_rank,
     get_ltor_masks_and_position_ids,
 )
 from torch import Tensor
@@ -147,7 +148,7 @@ def get_batch(data_iterator):
 
     args = get_args()
     batch = get_batch_on_this_tp_rank(data_iterator)
-
+    batch = get_batch_on_this_cp_rank(batch)
     micro_lossmask = chunk_batch([batch["loss_mask"]], get_chunks(args))
     # print(f"Rank {torch.cuda.current_device()} with input {tokens}")
     if batch["tokens"] == None:
@@ -162,7 +163,6 @@ def get_batch(data_iterator):
         partial(loss_func, micro_lossmask),
     )
 
-
 def loss_func(micro_lossmask: Tensor, label: List, output_tensor: List):
     """Loss function.
 
@@ -174,12 +174,21 @@ def loss_func(micro_lossmask: Tensor, label: List, output_tensor: List):
     args = get_args()
     output_tensor = output_tensor[0]
     losses = output_tensor.float()
-    # if torch.cuda.current_device()==0:
-    #     print(f"loss {losses}")
     loss_mask = loss_mask.view(-1).float()
     loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
-
     averaged_loss = average_losses_across_data_parallel_group([loss])
-
+    averaged_loss = average_losses_across_context_parallel_group([averaged_loss])
     micro_lossmask.pop(0)
     return loss, averaged_loss[0]
+
+def average_losses_across_context_parallel_group(losses):
+    """Reduce a tensor of losses across all GPUs."""
+    averaged_losses = torch.cat(
+        [loss.clone().detach().view(1) for loss in losses])
+    torch.distributed.all_reduce(averaged_losses,
+                                 group=mpu.get_context_parallel_group())
+    averaged_losses = averaged_losses / \
+        torch.distributed.get_world_size(group=mpu.get_context_parallel_group())
+
+    return averaged_losses
+

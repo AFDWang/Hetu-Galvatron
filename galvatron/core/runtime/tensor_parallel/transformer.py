@@ -4,13 +4,13 @@
 import math
 import os
 from contextlib import nullcontext
-from typing import Optional
+from typing import Optional 
 
-import numpy as np
+import numpy as np  
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F 
 from megatron import core
-from megatron.core import mpu, tensor_parallel
+from megatron.core import mpu, tensor_parallel          
 from megatron.core.enums import ModelType
 from megatron.core.jit import jit_fuser
 from megatron.core.models.common.embeddings.rotary_pos_embedding import RotaryEmbedding, apply_rotary_pos_emb
@@ -86,7 +86,6 @@ class ParallelMLP(MegatronModule):
     hidden dimension, perform nonlinear transformation, and project the
     state back into h hidden dimension.
     """
-
     def __init__(self, config, is_expert=False, tp_group=None):
         super(ParallelMLP, self).__init__()
         args = get_args()
@@ -305,7 +304,6 @@ class ParallelMLP(MegatronModule):
 
 
 class CoreAttention(MegatronModule):
-
     def __init__(self, layer_number, config, attn_mask_type=AttnMaskType.padding, tp_group=None, sp_group=None):
         super(CoreAttention, self).__init__()
         self.fp16 = config.fp16
@@ -334,13 +332,11 @@ class CoreAttention(MegatronModule):
         self.hidden_size_per_partition = core.utils.divide(projection_size, world_size)
         self.hidden_size_per_attention_head = core.utils.divide(projection_size, config.num_attention_heads)
         self.num_attention_heads_per_partition = core.utils.divide(config.num_attention_heads, world_size)
-
         coeff = None
         self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
         if self.apply_query_key_layer_scaling:
             coeff = self.layer_number
             self.norm_factor *= coeff
-
         self.scale_mask_softmax = FusedScaleMaskSoftmax(
             self.fp16,
             self.bf16,
@@ -357,12 +353,11 @@ class CoreAttention(MegatronModule):
         self.attention_dropout = torch.nn.Dropout(config.attention_dropout)
 
     def forward(self, query_layer, key_layer, value_layer, attention_mask):
+        # =====================================
+        # Raw attention scores. [b, np, sq, sk]
+        # =====================================
 
-        # ===================================
-        # Raw attention scores. [b, np, s, s]
-        # ===================================
-
-        # [b, np, sq, sk]
+        # [b, np, sq, sk] b numofheads sequence q sequence k
         output_size = (query_layer.size(1), query_layer.size(2), query_layer.size(0), key_layer.size(0))
 
         # [sq, b, np, hn] -> [sq, b * np, hn]
@@ -396,6 +391,7 @@ class CoreAttention(MegatronModule):
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
+
         if not self.sequence_parallel:
             with tensor_parallel.get_cuda_rng_tracker().fork():
                 attention_probs = self.attention_dropout(attention_probs)
@@ -430,7 +426,6 @@ class CoreAttention(MegatronModule):
         # [sq, b, np, hn] --> [sq, b, hp]
         new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)
         context_layer = context_layer.view(*new_context_layer_shape)
-
         return context_layer
 
 
@@ -460,8 +455,8 @@ class FlashSelfOrCrossAttention(torch.nn.Module):
         Arguments
         ---------
             q, k, v: The tensor containing the query, key, and value. (B, S, H, D)
+            （batch，sequence，num_heads, head_dim)
         """
-
         assert all((i.dtype in [torch.float16, torch.bfloat16] for i in (q, k, v)))
         assert all((i.is_cuda for i in (q, k, v)))
 
@@ -529,12 +524,15 @@ class ParallelAttention(MegatronModule):
         attn_mask_type=AttnMaskType.padding,
         tp_group=None,
         sp_group=None,
+        cp_group=None,
+        cp_ranks=None,
         use_ulysses=False,
+        use_zigzag_cp=False,
     ):
         super(ParallelAttention, self).__init__()
         args = get_args()
         self.use_ulysses = use_ulysses
-
+        self.use_zigzag_cp = use_zigzag_cp
         self.layer_number = max(1, layer_number)
         self.attention_type = attention_type
         self.attn_mask_type = attn_mask_type
@@ -585,7 +583,7 @@ class ParallelAttention(MegatronModule):
             self.num_query_groups_per_partition = self.num_attention_heads_per_partition
 
         # Strided linear layer.
-        if attention_type == AttnType.self_attn:
+        if attention_type == AttnType.self_attn: 
             self.query_key_value = tensor_parallel.ColumnParallelLinear(
                 config.hidden_size,
                 query_projection_size + 2 * kv_projection_size,
@@ -626,20 +624,38 @@ class ParallelAttention(MegatronModule):
             self.layer_number, config, self.attn_mask_type, tp_group=tp_group, sp_group=sp_group
         )
         self.checkpoint_core_attention = config.recompute_granularity == "selective"
-
         if self.use_flash_attn:
             self.core_attention_flash = FlashSelfOrCrossAttention(
                 causal=(attn_mask_type == AttnMaskType.causal), attention_dropout=config.attention_dropout
             )
+        if self.use_zigzag_cp:
+            assert self.attention_type == AttnType.self_attn, "ZigzagRingFlashAttention only support self-attention"
+            assert args.use_flash_attn, "ZigzagRingFlashAttention requires use_flash_attn to be True"
+            assert self.attn_mask_type == AttnMaskType.causal, "ZigzagRingFlashAttention is designed for causal attention"
+            self.zigzag_ring_flash_attn = ZigzagRingFlashAttention(
+                attention_dropout=config.attention_dropout,
+                cp_group=cp_group,
+                cp_ranks=cp_ranks,
+                causal=(attn_mask_type == AttnMaskType.causal)
+            )
         if self.use_ulysses:
             assert args.num_attention_heads % sp_world_size == 0
-            self.dist_attn = DistributedAttention(
-                self.core_attention_flash if self.use_flash_attn else self.core_attention,
-                sp_group,
-                gather_idx=1 if self.use_flash_attn else 0,
-            )
+            if self.use_zigzag_cp:  #zigzag ring attention must be used with flash attention
+                self.dist_attn = DistributedAttention(
+                    self.zigzag_ring_flash_attn,
+                    sp_group,
+                    gather_idx=1 if self.use_flash_attn else 0,
+                )
+            else:
+                self.dist_attn = DistributedAttention(
+                    self.core_attention_flash if self.use_flash_attn else self.core_attention,
+                    sp_group,
+                    gather_idx=1 if self.use_flash_attn else 0,
+                )
             # flash attn [B,S,H,D] gather_idx = 1, normal attn [S,B,H,D] gather_idx = 0
         # Output.
+        
+
         self.dense = tensor_parallel.RowParallelLinear(
             query_projection_size,
             config.hidden_size,
@@ -680,13 +696,13 @@ class ParallelAttention(MegatronModule):
     #         device=torch.cuda.current_device(),
     #     )
 
-    def forward(self, hidden_states, attention_mask, encoder_output=None, inference_params=None, rotary_pos_emb=None):
+    def forward(self, hidden_states, attention_mask=None, encoder_output=None, inference_params=None, rotary_pos_emb=None):
         # hidden_states: [sq, b, h]
 
         # =================================================
         # Pre-allocate memory for key-values for inference.
         # =================================================
-        is_first_step = False
+        # is_first_step = False
         # if inference_params:
         #     if self.layer_number not in inference_params.key_value_memory_dict:
         #         inf_max_seq_len = inference_params.max_sequence_length
@@ -711,7 +727,7 @@ class ParallelAttention(MegatronModule):
         # =====================
         if self.attention_type == AttnType.self_attn:
 
-            # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)]
+            # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 2) * hn)] [sq, b, np*hn + 2*ng*hn]
             mixed_x_layer, _ = self.query_key_value(hidden_states)
 
             # [sq, b, hp] --> [sq, b, ng, (np/ng + 2) * hn]
@@ -744,7 +760,7 @@ class ParallelAttention(MegatronModule):
             if self.group_query_attention:
                 query_layer = query_layer.reshape(
                     query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head
-                )
+                )#num of heads per partition
             else:
                 query_layer = query_layer.view(
                     query_layer.size(0), query_layer.size(1), -1, self.hidden_size_per_attention_head
@@ -778,6 +794,8 @@ class ParallelAttention(MegatronModule):
 
         # duplicate the pos_emb for self attention
         if rotary_pos_emb is not None:
+            # print("rotary_pos_emb.shape",rotary_pos_emb.shape)
+            # print("hiddenstates.shape",hidden_states.shape)
             if isinstance(rotary_pos_emb, tuple):
                 rotary_pos_emb = rotary_pos_emb
             else:
@@ -845,7 +863,6 @@ class ParallelAttention(MegatronModule):
                 query_layer, key_layer, value_layer = [
                     rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)
                 ]
-
                 context_layer = self.dist_attn(query_layer, key_layer, value_layer, batch_dim_idx)
                 context_layer = rearrange(context_layer, "b s h d -> s b (h d)").contiguous()
             else:
@@ -854,21 +871,24 @@ class ParallelAttention(MegatronModule):
                 context_layer = rearrange(context_layer, "... h d -> ... (h d)").contiguous()
         else:
             if not self.use_flash_attn:
-                if self.checkpoint_core_attention:
-                    context_layer = self._checkpointed_attention_forward(
-                        query_layer, key_layer, value_layer, attention_mask
-                    )
-                else:
-                    context_layer = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
+                # if self.checkpoint_core_attention:
+                #     context_layer = self._checkpointed_attention_forward(
+                #         query_layer, key_layer, value_layer, attention_mask
+                #     )
+                # else:
+                context_layer = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
             else:
                 q, k, v = [
                     rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)
                 ]
-                if not self.sequence_parallel:
-                    with tensor_parallel.get_cuda_rng_tracker().fork():
-                        context_layer = self.core_attention_flash(q, k, v)
+                if self.use_zigzag_cp:
+                        context_layer = self.zigzag_ring_flash_attn(q, k, v)
                 else:
-                    context_layer = self.core_attention_flash(q, k, v)
+                    if not self.sequence_parallel:#TODO：more examination
+                        with tensor_parallel.get_cuda_rng_tracker().fork():
+                            context_layer = self.core_attention_flash(q, k, v)
+                    else:
+                        context_layer = self.core_attention_flash(q, k, v)
                 context_layer = rearrange(context_layer, "b s h d -> s b (h d)").contiguous()
 
         # =================
@@ -887,7 +907,6 @@ def bias_dropout_add(x, bias, residual, prob, training):
     out = torch.nn.functional.dropout(x, p=prob, training=training)
     out = residual + out
     return out
-
 
 def get_bias_dropout_add(training):
     def _bias_dropout_add(x, bias, residual, prob):
@@ -1882,7 +1901,6 @@ from torch.nn import Module
 
 # --------- ulysses --------------
 
-
 def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_head, head_dim):
 
     def post_func(input):
@@ -1906,26 +1924,26 @@ def post_all2all(scatter_idx, batch_dim_idx, seq_world_size, bs, seq_len, num_he
 
     return post_func
 
-
+#input b s np nd b s_l
 def single_all_to_all(input, scatter_idx, gather_idx, batch_dim_idx, group, async_op=False, handle=None, type=None):
     seq_world_size = dist.get_world_size(group)
     if batch_dim_idx == 0:
         # b, s, n, h
         if scatter_idx < 2:
-            bs, global_seq_len, num_local_head, head_dim = input.shape
+            bs, global_seq_len, num_local_head, head_dim = input.shape#b，s, nh, hd
             input_t = input.reshape(
                 [bs, seq_world_size, global_seq_len // seq_world_size, num_local_head, head_dim]
-            ).contiguous()
-            input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()
+            ).contiguous()#b, sp_deg, s//sp_deg, nh//sp_deg, hd
+            input_t = input_t.permute(1, 0, 2, 3, 4).contiguous()#sp_deg, b, s//sp_deg, nh//sp_deg, hd
         else:
-            bs, local_seq_len, num_total_head, head_dim = input.shape
+            bs, local_seq_len, num_total_head, head_dim = input.shape#b, s, nh, hd
             assert (
                 num_total_head % seq_world_size == 0
             ), f"Number of heads ({num_total_head}) must be divisible by the sequence parallel size ({seq_world_size})!"
             input_t = input.reshape(
                 [bs, local_seq_len, seq_world_size, num_total_head // seq_world_size, head_dim]
             ).contiguous()
-            input_t = input_t.permute(2, 0, 1, 3, 4).contiguous()
+            input_t = input_t.permute(2, 0, 1, 3, 4).contiguous() #sp_deg, b, s//sp_deg, nh//sp_deg, hd
     else:
         # s, b, n, h
         if scatter_idx < 2:
@@ -2157,3 +2175,759 @@ class DistributedAttention(torch.nn.Module):
             output = context_layer
         # out e.g., [s/p::h]
         return output
+
+# --------- Zigzag Ring Flash Attention --------------
+# Reference: https://github.com/zhuzilin/ring-flash-attention/
+# We make some modifications to the original code to adapt to make computation and communication overlap better.
+from typing import Optional, Tuple
+
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+import inspect
+from functools import cache
+
+@cache
+def _get_default_args(func):
+    spec = inspect.getfullargspec(func)
+    defaults = spec.defaults if spec.defaults is not None else ()
+    padded_defaults = (None,) * (len(spec.args) - len(defaults)) + defaults
+    args = dict(zip(spec.args, padded_defaults))
+    if "softcap" in args:
+        args["softcap"] = 0.0
+    return args
+
+def get_default_args(func):
+    if inspect.isfunction(func):
+        return _get_default_args(func)
+    else:
+        # Use the origin _init_fn in CustomOpDef
+        return _get_default_args(func._init_fn)
+
+
+@torch.jit.script
+def _update_out_and_lse(
+    out: torch.Tensor,
+    lse: torch.Tensor,
+    block_out: torch.Tensor,
+    block_lse: torch.Tensor,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    block_out = block_out.to(torch.float32)
+    block_lse = block_lse.transpose(-2, -1).unsqueeze(dim=-1)
+
+    # new_lse = lse + torch.log(1 + torch.exp(block_lse - lse))
+    # torch.exp(lse - new_lse) * out + torch.exp(block_lse - new_lse) * block_out
+    # For additional context and discussion, please refer to:
+    # https://github.com/zhuzilin/ring-flash-attention/pull/34#issuecomment-2076126795
+    out = out - F.sigmoid(block_lse - lse) * (out - block_out)
+    lse = lse - F.logsigmoid(lse - block_lse)
+
+    return out, lse
+
+
+def update_out_and_lse(
+    out: Optional[torch.Tensor],
+    lse: Optional[torch.Tensor],
+    block_out: torch.Tensor,
+    block_lse: torch.Tensor,
+    slice_=None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if out is None:
+        if slice_ is not None:
+            raise RuntimeError("first update_out_and_lse should not pass slice_ args")
+        out = block_out.to(torch.float32)
+        lse = block_lse.transpose(-2, -1).unsqueeze(dim=-1)
+    elif slice_ is not None:
+        slice_out, slice_lse = out[slice_], lse[slice_]
+        slice_out, slice_lse = _update_out_and_lse(
+            slice_out, slice_lse, block_out, block_lse
+        )
+        out[slice_], lse[slice_] = slice_out, slice_lse
+    else:
+        out, lse = _update_out_and_lse(out, lse, block_out, block_lse)
+    return out, lse
+
+#TODO：for other nccl version，we can use different nccl stream to overlap communication and computation
+class RingComm:
+    def __init__(self, process_group: dist.ProcessGroup, batch_comm = True):
+        self.batch_comm = batch_comm
+        self._process_group = process_group
+        self._ops = []
+        self.rank = dist.get_rank(self._process_group)
+        self.world_size = dist.get_world_size(self._process_group)
+        self._reqs = None
+
+        self._send_reqs = []
+        self._recv_reqs = []
+
+        self.send_rank = (self.rank + 1) % self.world_size
+        self.recv_rank = (self.rank - 1) % self.world_size
+
+        if process_group is not None:
+            self.send_rank = dist.get_global_rank(self._process_group, self.send_rank)
+            self.recv_rank = dist.get_global_rank(self._process_group, self.recv_rank)
+
+    def send_recv(
+        self, to_send: torch.Tensor, recv_tensor: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        if recv_tensor is None:
+            res = torch.empty_like(to_send)
+        else:
+            res = recv_tensor
+        if self.batch_comm:
+            send_op = dist.P2POp(
+                dist.isend, to_send, self.send_rank, group=self._process_group
+            )
+            recv_op = dist.P2POp(dist.irecv, res, self.recv_rank, group=self._process_group)
+            self._ops.append(send_op)
+            self._ops.append(recv_op)
+        else:
+            if self.rank % 2 == 0:
+                send_req = dist.isend(to_send, self.send_rank, group=self._process_group)
+                recv_req = dist.irecv(res, self.recv_rank, group=self._process_group)
+            else:
+                recv_req = dist.irecv(res, self.recv_rank, group=self._process_group)
+                send_req = dist.isend(to_send, self.send_rank, group=self._process_group)
+            self._recv_reqs.append(recv_req)
+            self._send_reqs.append(send_req)
+        return res
+
+    def commit(self):
+        if self.batch_comm:
+            if self._reqs is not None:
+                raise RuntimeError("commit called twice")
+            self._reqs = dist.batch_isend_irecv(self._ops)
+        else:
+            pass
+
+    def wait(self):
+        if self.batch_comm:
+            if self._reqs is None:
+                raise RuntimeError("wait called before commit")
+            for req in self._reqs:
+                req.wait()
+            self._reqs = None
+            self._ops = []
+        else:
+            for req in self._recv_reqs:
+                req.wait()
+            self._send_reqs.clear()
+            self._recv_reqs.clear()
+
+    def send_recv_kv(
+        self,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        k_buffer: Optional[torch.Tensor] = None,
+        v_buffer: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        next_k, next_v = self.send_recv(k, k_buffer), self.send_recv(v, v_buffer)
+        self.commit()
+        return next_k, next_v
+    
+
+import torch
+import torch.distributed as dist
+from flash_attn.flash_attn_interface import _flash_attn_forward, _flash_attn_backward
+
+
+def zigzag_ring_flash_attn_forward(
+    process_group,
+    ranks,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    softmax_scale,
+    dropout_p=0,
+    causal=True,
+    window_size=(-1, -1),
+    alibi_slopes=None,
+    deterministic=False,
+):
+    assert causal == True, "zigzag ring is meaningless for causal=False"
+    comm = RingComm(process_group)
+
+    block_seq_len = q.shape[1] // 2
+    q1 = q[:, block_seq_len:]
+
+    out = None
+    lse = None
+    next_k, next_v = None, None
+
+    def forward(q, k, v, causal):
+        params = get_default_args(_flash_attn_forward).copy()
+        params.update(
+            {
+                "q": q,
+                "k": k,
+                "v": v,
+                "dropout_p": dropout_p,
+                "softmax_scale": softmax_scale,
+                "causal": causal,
+                "alibi_slopes": alibi_slopes,
+                "return_softmax": True and dropout_p > 0,
+            }
+        )
+        if "window_size" in params:
+            params.update({"window_size": window_size})
+        else:
+            params.update(
+                {
+                    "window_size_left": window_size[0],
+                    "window_size_right": window_size[1],
+                }
+            )
+        outputs = _flash_attn_forward(**params)
+        if len(outputs) == 8:
+            block_out, _, _, _, _, block_lse, _, _ = outputs
+        else:
+            assert len(outputs) == 4
+            block_out, block_lse, _, _ = outputs
+        return block_out, block_lse
+
+    for step in range(comm.world_size):
+        if step + 1 != comm.world_size:
+            next_k, next_v = comm.send_recv_kv(k, v)
+        # TODO: Maybe find a better way to make sure launch order
+        if step == 0:
+            _ = torch.zeros((1,),device=torch.cuda.current_device())#we use this to guarantee commiunication is launched before computation
+            block_out, block_lse = forward(q, k, v, causal=True)
+            out, lse = update_out_and_lse(out, lse, block_out, block_lse)
+        elif step <= comm.rank:
+            k0 = k[:, :block_seq_len]
+            v0 = v[:, :block_seq_len]
+            _ = torch.zeros((1,),device=torch.cuda.current_device())#we use this to guarantee commiunication is launched before computation
+            block_out, block_lse = forward(q, k0, v0, causal=False)
+            out, lse = update_out_and_lse(out, lse, block_out, block_lse)
+        else:
+            _ = torch.zeros((1,),device=torch.cuda.current_device())#we use this to guarantee commiunication is launched before computation
+            block_out, block_lse = forward(q1, k, v, causal=False)
+            out, lse = update_out_and_lse(
+                out,
+                lse,
+                block_out,
+                block_lse,
+                slice_=(slice(None), slice(block_seq_len, None)),
+            )
+
+        if step + 1 != comm.world_size:
+            comm.wait()
+            k, v = next_k, next_v
+
+    out = out.to(q.dtype)
+    lse = lse.squeeze(dim=-1).transpose(1, 2)
+    return out, lse
+
+
+def zigzag_ring_flash_attn_backward(
+    process_group,
+    ranks,
+    dout,
+    q,
+    k,
+    v,
+    out,
+    softmax_lse,
+    softmax_scale,
+    dropout_p=0,
+    causal=True,
+    window_size=(-1, -1),
+    alibi_slopes=None,
+    deterministic=False,
+):
+    assert causal == True, "zigzag ring is meaningless for causal=False"
+    kv_comm = RingComm(process_group)
+    #d_kv_comm = RingComm(process_group)
+
+    # dkv_comm_ranks = ranks
+    # d_kv_comm_group = dist.new_group(dkv_comm_ranks)
+    # d_kv_comm = RingComm(d_kv_comm_group)
+
+    dq, dk, dv = None, None, None
+    next_dk, next_dv = None, None
+    next_k, next_v = None, None
+    dk_comm_buffer, dv_comm_buffer = None, None
+    #TODO:for other nccl version,we may can use different nccl stream to overlap communication and computation
+    # kv_comm_stream = torch.cuda.Stream(device=q.device)
+    # d_kv_comm_stream = torch.cuda.Stream(device=q.device)
+
+    dout1 = dout.chunk(2, dim=1)[1]
+    q1 = q.chunk(2, dim=1)[1]
+    out1 = out.chunk(2, dim=1)[1]
+    softmax_lse1 = softmax_lse.chunk(2, dim=2)[1].contiguous()
+    block_seq_len = q.shape[1] // 2
+
+    # repeatly allocating buffer may be slow...
+    dq_buffer = torch.empty(q.shape, dtype=q.dtype, device=q.device)
+    dk_buffer = torch.empty(k.shape, dtype=k.dtype, device=k.device)
+    dv_buffer = torch.empty(v.shape, dtype=v.dtype, device=v.device)
+    original_dtype = q.dtype
+
+    def backward(dout, q, k, v, out, softmax_lse, causal):
+        seqlen_q = q.shape[1]
+        seqlen_kv = k.shape[1]
+        params = get_default_args(_flash_attn_backward).copy()
+        params.update(
+            {
+                "dout": dout,
+                "q": q,
+                "k": k,
+                "v": v,
+                "out": out,
+                "softmax_lse": softmax_lse,
+                "dq": dq_buffer[:, :seqlen_q],
+                "dk": dk_buffer[:, :seqlen_kv],
+                "dv": dv_buffer[:, :seqlen_kv],
+                "dropout_p": dropout_p,
+                "softmax_scale": softmax_scale,
+                "causal": causal,
+                "alibi_slopes": alibi_slopes,
+                "deterministic": deterministic,
+            }
+        )
+        if "window_size" in params:
+            params.update({"window_size": window_size})
+        else:
+            params.update(
+                {
+                    "window_size_left": window_size[0],
+                    "window_size_right": window_size[1],
+                }
+            )
+        _flash_attn_backward(**params)
+
+    for step in range(kv_comm.world_size):
+        if step == 0:
+            next_k, next_v = kv_comm.send_recv_kv(k, v)
+        else:
+            if step + 1 != kv_comm.world_size:
+                k_dk = torch.stack([k, dk], dim=0)
+                v_dv = torch.stack([v, dv], dim=0)
+                next_k_dk, next_v_dv = kv_comm.send_recv_kv(k_dk, v_dv)
+            else:
+                next_dk, next_dv = kv_comm.send_recv_kv(dk, dv)
+        
+        if step == 0:
+            backward(dout, q, k, v, out, softmax_lse, causal=True)
+            dq = dq_buffer.to(torch.float32)
+            dk = dk_buffer.to(torch.float32)
+            dv = dv_buffer.to(torch.float32)
+        else:
+            if step <= kv_comm.rank:
+                k0 = k[:, :block_seq_len]
+                v0 = v[:, :block_seq_len]
+                backward(dout, q, k0, v0, out, softmax_lse, causal=False)
+                dq += dq_buffer
+            else:
+                backward(dout1, q1, k, v, out1, softmax_lse1, causal=False)
+                # always use the first half in dq_buffer.
+                dq[:, block_seq_len:] += dq_buffer[:, :block_seq_len]
+
+            #d_kv_comm.wait()
+            kv_comm.wait()
+            if step + 1 != kv_comm.world_size:
+                next_k, next_v = next_k_dk[0].to(original_dtype), next_v_dv[0].to(original_dtype)
+                next_dk, next_dv = next_k_dk[1], next_v_dv[1]
+                k, v = next_k, next_v
+                dk_comm_buffer, dv_comm_buffer = dk, dv
+                dk, dv = next_dk, next_dv
+            else:
+                dk, dv = next_dk, next_dv
+            if step <= kv_comm.rank:
+                dk[:, :block_seq_len] += dk_buffer[:, :block_seq_len]
+                dv[:, :block_seq_len] += dv_buffer[:, :block_seq_len]
+            else:
+                dk += dk_buffer
+                dv += dv_buffer
+
+        if step == 0:
+            kv_comm.wait()
+            k, v = next_k, next_v
+    next_dk, next_dv = kv_comm.send_recv_kv(dk, dv, dk_comm_buffer, dv_comm_buffer)
+    kv_comm.wait()
+    dk, dv = next_dk, next_dv
+
+    return dq.to(q.dtype), next_dk.to(q.dtype), next_dv.to(q.dtype)
+
+
+class ZigZagRingFlashAttnFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        q,
+        k,
+        v,
+        dropout_p,
+        softmax_scale,
+        causal,
+        window_size,
+        alibi_slopes,
+        deterministic,
+        return_softmax,
+        group,
+        ranks,
+    ):
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** (-0.5)
+
+        assert alibi_slopes is None
+        k = k.contiguous()
+        v = v.contiguous()
+        out, softmax_lse = zigzag_ring_flash_attn_forward(
+            group,
+            ranks,
+            q,
+            k,
+            v,
+            softmax_scale=softmax_scale,
+            dropout_p=dropout_p,
+            causal=causal,
+            window_size=window_size,
+            alibi_slopes=alibi_slopes,
+            deterministic=False,
+        )
+        # this should be out_padded
+        ctx.save_for_backward(q, k, v, out, softmax_lse)
+        ctx.dropout_p = dropout_p
+        ctx.softmax_scale = softmax_scale
+        ctx.causal = causal
+        ctx.window_size = window_size
+        ctx.alibi_slopes = alibi_slopes
+        ctx.deterministic = deterministic
+        ctx.group = group
+        ctx.ranks = ranks
+        return out if not return_softmax else (out, softmax_lse, None)
+
+    @staticmethod
+    def backward(ctx, dout, *args):
+        q, k, v, out, softmax_lse = ctx.saved_tensors
+        dq, dk, dv = zigzag_ring_flash_attn_backward(
+            ctx.group,
+            ctx.ranks,
+            dout,
+            q,
+            k,
+            v,
+            out,
+            softmax_lse,
+            softmax_scale=ctx.softmax_scale,
+            dropout_p=ctx.dropout_p,
+            causal=ctx.causal,
+            window_size=ctx.window_size,
+            alibi_slopes=ctx.alibi_slopes,
+            deterministic=ctx.deterministic,
+        )
+        return dq, dk, dv, None, None, None, None, None, None, None, None, None
+
+
+
+
+def zigzag_ring_flash_attn_func(
+    q,
+    k,
+    v,
+    dropout_p=0.0,
+    softmax_scale=None,
+    causal=False,
+    window_size=(-1, -1),
+    alibi_slopes=None,
+    deterministic=False,
+    return_attn_probs=False,
+    group=None,
+    ranks=None,
+):
+    return ZigZagRingFlashAttnFunc.apply(
+        q,
+        k,
+        v,
+        dropout_p,
+        softmax_scale,
+        causal,
+        window_size,
+        alibi_slopes,
+        deterministic,
+        return_attn_probs,
+        group,
+        ranks,
+    )
+
+
+class ZigzagRingFlashAttention(torch.nn.Module):
+    def __init__(self, attention_dropout, cp_group, cp_ranks, softmax_scale=None, causal=True):
+        super().__init__()
+        self.softmax_scale = softmax_scale
+        self.attention_dropout = attention_dropout
+        self.cp_process_group = cp_group 
+        self.cp_ranks = cp_ranks
+        self.causal = causal
+
+    def forward(self, q, k, v):
+        assert q.dim() == 4, "q should be [B, S, H, D]"
+        softmax_scale = self.softmax_scale
+        if softmax_scale is None:
+            softmax_scale = q.shape[-1] ** -0.5
+        
+        with torch.profiler.record_function("ZigZag_Ring_Flash_Attention_Forward"):
+            context = zigzag_ring_flash_attn_func(
+                q, k, v,
+                dropout_p=self.attention_dropout,
+                softmax_scale=softmax_scale,
+                causal=self.causal,
+                group=self.cp_process_group,
+                ranks=self.cp_ranks,
+            )
+        return context
+
+#Galvatron can use zigzag ring attention and ulysses-sp to replace long context attention
+
+#Reference:https://github.com/feifeibear/long-context-attention
+# #--------------LongContextAttention------------------
+# from yunchang.comm.all_to_all import SeqAllToAll4D, SeqAllToAll5D
+
+# import torch
+
+# from typing import Any
+# from torch import Tensor
+
+# import torch.distributed as dist
+# from .utils import RING_IMPL_DICT, RING_IMPL_QKVPACKED_DICT
+# from yunchang.globals import PROCESS_GROUP, HAS_SPARSE_SAGE_ATTENTION
+# from yunchang.kernels import AttnType
+
+
+# class LongContextAttention(torch.nn.Module):
+#     """Initialization.
+
+#     Arguments:
+#         ulysses_pg (ProcessGroup): ulysses process group
+#         ring_pg (ProcessGroup): ring process group
+#         scatter_idx (int): scatter_idx for all2all comm
+#         gather_idx (int): gather_idx for all2all comm
+#         use_sync (bool): whether to synchronize after all-to-all
+#     """
+
+#     def __init__(
+#         self,
+#         scatter_idx: int = 2,
+#         gather_idx: int = 1,
+#         ring_impl_type: str = "basic",
+#         use_pack_qkv: bool = False,
+#         use_sync: bool = False,
+#         attn_type: AttnType = AttnType.FA,
+#         attn_processor: torch.nn.Module = None,
+#     ) -> None:
+
+#         super(LongContextAttention, self).__init__()
+#         self.ring_pg = PROCESS_GROUP.RING_PG
+#         self.ulysses_pg = PROCESS_GROUP.ULYSSES_PG
+
+#         self.use_pack_qkv = use_pack_qkv
+#         self.use_sync = use_sync
+#         self.attn_type = attn_type
+#         assert (
+#             self.ulysses_pg is not None or self.ring_pg is not None
+#         ), f"use set_seq_parallel_pg() first. Now ulysses pg {self.ulysses_pg} and ring pg {self.ring_pg}"
+#         self.scatter_idx = scatter_idx
+#         self.gather_idx = gather_idx
+#         self.attn_processor = attn_processor
+#         self.ring_attn_fn = RING_IMPL_DICT[ring_impl_type]
+
+#         if HAS_SPARSE_SAGE_ATTENTION:
+#             from spas_sage_attn.autotune import SparseAttentionMeansim
+#             if isinstance(attn_processor, SparseAttentionMeansim) and dist.get_world_size(self.ring_pg) > 1:
+#                 raise RuntimeError("Sparse Sage attention does not support ring degree > 1.")
+        
+
+#     def forward(
+#         self,
+#         query: Tensor,
+#         key: Tensor,
+#         value: Tensor,
+#         dropout_p=0.0,
+#         softmax_scale=None,
+#         causal=False,
+#         window_size=(-1, -1),
+#         softcap=0.0,
+#         alibi_slopes=None,
+#         deterministic=False,
+#         return_attn_probs=False,
+#         *args: Any,
+#     ) -> Tensor:
+#         """forward
+
+#         Arguments:
+#             query (Tensor): query input to the layer
+#             key (Tensor): key input to the layer
+#             value (Tensor): value input to the layer
+#             args: other args
+
+#         Returns:
+#             * output (Tensor): context output
+#         """
+
+#         # 3 X (bs, seq_len/N, head_cnt, head_size) -> 3 X (bs, seq_len, head_cnt/N, head_size)
+#         # scatter 2, gather 1
+#         if self.use_pack_qkv:
+#             # (3*bs, seq_len/N, head_cnt, head_size)
+#             qkv = torch.cat([query, key, value]).continous()
+#             # (3*bs, seq_len, head_cnt/N, head_size)
+#             qkv = SeqAllToAll4D.apply(
+#                 self.ulysses_pg, qkv, self.scatter_idx, self.gather_idx, use_sync=self.use_sync
+#             )
+#             qkv = torch.chunk(qkv, 3, dim=0)
+#             out = self.ring_attn_fn(
+#                 qkv[0],
+#                 qkv[1],
+#                 qkv[2],
+#                 dropout_p=dropout_p,
+#                 softmax_scale=softmax_scale,
+#                 causal=causal,
+#                 window_size=window_size,
+#                 softcap=softcap,
+#                 alibi_slopes=alibi_slopes,
+#                 deterministic=deterministic,
+#                 return_attn_probs=return_attn_probs,
+#                 group=self.ring_pg,
+#                 attn_type=self.attn_type,
+#                 attn_processor=self.attn_processor,
+#             )
+#         else:
+#             query_layer = SeqAllToAll4D.apply(
+#                 self.ulysses_pg, query, self.scatter_idx, self.gather_idx, self.use_sync
+#             )
+#             key_layer = SeqAllToAll4D.apply(
+#                 self.ulysses_pg, key, self.scatter_idx, self.gather_idx, self.use_sync
+#             )
+#             value_layer = SeqAllToAll4D.apply(
+#                 self.ulysses_pg, value, self.scatter_idx, self.gather_idx, self.use_sync
+#             )
+            
+#             out = self.ring_attn_fn(
+#                 query_layer,
+#                 key_layer,
+#                 value_layer,
+#                 dropout_p=dropout_p,
+#                 softmax_scale=softmax_scale,
+#                 causal=causal,
+#                 window_size=window_size,
+#                 softcap=softcap,
+#                 alibi_slopes=alibi_slopes,
+#                 deterministic=deterministic,
+#                 return_attn_probs=return_attn_probs,
+#                 group=self.ring_pg,
+#                 attn_type=self.attn_type,
+#                 attn_processor=self.attn_processor,
+#             )
+
+#         if type(out) == tuple:
+#             context_layer, _, _ = out
+#         else:
+#             context_layer = out
+
+#         # (bs, seq_len, head_cnt/N, head_size) -> (bs, seq_len/N, head_cnt, head_size)
+#         # scatter 1, gather 2
+#         output = SeqAllToAll4D.apply(
+#             self.ulysses_pg, context_layer, self.gather_idx, self.scatter_idx, self.use_sync
+#         )
+
+#         # out e.g., [s/p::h]
+#         return output
+
+
+# class LongContextAttentionQKVPacked(torch.nn.Module):
+#     """Initialization.
+
+#     Arguments:
+#         ulysses_pg (ProcessGroup): ulysses process group
+#         ring_pg (ProcessGroup): ring process group
+#         scatter_idx (int): scatter_idx for all2all comm
+#         gather_idx (int): gather_idx for all2all comm
+#         use_sync (bool): whether to synchronize after all-to-all
+#     """
+
+#     def __init__(
+#         self,
+#         scatter_idx: int = 3,
+#         gather_idx: int = 1,
+#         ring_impl_type: str = "basic",
+#         use_sync: bool = False,
+#         attn_type: AttnType = AttnType.FA,
+#     ) -> None:
+
+#         super(LongContextAttentionQKVPacked, self).__init__()
+
+#         self.ring_pg = PROCESS_GROUP.RING_PG
+#         self.ulysses_pg = PROCESS_GROUP.ULYSSES_PG
+
+#         assert (
+#             self.ulysses_pg is not None or self.ring_pg is not None
+#         ), f"use set_seq_parallel_pg() first. Now ulysses pg {self.ulysses_pg} and ring pg {self.ring_pg}"
+#         self.scatter_idx = scatter_idx
+#         self.gather_idx = gather_idx
+#         self.use_sync = use_sync
+#         self.ring_attn_fn = RING_IMPL_QKVPACKED_DICT[ring_impl_type]
+#         self.attn_type = attn_type
+        
+#     def forward(
+#         self,
+#         qkv,
+#         dropout_p=0.0,
+#         softmax_scale=None,
+#         causal=False,
+#         window_size=(-1, -1),
+#         softcap=0.0,
+#         alibi_slopes=None,
+#         deterministic=False,
+#         return_attn_probs=False,
+#         *args: Any,
+#     ) -> Tensor:
+#         """forward
+
+#         Arguments:
+#             query (Tensor): query input to the layer
+#             key (Tensor): key input to the layer
+#             value (Tensor): value input to the layer
+#             args: other args
+
+#         Returns:
+#             * output (Tensor): context output
+#         """
+
+#         # scatter 3, gather 1
+
+#         world_size = dist.get_world_size(self.ulysses_pg)
+
+#         if world_size > 1:
+#             qkv = SeqAllToAll5D.apply(
+#                 self.ulysses_pg, qkv, self.scatter_idx, self.gather_idx, self.use_sync
+#             )
+
+#         out = self.ring_attn_fn(
+#             qkv,
+#             dropout_p=dropout_p,
+#             softmax_scale=softmax_scale,
+#             causal=causal,
+#             window_size=window_size,
+#             softcap=softcap,
+#             alibi_slopes=alibi_slopes,
+#             deterministic=deterministic,
+#             return_attn_probs=return_attn_probs,
+#             group=self.ring_pg,
+#             attn_type=self.attn_type,
+#         )
+
+#         # print(f"out {out.shape}")
+
+#         if type(out) == tuple:
+#             out = out[0]
+
+#         # (bs, seq_len, head_cnt/N, head_size) -> (bs, seq_len/N, head_cnt, head_size)
+#         # scatter 1, gather 2
+
+#         if world_size > 1:
+#             out = SeqAllToAll4D.apply(
+#                 self.ulysses_pg, out, self.gather_idx, self.scatter_idx - 1, self.use_sync
+#             )
+#         # out e.g., [s/p::h]
+#         return out

@@ -56,6 +56,7 @@ class PipelineParallel(nn.Module):
         layer_dp_sizes=None,
         layer_tp_sizes=None,
         layer_sp_sizes=None,
+        layer_cp_sizes=None,
         chunks=1,
         process_group=None,
         embedding_group=None,
@@ -82,6 +83,8 @@ class PipelineParallel(nn.Module):
             layer_tp_sizes = [1] * len(model)
         if layer_sp_sizes is None:
             layer_sp_sizes = [1] * len(model)
+        if layer_cp_sizes is None:
+            layer_cp_sizes = [1] * len(model)
         assert len(model) == len(layer_dp_sizes)
         self.world_size = torch.distributed.get_world_size()
         self.global_rank = torch.distributed.get_rank()
@@ -104,10 +107,9 @@ class PipelineParallel(nn.Module):
             and np.max(model_ranks) == self.group_size - 1
             and np.min(model_ranks) == 0
         )
-
         self.stage_start_idx, cnt = model_ranks.index(self.group_rank), model_ranks.count(self.group_rank)
         self.stage_end_idx = self.stage_start_idx + cnt
-        self.model_cur_stage = model[self.stage_start_idx : self.stage_end_idx]  # .cuda(self.local_rank)
+        self.model_cur_stage = model[self.stage_start_idx : self.stage_end_idx]
         self.chunks = int(chunks)
         assert self.chunks >= 1
         self.template_stage_input_tensor_shape = (
@@ -131,11 +133,14 @@ class PipelineParallel(nn.Module):
         self.sp_size_prev_stage = None if self.is_pipeline_first_stage() else layer_sp_sizes[self.stage_start_idx - 1]
         self.sp_size_cur_stage = None if self.is_pipeline_last_stage() else layer_sp_sizes[self.stage_end_idx - 1]
 
+        self.cp_size_prev_stage = None if self.is_pipeline_first_stage() else layer_cp_sizes[self.stage_start_idx - 1]
+        self.cp_size_cur_stage = None if self.is_pipeline_last_stage() else layer_cp_sizes[self.stage_end_idx - 1]
+
         self.dp_size_input = layer_dp_sizes[0]
         self.info = info
         self.chunk_warning = True
 
-        self.checkpoint_flags_stage = [0] * (self.stage_end_idx - self.stage_start_idx)  # checkpoint default off
+        self.checkpoint_flags_stage = [0] * (self.stage_end_idx - self.stage_start_idx)
         self.require_loss = require_loss
 
         from galvatron.core import get_args
@@ -340,7 +345,6 @@ class PipelineParallel(nn.Module):
                 None,
                 losses_reduced,
             )
-
             if profiler is not None and i == num_microbatches - 1:
                 profiler.profile_memory(iter, "After Forward")
 

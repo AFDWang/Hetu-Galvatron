@@ -1,3 +1,5 @@
+import argparse
+
 def model_args(parser):
     group = parser.add_argument_group(title="Model Arguments")
 
@@ -6,7 +8,7 @@ def model_args(parser):
         type=str,
         default="llama-7b",
         help="Model size.",
-        choices=["llama-0.3b", "llama-7b", "llama-13b", "llama-30b", "llama2-70b", "qwen2.5-7b", "qwen2.5-72b"],
+        choices=["llama-0.3b", "llama-7b", "llama-13b", "llama-30b", "llama2-70b", "qwen2.5-7b", "qwen2.5-72b", "qwen2.5-1.5b", "qwen2.5-3b"],
     )
     group.add_argument(
         "--hidden_size",
@@ -22,6 +24,7 @@ def model_args(parser):
         default=12,
         help="Number of attention heads",
     )
+    group.add_argument("--ffn_hidden_size", type=int, default=3072, help="Size of the feed-forward hidden dimension in the transformer")
     group.add_argument("-s", "--seq_length", type=int, default=128, help="Maximum sequence len")
     group.add_argument("--vocab_size", type=int, default=30522, help="Total number of vocab")
     group.add_argument("--max_predictions_per_seq", type=int, default=20)

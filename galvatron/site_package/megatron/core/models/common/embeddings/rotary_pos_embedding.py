@@ -30,6 +30,30 @@ except:
 
 __all__ = ['RotaryEmbedding', 'apply_rotary_pos_emb']
 
+def get_pos_emb_on_this_cp_sp_rank_galvatron(cp_group, sp_group, pos_emb, seq_dim):
+    if cp_group is None:
+        return pos_emb
+    cp_size = torch.distributed.get_world_size(cp_group)
+    cp_rank = torch.distributed.get_rank(cp_group)
+    sp_size = torch.distributed.get_world_size(sp_group)
+    sp_rank = torch.distributed.get_rank(sp_group)
+    if cp_size == 1:
+        return pos_emb
+    cp_idx = torch.tensor(
+        [cp_rank, (2 * cp_size - cp_rank - 1)], device="cpu", pin_memory=True
+    ).cuda(non_blocking=True)
+    pos_emb = pos_emb.view(
+        *pos_emb.shape[:seq_dim], 2 * cp_size, -1, *pos_emb.shape[(seq_dim + 1) :]
+    )
+    pos_emb = pos_emb.index_select(seq_dim, cp_idx)
+    pos_emb = pos_emb.view(*pos_emb.shape[:seq_dim], -1, *pos_emb.shape[(seq_dim + 2) :])
+    if sp_group is not None and sp_size > 1:
+        current_seq_len = pos_emb.shape[seq_dim]
+        sp_seq_len = current_seq_len // sp_size
+        sp_start = sp_rank * sp_seq_len
+        sp_end = sp_start + sp_seq_len
+        pos_emb = pos_emb[sp_start:sp_end]
+    return pos_emb
 
 def get_pos_emb_on_this_cp_rank(pos_emb, seq_dim):
     cp_size = parallel_state.get_context_parallel_world_size()
@@ -62,6 +86,8 @@ class RotaryEmbedding(nn.Module):
         rotary_interleaved: bool = False,
         seq_len_interpolation_factor: float = None,
         rotary_base: int = 10000,
+        cp_group: Optional[torch.distributed.ProcessGroup] = None,
+        sp_group: Optional[torch.distributed.ProcessGroup] = None,
     ) -> None:
         super().__init__()
 
@@ -78,6 +104,8 @@ class RotaryEmbedding(nn.Module):
                 / dim
             )
         )
+        self.cp_group = cp_group
+        self.sp_group = sp_group
 
     def forward(self, max_seq_len: int, offset: int = 0) -> Tensor:
         """Forward pass of RoPE embedding.
@@ -108,9 +136,12 @@ class RotaryEmbedding(nn.Module):
             )
         # emb [seq_length, .., dim]
         emb = emb[:, None, None, :]
-        if parallel_state.get_context_parallel_world_size() > 1:
-            # slice rotary_pos_emb along sequence dimension and select the parition of the current CP rank
-            emb = get_pos_emb_on_this_cp_rank(emb, 0)
+        if self.cp_group is not None:
+            emb = get_pos_emb_on_this_cp_sp_rank_galvatron(self.cp_group, self.sp_group, emb, 0)
+        else:
+            if parallel_state.get_context_parallel_world_size() > 1:
+                # slice rotary_pos_emb along sequence dimension and select the parition of the current CP rank
+                emb = get_pos_emb_on_this_cp_rank(emb, 0)
         return emb
 
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):

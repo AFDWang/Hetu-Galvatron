@@ -2,6 +2,7 @@ import os
 
 import torch
 from torch import nn
+from torch.profiler import profile, record_function, ProfilerActivity
 from tqdm import tqdm
 from transformers import LlamaConfig, LlamaForCausalLM
 
@@ -22,7 +23,7 @@ from galvatron.models.llama_hf.dataloader import (
 from galvatron.models.llama_hf.LlamaModel_checkpoint import save_llama_module
 from galvatron.models.llama_hf.LlamaModel_hybrid_parallel import get_llama_config, get_runtime_profiler, llama_model_hp
 from galvatron.models.llama_hf.meta_configs import model_layer_configs, model_name
-from galvatron.utils import distributed_dataloader, print_loss, set_seed
+from galvatron.utils import distributed_dataloader, print_loss, set_seed, print_param_num
 from megatron.training.arguments import _print_args
 
 
@@ -40,8 +41,8 @@ def train(args):
         print("Creating Dataset...")
 
     set_megatron_args_for_dataset(
-        args, model, model.sp_groups_whole[0] if args.vocab_sp else model.tp_groups_whole[0], model.dp_groups_whole[0]
-    )
+        args, model, model.sp_groups_whole[0] if args.vocab_sp else model.tp_groups_whole[0], 
+        model.vtp_data_group, model.cp_groups_whole[0])
     if local_rank == 0:
         _print_args("arguments", args)
 
@@ -50,7 +51,7 @@ def train(args):
     optimizer, opt_param_scheduler = get_optimizer_and_param_scheduler(model, args)
 
     path = os.path.dirname(os.path.abspath(__file__))
-    profiler = get_runtime_profiler(args, path, config)
+    profiler = get_runtime_profiler(args, path, config, start_iter=0)
 
     profiler.profile_memory(0, "After creating model")
     if local_rank == 0:
@@ -58,12 +59,12 @@ def train(args):
 
     for iter in range(args.iteration, args.train_iters):
         tokens, kwargs, loss_func = get_batch(train_data_iterator)
+    
         profiler.profile_time_start(iter)
         profiler.profile_memory(iter, "Before Forward")
 
         input_ids = tokens
         batch = [input_ids]
-
         loss = model.forward_backward(batch, iter, profiler, loss_func=loss_func, **kwargs)
 
         profiler.profile_memory(iter, "After Backward")

@@ -520,3 +520,12 @@ class _NullTokenizer:
     @property
     def additional_special_tokens_ids(self):
         return None
+    
+    @property
+    def unique_identifiers(self):
+        
+        return {
+            "class": "_NullTokenizer",
+            "tokenizer_type": "null_tokenizer",
+            "vocab_size": self.vocab_size
+            }

@@ -55,6 +55,22 @@ def galvatron_training_args(parser, use_megatron=True):
         help="Pipeline parallel degree.",
         choices=[1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
     )
+   
+    group.add_argument(
+        "--global_cp_deg",
+        type=int,
+        default=1, 
+        help="Context parallel degree.",
+        choices=[1, 2, 4, 8, 16, 32], 
+    )
+    
+    group.add_argument(
+        "--cp_mode",
+        type=str,
+        default="zigzag", 
+        help="Context parallel communication mode.",
+        choices=["ring", "zigzag"], 
+    )
     group.add_argument(
         "--global_tp_deg",
         type=int,
@@ -146,6 +162,13 @@ def galvatron_training_args(parser, use_megatron=True):
         type=int,
         default=1,
         help="Tensor parallel degree of vocab.",
+        choices=[1, 2, 4, 8, 16],
+    )
+    group.add_argument(
+        "--vocab_cp",
+        type=int,
+        default=1,
+        help="Context parallel degree of vocab.",
         choices=[1, 2, 4, 8, 16],
     )
     group.add_argument(

@@ -14,6 +14,8 @@ path_dict = {
     "llama2-70b": "llama2-70b.json",
     "qwen2.5-7b": "qwen2.5-7b.json",
     "qwen2.5-72b": "qwen2.5-72b.json",
+    "qwen2.5-1.5b": "qwen2.5-1.5b.json",
+    "qwen2.5-3b": "qwen2.5-3b.json",
 }
 
 
@@ -29,9 +31,12 @@ def config_from_meta(model_type) -> LlamaConfig:
     if "n_kv_heads" not in params:
         params["n_kv_heads"] = None
     if "ffn_dim" not in params:
-        params["ffn_dim"] = (
-            (params["dim"] * 8 // 3 + params["multiple_of"] - 1) // params["multiple_of"] * params["multiple_of"]
-        )
+        if model_type.startswith("qwen"):
+            params["ffn_dim"] = params["dim"] * 5.5 
+        else:
+            params["ffn_dim"] = (
+                (params["dim"] * 8 // 3 + params["multiple_of"] - 1) // params["multiple_of"] * params["multiple_of"]
+            )
     return LlamaConfig(
         hidden_size=params["dim"],
         intermediate_size=params["ffn_dim"],
@@ -43,7 +48,6 @@ def config_from_meta(model_type) -> LlamaConfig:
         vocab_size=params["vocab_size"],
     )
 
-
 # ============= Set Model Config and Arguments =============
 def set_model_config(config, args, overwrite_args=True):
     config.use_cache = False
@@ -53,7 +57,10 @@ def set_model_config(config, args, overwrite_args=True):
     if args.set_model_config_manually:
         config.vocab_size = args.vocab_size
         config.hidden_size = args.hidden_size
-        config.intermediate_size = args.hidden_size * 8 // 3
+        if args.model_size.startswith("qwen"):
+            config.intermediate_size = args.ffn_hidden_size if args.ffn_hidden_size is not None else args.hidden_size * 8 // 3
+        else:
+            config.intermediate_size = args.hidden_size * 8 // 3
         config.num_hidden_layers = args.num_hidden_layers
         config.num_attention_heads = args.num_attention_heads
         config.max_position_embeddings = args.seq_length
@@ -78,7 +85,6 @@ def overwrite_model_args(config, args):
     args.num_attention_heads = config.num_attention_heads
     args.seq_length = config.max_position_embeddings
     args.vocab_size = config.vocab_size
-
 
 def overwrite_megatron_args(config, args):
     args.num_layers = config.num_hidden_layers

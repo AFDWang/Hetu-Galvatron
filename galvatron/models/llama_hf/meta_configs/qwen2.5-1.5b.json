@@ -1,0 +1,11 @@
+{
+    "dim": 1536,
+    "ffn_dim": 8960,
+    "multiple_of": 256,
+    "n_heads": 12,
+    "n_kv_heads": 2,
+    "n_layers": 28,
+    "norm_eps": 1e-06,
+    "vocab_size": 151936,
+    "n_positions": 4096
+  }

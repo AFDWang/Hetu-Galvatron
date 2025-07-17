@@ -29,14 +29,6 @@ def get_ltor_masks_and_position_ids(data):
 
     return attention_mask  # , position_ids
 
-def get_zigzag_batch_on_this_cp_rank(cp_group, batch):
-    if cp_group is None:
-        return batch
-    cp_size = torch.distributed.get_world_size(cp_group)
-    cp_rank = torch.distributed.get_rank(cp_group)
-    if cp_size == 1:
-        return batch
-
 class LlamaEmbeddings_(nn.Module):
     def __init__(self, model):
         super().__init__()
@@ -49,13 +41,7 @@ class LlamaEmbeddings_(nn.Module):
         self.sp_group = self.embed_tokens.sp_group
         self.cp_group = self.embed_tokens.cp_group
         self.cp_size = torch.distributed.get_world_size(self.cp_group) if self.cp_group is not None else 1
-        self.use_zigzag = args.cp_mode == "zigzag"
         self.vocab_sp = args.vocab_sp
-        # if self.use_zigzag:
-        #     from .dataloader import get_zigzag_tokens_on_this_cp_rank
-        #     self.get_zigzag_tokens_on_this_cp_rank = get_zigzag_tokens_on_this_cp_rank
-        #     self.cp_rank = torch.distributed.get_rank(self.cp_group)
-        #     self.cp_size = torch.distributed.get_world_size(self.cp_group)
         if self.vocab_sp:
             seq_ulysses = int(args.seq_length / self.cp_size)
             self.seq_start_index, self.seq_end_index = VocabUtility.vocab_range_from_global_vocab_size(

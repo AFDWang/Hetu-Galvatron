@@ -86,8 +86,7 @@ class ParallelMLP(MegatronModule):
     hidden dimension, perform nonlinear transformation, and project the
     state back into h hidden dimension.
     """
-#注意这里的是megatron config
-    def __init__(self, config, is_expert=False, tp_group=None): #仅使用tp group
+    def __init__(self, config, is_expert=False, tp_group=None):
         super(ParallelMLP, self).__init__()
         args = get_args()
 
@@ -872,12 +871,12 @@ class ParallelAttention(MegatronModule):
                 context_layer = rearrange(context_layer, "... h d -> ... (h d)").contiguous()
         else:
             if not self.use_flash_attn:
-                if self.checkpoint_core_attention:
-                    context_layer = self._checkpointed_attention_forward(
-                        query_layer, key_layer, value_layer, attention_mask
-                    )
-                else:
-                    context_layer = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
+                # if self.checkpoint_core_attention:
+                #     context_layer = self._checkpointed_attention_forward(
+                #         query_layer, key_layer, value_layer, attention_mask
+                #     )
+                # else:
+                context_layer = self.core_attention(query_layer, key_layer, value_layer, attention_mask)
             else:
                 q, k, v = [
                     rearrange(x, "s b ... -> b s ...").contiguous() for x in (query_layer, key_layer, value_layer)
@@ -885,7 +884,7 @@ class ParallelAttention(MegatronModule):
                 if self.use_zigzag_cp:
                         context_layer = self.zigzag_ring_flash_attn(q, k, v)
                 else:
-                    if not self.sequence_parallel:
+                    if not self.sequence_parallel:#TODO：more examination
                         with tensor_parallel.get_cuda_rng_tracker().fork():
                             context_layer = self.core_attention_flash(q, k, v)
                     else:

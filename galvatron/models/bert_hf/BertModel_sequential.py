@@ -1,16 +1,3 @@
-<<<<<<< HEAD
-import torch
-import torch.distributed
-import torch.nn as nn
-from megatron.core import tensor_parallel
-from megatron.core.tensor_parallel.mappings_group import get_tensor_model_parallel_world_size_group
-from megatron.core.tensor_parallel.utils import VocabUtility
-
-from galvatron.core import get_args
-from galvatron.core.runtime import ModelInfo, mixed_precision_dtype
-from galvatron.core.runtime.pipeline import PipeSequential
-from galvatron.core.runtime.tensor_parallel import colummn_row_reset_parameters
-=======
 import torch.distributed
 import torch.nn as nn
 import torch
@@ -21,7 +8,6 @@ from megatron.core import tensor_parallel
 from galvatron.core.tensor_parallel import colummn_row_reset_parameters
 from megatron.core.tensor_parallel.utils import VocabUtility
 from megatron.core.tensor_parallel.mappings_group import get_tensor_model_parallel_world_size_group
->>>>>>> 0e554e6502dab21f2e27e26454504bed37ac6828
 
 def bert_extended_attention_mask(attention_mask):
     attention_mask_b1s = attention_mask.unsqueeze(1)

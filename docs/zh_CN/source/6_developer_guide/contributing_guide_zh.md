@@ -2,7 +2,7 @@
 
 欢迎加入 Hetu-Galvatron 社区！我们很兴奋能够与您一起推进大规模AI模型的自动分布式训练技术。
 
-> **完整贡献指南**: 查看我们的 [CONTRIBUTING.md](https://github.com/PKU-DAIR/Hetu-Galvatron/CONTRIBUTING.md) 文件，了解详细的环境设置说明、编码标准和社区信息。
+> **完整贡献指南**: 查看我们的 [CONTRIBUTING.md](https://github.com/PKU-DAIR/Hetu-Galvatron/blob/main/CONTRIBUTING.md) 文件，了解详细的环境设置说明、编码标准和社区信息。
 
 ### 如何贡献
 

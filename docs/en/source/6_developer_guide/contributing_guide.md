@@ -2,7 +2,7 @@
 
 Welcome to the Hetu-Galvatron community! We're excited to have you contribute to advancing automatic distributed training for large-scale AI models.
 
-> **Full Contributing Guide**: For the complete contributing guide with detailed setup instructions, coding standards, and community information, please see our [CONTRIBUTING.md](https://github.com/PKU-DAIR/Hetu-Galvatron/CONTRIBUTING.md) file.
+> **Full Contributing Guide**: For the complete contributing guide with detailed setup instructions, coding standards, and community information, please see our [CONTRIBUTING.md](https://github.com/PKU-DAIR/Hetu-Galvatron/blob/main/CONTRIBUTING.md) file.
 
 ### How to Contribute
 

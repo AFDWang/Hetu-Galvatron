@@ -69,12 +69,12 @@ data_files = [
 
 setup(
     name="hetu-galvatron",
-    version="1.0.0",
+    version="2.4.1",
     description="Galvatron, a Efficient Transformer Training Framework for Multiple GPUs Using Automatic Parallelism",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    author="Yujie Wang, Shenhan Zhu, Xinyi Liu",
-    author_email="alfredwang@pku.edu.cn, shenhan.zhu@pku.edu.cn, xy.liu@stu.pku.edu.cn",
+    author="Xinyi Liu, Yujie Wang, Shenhan Zhu",
+    author_email="xy.liu@stu.pku.edu.cn, alfredwang@pku.edu.cn, shenhan.zhu@pku.edu.cn",
     packages=find_packages(
         exclude=(
             "build",

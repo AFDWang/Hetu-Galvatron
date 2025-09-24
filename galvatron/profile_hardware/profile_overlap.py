@@ -28,6 +28,22 @@ def profile(args):
     torch.cuda.Stream.synchronize(compute_stream)
     comm_time_list = []
     compute_time_list = []
+
+    def split_line(line):
+        line = line.split('  ')
+        ls = []
+        for s in line:
+            if len(s):
+                ls.append(s.strip())
+        return ls
+
+    def str2time(s):
+        if 'ms' in s:
+            return float(s[:-2])
+        elif 'us' in s:
+            return float(s[:-2])*1e-3
+        else:
+            return float(s[:-1])*1e3
     
     def compute_func(dummy_input, iters):
         with torch.cuda.stream(compute_stream):
@@ -46,31 +62,6 @@ def profile(args):
     """
         Time conversion is now handled directly in the trace_handler function
         using the profiler's native nanosecond measurements
-        will be removed in the future
-        def str2time(s):
-            if 'ms' in s:
-                return float(s[:-2])
-            elif 'us' in s:
-                return float(s[:-2])*1e-3
-            else:
-                return float(s[:-1])*1e3
-        
-        def average_op_time(op_str, cuda_total_idx, call_times_idx):
-            if op_str is None:
-                return None
-            op_time = str2time(op_str[cuda_total_idx])/int(op_str[call_times_idx])
-            op_time = torch.tensor([op_time]).to(device)
-            torch.distributed.all_reduce(op_time, op=torch.distributed.ReduceOp.SUM)
-            op_time = op_time.cpu().numpy()[0] / world_size
-            return op_time
-
-        def split_line(line):
-            line = line.split('  ')
-            ls = []
-            for s in line:
-                if len(s):
-                    ls.append(s.strip())
-            return ls
     """
     def trace_handler(prof):
         if local_rank > -1:
@@ -79,23 +70,39 @@ def profile(args):
             if local_rank == 0:
                 print(key_avgs.table(sort_by="self_cuda_time_total", row_limit=5))
             
-            comm_avg, compute_avg = None, None
-            
+            table = prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=5)
+            table = table.split('\n')
+            comm_str, compute_str = None, None
+            for line in table:
+                line = line.lower()
+                if 'name' in line:
+                    title = split_line(line)
+                if 'allreduce' in line and 'nccl' in line:
+                    comm_str = split_line(line)
+                if 'gemm' in line:
+                    compute_str = split_line(line)
+            for i in range(len(title)):
+                if 'cuda total' in title[i]:
+                    cuda_total_idx = i
+                if '# of calls' in title[i]:
+                    call_times_idx = i
+            # For higher torch version
             # More robust operation detection using substring matching on lowercase operation names
-            for avg in key_avgs:
-                key = avg.key.lower()
-                # NOTE this condition may be too broad, consider refining it to avoid false positives
-                if "allreduce" in key and "nccl" in key:
-                    comm_avg = avg
-                if "gemm" in key:
-                    compute_avg = avg
+            # for avg in key_avgs:
+            #     key = avg.key.lower()
+            #     # NOTE this condition may be too broad, consider refining it to avoid false positives
+            #     if "allreduce" in key and "nccl" in key:
+            #         comm_avg = avg
+            #     if "gemm" in key:
+            #         compute_avg = avg
             
             comm_time, compute_time = None, None
-            
+
             # Process communication time if found
-            if comm_avg is not None:
+            if comm_str is not None:
                 # comm op here is atomic so self_device_time_total is the total time. cmp to device_time_total
-                comm_time = comm_avg.self_device_time_total / 1e3 / comm_avg.count # Convert time to milliseconds for consistency
+                comm_time = str2time(comm_str[cuda_total_idx])/int(comm_str[call_times_idx])
+                # comm_time = comm_avg.self_device_time_total / 1e3 / comm_avg.count # Convert time to milliseconds for consistency
                 comm_time = torch.tensor([comm_time]).to(device)
                 torch.distributed.all_reduce(comm_time, op=torch.distributed.ReduceOp.SUM)
                 comm_time = comm_time.cpu().numpy()[0] / world_size
@@ -105,8 +112,9 @@ def profile(args):
                 comm_time_list.append(float(comm_time))
             
             # Process computation time if found
-            if compute_avg is not None:
-                compute_time = compute_avg.self_device_time_total / 1e3 / compute_avg.count
+            if compute_str is not None:
+                compute_time = str2time(compute_str[cuda_total_idx])/int(compute_str[call_times_idx])
+                # compute_time = compute_avg.self_device_time_total / 1e3 / compute_avg.count
                 compute_time = torch.tensor([compute_time]).to(device)
                 torch.distributed.all_reduce(compute_time, op=torch.distributed.ReduceOp.SUM)
                 compute_time = compute_time.cpu().numpy()[0] / world_size

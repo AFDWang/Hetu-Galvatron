@@ -335,7 +335,7 @@ def _fused_split_allgather_along_first_dim_with_sequence_parallel(
     if args.sequence_parallel:
         dim_size = output.size()[0]
         tp_sp_cp_world_size = 1 if allgather_tp_sp_cp_group is None else torch.distributed.get_world_size(group=allgather_tp_sp_cp_group)
-        tp_sp_world_size = 1 if allgather_tp_sp_group is None else torch.distributed.get_world_size(group=allgather_tp_sp_group)
+        #tp_sp_world_size = 1 if allgather_tp_sp_group is None else torch.distributed.get_world_size(group=allgather_tp_sp_group)
         assert dim_size % tp_sp_cp_world_size == 0, "First dimension of the tensor should be divisible by tp*sp*cp parallel size"
         local_dim_size = dim_size // tp_sp_cp_world_size
         #sp_rank = torch.distributed.get_rank(group=allgather_tp_sp_group)
@@ -415,7 +415,7 @@ class _Fused_split_allgather(torch.autograd.Function):
                 None,
             )
 
-
+#We now use fused_split_allgather rather than unfused  split and all gather
 def fused_split_allgather(input_, is_input, allgather_tp_sp_group, allgather_cp_group, allgather_tp_sp_cp_group, 
     split_tp_sp_group, split_cp_group, split_tp_sp_cp_group,
     fused_allgather_group, fused_split_group):

@@ -249,29 +249,30 @@ def wrap_model_checkpoint(model, wrap_block_names=[]):
 def relocate_activations(input, allgather_tp_sp_group, allgather_cp_group, allgather_tp_sp_cp_group, 
     split_tp_sp_group, split_cp_group, split_tp_sp_cp_group,
     fused_allgather_group, fused_split_group, is_input):
-    if fused_allgather_group is not None or fused_split_group is not None:
-        input = fused_split_allgather(
-            input,
-            is_input,
-            getattr(allgather_tp_sp_group, "group", None),
-            getattr(allgather_cp_group, "group", None),
-            getattr(allgather_tp_sp_cp_group, "group", None),
-            getattr(split_tp_sp_group, "group", None),
-            getattr(split_cp_group, "group", None),
-            getattr(split_tp_sp_cp_group, "group", None),
-            getattr(fused_allgather_group, "group", None),
-            getattr(fused_split_group, "group", None),
-        )
-    else:
-        input = split_to_group(input, 
-            getattr(split_tp_sp_group, "group", None), 
-            getattr(split_cp_group, "group", None), 
-            getattr(split_tp_sp_cp_group, "group", None), 
-            is_input)
-        input = gather_from_group(input, 
-            getattr(allgather_tp_sp_group, "group", None), 
-            getattr(allgather_cp_group, "group", None), 
-            getattr(allgather_tp_sp_cp_group, "group", None), is_input)
+    #if fused_allgather_group is not None or fused_split_group is not None:
+    input = fused_split_allgather(
+        input,
+        is_input,
+        getattr(allgather_tp_sp_group, "group", None),
+        getattr(allgather_cp_group, "group", None),
+        getattr(allgather_tp_sp_cp_group, "group", None),
+        getattr(split_tp_sp_group, "group", None),
+        getattr(split_cp_group, "group", None),
+        getattr(split_tp_sp_cp_group, "group", None),
+        getattr(fused_allgather_group, "group", None),
+        getattr(fused_split_group, "group", None),
+    )
+    # else:
+    #     input = split_to_group(input, 
+    #         getattr(split_tp_sp_group, "group", None), 
+    #         getattr(split_cp_group, "group", None), 
+    #         getattr(split_tp_sp_cp_group, "group", None), 
+    #         is_input)
+    #     input = gather_from_group(input, 
+    #         getattr(allgather_tp_sp_group, "group", None), 
+    #         getattr(allgather_cp_group, "group", None), 
+    #         getattr(allgather_tp_sp_cp_group, "group", None), is_input)
+
     return input
 
 

@@ -88,7 +88,7 @@ class HardwareProfiler(BaseProfiler):
                     script = allreduce_script(allreduce_size, allreduce_consec)
                     f.write(f'echo "Running: {script}"\n')
                     f.write(script)
-                allreduce_size /= 2
+                allreduce_size //= 2
                 f.write("sleep 1\n")
 
         print("Generating p2p test script...")
@@ -151,8 +151,8 @@ class HardwareProfiler(BaseProfiler):
                     f.write(f'echo "Running: {script}"\n')
                     f.write(script)
                     f.write("sleep 1\n")
-                    buffer_size /= 2
-                allreduce_size /= 2
+                    buffer_size //= 2
+                allreduce_size //= 2
 
         print("Generating all2all test script...")
 
@@ -178,8 +178,8 @@ class HardwareProfiler(BaseProfiler):
                     f.write(f'echo "Running: {script}"\n')
                     f.write(script)
                     f.write("sleep 1\n")
-                    buffer_size /= 2
-                all2all_size /= 2
+                    buffer_size //= 2
+                all2all_size //= 2
 
     def profile_bandwidth(self, backend: str = "nccl") -> None:
         """Profile communication bandwidth between devices
@@ -229,7 +229,7 @@ class HardwareProfiler(BaseProfiler):
                 key = "allreduce_size_%d_consec_%d" % (allreduce_size, is_consecutive)
                 self.write_config(hardware_config_path, key, bandwidth)
                 print("=" * 70, "\n")
-            allreduce_size /= 2
+            allreduce_size //= 2
 
         # Profile p2p bandwidth
         nccl_file = "build/sendrecv_perf"
@@ -293,7 +293,7 @@ class HardwareProfiler(BaseProfiler):
                 key = "allreduce_size_%d_%dMB_time" % (allreduce_size, size)
                 self.write_config(hardware_config_path, key, time)
             print("=" * 70, "\n")
-            allreduce_size /= 2
+            allreduce_size //= 2
 
         # Profile all-to-all bandwidth
         nccl_file = "build/alltoall_perf"
@@ -310,7 +310,7 @@ class HardwareProfiler(BaseProfiler):
                 key = "all2all_size_%d_%dMB_time" % (all2all_size, size)
                 self.write_config(hardware_config_path, key, time)
             print("=" * 70, "\n")
-            all2all_size /= 2
+            all2all_size //= 2
 
         os.system("rm -rf %s" % (os.path.join(self.path, "nccl_log")))
 

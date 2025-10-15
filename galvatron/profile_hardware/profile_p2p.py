@@ -14,8 +14,8 @@ from typing import Tuple, List
 import argparse
 
 import galvatron
-from galvatron.core.pipeline import PipelineParallel, PipeSequential
-from galvatron.core.comm_groups import gen_comm_groups
+from galvatron.core.runtime.pipeline import PipelineParallel, PipeSequential
+from galvatron.core.runtime.comm_groups import gen_comm_groups
 from galvatron.utils import read_json_config, write_json_config
 
 def init_method_constant(val):

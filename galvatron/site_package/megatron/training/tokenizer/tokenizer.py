@@ -1,7 +1,7 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 
 """Megatron tokenizers."""
-
+import os
 from abc import ABC
 from abc import abstractmethod
 
@@ -41,6 +41,9 @@ def build_tokenizer(args):
     elif args.tokenizer_type == 'Llama2Tokenizer':
         assert args.tokenizer_model is not None
         tokenizer = _Llama2Tokenizer(args.tokenizer_model)
+    elif args.tokenizer_type == 'HuggingFaceTokenizer':
+        assert args.tokenizer_model is not None
+        tokenizer = _HuggingFaceTokenizer(args.tokenizer_model)
     elif args.tokenizer_type == 'NullTokenizer':
         assert args.vocab_size is not None
         tokenizer = _NullTokenizer(args.vocab_size)
@@ -487,6 +490,126 @@ class _Llama2Tokenizer(_SentencePieceTokenizer):
     def additional_special_tokens_ids(self):
         return None
 
+class _HuggingFaceTokenizer(MegatronTokenizer):
+    """HuggingFace tokenizer wrapper."""
+
+    def __init__(self, model_path):
+        super().__init__(model_path)
+
+        try:
+            from transformers import AutoTokenizer
+        except ImportError as exc:
+            raise ImportError(
+                "HuggingFaceTokenizer requires the 'transformers' package. "
+                "Please install transformers>=4.0 before using this tokenizer type."
+            ) from exc
+
+        resolved_path = model_path
+        if os.path.isfile(model_path) and model_path.endswith(".json"):
+            parent = os.path.dirname(model_path)
+            resolved_path = parent if parent else "."
+
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(resolved_path, use_fast=True)
+        except Exception:
+            tokenizer = AutoTokenizer.from_pretrained(resolved_path, use_fast=False)
+
+        self.tokenizer = tokenizer
+        self._vocab = dict(tokenizer.get_vocab())
+        self._inv_vocab = {idx: token for token, idx in self._vocab.items()}
+
+        self._bos_id = tokenizer.bos_token_id
+        self._eos_id = tokenizer.eos_token_id
+        pad_id = tokenizer.pad_token_id
+        if pad_id is None:
+            eos_token = getattr(tokenizer, "eos_token", None)
+            eos_token_id = getattr(tokenizer, "eos_token_id", None)
+            unk_token = getattr(tokenizer, "unk_token", None)
+            unk_token_id = getattr(tokenizer, "unk_token_id", None)
+            bos_token = getattr(tokenizer, "bos_token", None)
+            bos_token_id = getattr(tokenizer, "bos_token_id", None)
+            if eos_token is not None and eos_token_id is not None:
+                tokenizer.pad_token = eos_token
+                pad_id = tokenizer.pad_token_id
+            elif unk_token is not None and unk_token_id is not None:
+                tokenizer.pad_token = unk_token
+                pad_id = tokenizer.pad_token_id
+            elif bos_token is not None and bos_token_id is not None:
+                tokenizer.pad_token = bos_token
+                pad_id = tokenizer.pad_token_id
+            else:
+                pad_id = 0
+        self._pad_id = pad_id
+        self._cls_id = getattr(tokenizer, "cls_token_id", None)
+        self._sep_id = getattr(tokenizer, "sep_token_id", None)
+        self._mask_id = getattr(tokenizer, "mask_token_id", None)
+        self._additional_special_tokens = list(getattr(tokenizer, "additional_special_tokens", []))
+
+    def tokenize(self, text):
+        encoded = self.tokenizer(
+            text,
+            add_special_tokens=True,
+            return_attention_mask=False,
+            return_token_type_ids=False,
+        )
+        return encoded["input_ids"]
+
+    def detokenize(self, ids):
+        return self.tokenizer.decode(ids, skip_special_tokens=False)
+
+    @property
+    def vocab_size(self):
+        return len(self._vocab)
+
+    @property
+    def vocab(self):
+        return self._vocab
+
+    @property
+    def inv_vocab(self):
+        return self._inv_vocab
+
+    @property
+    def cls(self):
+        return self._cls_id if self._cls_id is not None else -1
+
+    @property
+    def sep(self):
+        return self._sep_id if self._sep_id is not None else -1
+
+    @property
+    def pad(self):
+        return self._pad_id if self._pad_id is not None else -1
+
+    @property
+    def mask(self):
+        return self._mask_id if self._mask_id is not None else -1
+
+    @property
+    def bos(self):
+        return self._bos_id if self._bos_id is not None else -1
+
+    @property
+    def eos(self):
+        return self._eos_id if self._eos_id is not None else -1
+
+    @property
+    def eod(self):
+        if self._eos_id is not None:
+            return self._eos_id
+        if self._pad_id is not None and self._pad_id != -1:
+            return self._pad_id
+        return -1
+
+    @property
+    def additional_special_tokens(self):
+        return self._additional_special_tokens
+
+    @property
+    def additional_special_tokens_ids(self):
+        if getattr(self.tokenizer, "additional_special_tokens_ids", None) is not None:
+            return list(self.tokenizer.additional_special_tokens_ids)
+        return None
 
 class _NullTokenizer:
     def __init__(self, vocab_size):
